@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network security configuration for BNBU Student app.
+  - Pin certificates for the production domain in release builds.
+  - Allow cleartext only for localhost (emulator/development).
+  - For release: remove the localhost domain-config and enable pinning.
+-->
+<network-security-config>
+    <!-- Release: allow cleartext for the production server (no HTTPS on IP) -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">123.207.5.70</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+
+    <!-- Development: allow cleartext for localhost / emulator -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>
