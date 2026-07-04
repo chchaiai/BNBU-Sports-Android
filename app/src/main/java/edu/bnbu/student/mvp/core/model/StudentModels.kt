@@ -181,13 +181,24 @@ enum class ProofMediaType(val label: String) {
 }
 
 object ProofUploadRule {
-    const val maxAttachmentCount = 8
-    const val maxImageBytes = 10_000_000
-    const val maxVideoBytes = 80_000_000
-    const val maxVideoDurationSeconds = 30
+    const val maxImageCount = 6
+    const val maxVideoCount = 1
+    const val maxAttachmentCount = maxImageCount + maxVideoCount
+    const val maxImageBytes = 8_000_000
+    const val maxVideoBytes = 100_000_000
 
     val summaryText: String
-        get() = "最多 $maxAttachmentCount 个；图片不超过 10MB；视频不超过 80MB，视频不超过 $maxVideoDurationSeconds 秒。"
+        get() = "最多 $maxImageCount 张照片（每张不超过 8MB），最多 $maxVideoCount 个视频（不超过 100MB）。"
+
+    fun limitMessage(proofs: List<ProofAttachment>): String? {
+        val imageCount = proofs.count { it.type == ProofMediaType.Image }
+        val videoCount = proofs.count { it.type == ProofMediaType.Video }
+        return when {
+            imageCount > maxImageCount -> "同一条记录最多上传 $maxImageCount 张照片。"
+            videoCount > maxVideoCount -> "同一条记录最多上传 $maxVideoCount 个视频。"
+            else -> null
+        }
+    }
 }
 
 data class ProofAttachment(
@@ -201,7 +212,7 @@ data class ProofAttachment(
 ) {
     val displaySize: String
         get() {
-            val bytes = byteCount ?: return "本地占位"
+            val bytes = byteCount ?: return "本地文件"
             return if (bytes >= 1_000_000) {
                 "%.1f MB".format(bytes / 1_000_000.0)
             } else {
@@ -224,18 +235,11 @@ data class ProofAttachment(
             val bytes = byteCount
             if (bytes != null) {
                 if (type == ProofMediaType.Image && bytes > ProofUploadRule.maxImageBytes) {
-                    return "图片超过 10MB"
+                    return "图片超过 8MB"
                 }
                 if (type == ProofMediaType.Video && bytes > ProofUploadRule.maxVideoBytes) {
-                    return "视频超过 80MB"
+                    return "视频超过 100MB"
                 }
-            }
-            if (
-                type == ProofMediaType.Video &&
-                durationSeconds != null &&
-                durationSeconds > ProofUploadRule.maxVideoDurationSeconds
-            ) {
-                return "视频超过 ${ProofUploadRule.maxVideoDurationSeconds} 秒"
             }
             return null
         }

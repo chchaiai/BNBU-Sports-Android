@@ -137,7 +137,7 @@ data class TimeRange(
 data class ExemptionResponse(
     val id: String,
     val studentId: String,
-    val studentName: String = "",
+    val studentName: String? = null,
     val type: String,
     val reason: String? = null,
     val status: String,
@@ -191,13 +191,21 @@ data class StudentGradeResponse(
     val courseName: String = "",
     val courseHours: Double = 0.0,
     val generalHours: Double = 0.0,
+    val checkin: Int = 0,
     val checkinScore: Int = 0,
     val exam: Int = 0,
     val attendance: Int = 0,
     val physical: Int = 0,
+    val overallTotal: Int = 0,
     val total: Int = 0,
-    val sourceTrace: String = ""
-)
+    val sourceTrace: String? = null
+) {
+    val resolvedCheckinScore: Int
+        get() = if (checkinScore != 0) checkinScore else checkin
+
+    val resolvedTotal: Int
+        get() = if (total != 0) total else overallTotal
+}
 
 data class StudentGradesResponse(
     val grades: List<StudentGradeResponse> = emptyList(),

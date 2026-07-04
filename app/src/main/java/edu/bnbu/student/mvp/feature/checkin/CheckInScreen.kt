@@ -329,12 +329,14 @@ private fun SubmitShell(
     val activeTasks = appState.activeTasks
     val selectedTask = activeTasks.firstOrNull { it.id == selectedTaskId } ?: activeTasks.firstOrNull()
     val maxHours = selectedTask?.let { appState.hourLimitFor(it) } ?: appState.hourRule.dailyLimit
-    val totalProofCount = proofAttachments.size + (supplementingRecord?.proofFiles?.size ?: 0)
+    val existingProofs = supplementingRecord?.proofFiles ?: emptyList()
+    val totalProofCount = proofAttachments.size + existingProofs.size
     val validationMessage = submitValidationMessage(
         selectedTask = selectedTask,
         supplementingRecord = supplementingRecord,
         hours = hours,
         maxHours = maxHours,
+        existingProofs = existingProofs,
         newProofs = proofAttachments,
         totalProofCount = totalProofCount
     )
@@ -391,6 +393,7 @@ private fun SubmitShell(
                 maxHours = maxHours,
                 note = note,
                 proofAttachments = proofAttachments,
+                existingProofs = existingProofs,
                 totalProofCount = totalProofCount,
                 onHoursChanged = onHoursChanged,
                 onNoteChanged = onNoteChanged,
@@ -596,6 +599,7 @@ private fun SubmitDetailPanel(
     maxHours: Double,
     note: String,
     proofAttachments: List<ProofAttachment>,
+    existingProofs: List<ProofAttachment>,
     totalProofCount: Int,
     onHoursChanged: (Double) -> Unit,
     onNoteChanged: (String) -> Unit,
@@ -643,6 +647,7 @@ private fun SubmitDetailPanel(
         Spacer(Modifier.height(18.dp))
         ProofAttachmentPanel(
             proofAttachments = proofAttachments,
+            existingProofs = existingProofs,
             totalProofCount = totalProofCount,
             onProofAttachmentsChanged = onProofAttachmentsChanged
         )
@@ -735,51 +740,65 @@ private fun NoteEditor(
 @Composable
 private fun ProofAttachmentPanel(
     proofAttachments: List<ProofAttachment>,
+    existingProofs: List<ProofAttachment>,
     totalProofCount: Int,
     onProofAttachmentsChanged: (List<ProofAttachment>) -> Unit
 ) {
     val context = LocalContext.current
     var attachmentNotice by remember { mutableStateOf<String?>(null) }
     var cameraTempUri by remember { mutableStateOf<Uri?>(null) }
+    var cameraTempFile by remember { mutableStateOf<File?>(null) }
+    val currentProofs = existingProofs + proofAttachments
+    val imageSlots = (ProofUploadRule.maxImageCount - currentProofs.count { it.type == ProofMediaType.Image })
+        .coerceAtLeast(0)
+    val videoSlots = (ProofUploadRule.maxVideoCount - currentProofs.count { it.type == ProofMediaType.Video })
+        .coerceAtLeast(0)
+    val hasAvailableProofSlot = imageSlots > 0 || videoSlots > 0
 
     // Camera launcher (AND-003)
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
         val uri = cameraTempUri
-        if (success && uri != null) {
-            val attachment = uri.toProofAttachmentFromCamera(context, proofAttachments.size)
-            if (attachment != null && attachment.isValidForUpload) {
+        val file = cameraTempFile
+        if (success && uri != null && file != null) {
+            val attachment = file.toProofAttachmentFromCamera(uri)
+            if (
+                attachment != null &&
+                attachment.isValidForUpload &&
+                ProofUploadRule.limitMessage(currentProofs + attachment) == null
+            ) {
                 onProofAttachmentsChanged(proofAttachments + attachment)
                 attachmentNotice = "已拍摄 1 张现场凭证。"
             } else {
-                attachmentNotice = "拍摄失败，请重试或从相册选择。"
+                attachmentNotice = "拍摄失败或已达到 ${ProofUploadRule.maxImageCount} 张照片上限。"
             }
         }
         cameraTempUri = null
+        cameraTempFile = null
     }
 
     // Document picker launcher (existing gallery selector)
     val mediaPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
-        val remaining = ProofUploadRule.maxAttachmentCount - totalProofCount
-        if (remaining <= 0) {
-            attachmentNotice = "已达到 ${ProofUploadRule.maxAttachmentCount} 个凭证上限。"
+        if (!hasAvailableProofSlot) {
+            attachmentNotice = "已达到上传上限：最多 ${ProofUploadRule.maxImageCount} 张照片和 ${ProofUploadRule.maxVideoCount} 个视频。"
             return@rememberLauncherForActivityResult
         }
 
-        val selectedUris = uris.take(remaining)
-        val newAttachments = selectedUris.toPickedProofAttachments(
+        val pickedAttachments = uris.toPickedProofAttachments(
             context = context,
             startIndex = proofAttachments.size
         )
+        val newAttachments = pickedAttachments.takeAllowedProofAttachments(currentProofs)
         if (newAttachments.isNotEmpty()) {
             onProofAttachmentsChanged(proofAttachments + newAttachments)
         }
         attachmentNotice = when {
             uris.isEmpty() -> null
-            uris.size > remaining -> "已添加 $remaining 个凭证，已达到上限。"
+            newAttachments.isEmpty() -> "所选文件超过上传数量上限，未添加。"
+            newAttachments.size < pickedAttachments.size -> "已添加 ${newAttachments.size} 个凭证，超出数量上限的文件已跳过。"
             else -> "已添加 ${newAttachments.size} 个本地凭证。"
         }
     }
@@ -804,38 +823,45 @@ private fun ProofAttachmentPanel(
         ActionButton(
             title = "拍照",
             icon = Icons.Filled.CameraAlt,
-            filled = totalProofCount < ProofUploadRule.maxAttachmentCount,
+            filled = imageSlots > 0,
             modifier = Modifier.weight(1f),
             onClick = {
-                if (totalProofCount >= ProofUploadRule.maxAttachmentCount) {
-                    attachmentNotice = "已达到 ${ProofUploadRule.maxAttachmentCount} 个凭证上限。"
+                if (imageSlots <= 0) {
+                    attachmentNotice = "已达到 ${ProofUploadRule.maxImageCount} 张照片上限。"
                     return@ActionButton
                 }
                 val photoFile = File(
                     context.getExternalFilesDir(Environment.DIRECTORY_PICTURES),
                     "proof_${System.currentTimeMillis()}.jpg"
                 )
-                photoFile.parentFile?.mkdirs()
-                val uri = FileProvider.getUriForFile(
-                    context,
-                    "${context.packageName}.fileprovider",
-                    photoFile
-                )
-                cameraTempUri = uri
-                cameraLauncher.launch(uri)
+                try {
+                    photoFile.parentFile?.mkdirs()
+                    val uri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        photoFile
+                    )
+                    cameraTempUri = uri
+                    cameraTempFile = photoFile
+                    cameraLauncher.launch(uri)
+                } catch (_: Exception) {
+                    cameraTempUri = null
+                    cameraTempFile = null
+                    attachmentNotice = "Camera is unavailable on this emulator. Please use photo/video picker."
+                }
             }
         )
 
         ActionButton(
             title = "选择照片/视频",
             icon = Icons.Filled.UploadFile,
-            filled = totalProofCount < ProofUploadRule.maxAttachmentCount,
+            filled = hasAvailableProofSlot,
             modifier = Modifier.weight(1f),
             onClick = {
-                if (totalProofCount < ProofUploadRule.maxAttachmentCount) {
+                if (hasAvailableProofSlot) {
                     mediaPicker.launch(arrayOf("image/*", "video/*"))
                 } else {
-                    attachmentNotice = "已达到 ${ProofUploadRule.maxAttachmentCount} 个凭证上限。"
+                    attachmentNotice = "已达到上传上限：最多 ${ProofUploadRule.maxImageCount} 张照片和 ${ProofUploadRule.maxVideoCount} 个视频。"
                 }
             }
         )
@@ -1159,6 +1185,7 @@ private fun submitValidationMessage(
     supplementingRecord: CheckInRecord?,
     hours: Double,
     maxHours: Double,
+    existingProofs: List<ProofAttachment>,
     newProofs: List<ProofAttachment>,
     totalProofCount: Int
 ): String? {
@@ -1169,6 +1196,7 @@ private fun submitValidationMessage(
     if (totalProofCount > ProofUploadRule.maxAttachmentCount) {
         return "同一条记录最多保留 ${ProofUploadRule.maxAttachmentCount} 个凭证。"
     }
+    ProofUploadRule.limitMessage(existingProofs + newProofs)?.let { return it }
     val invalidProof = newProofs.firstOrNull { !it.isValidForUpload }
     if (invalidProof != null) return "${invalidProof.fileName}：${invalidProof.validationMessage}"
     return null
@@ -1182,6 +1210,33 @@ private fun List<Uri>.toPickedProofAttachments(
         context.takePersistableReadPermissionIfPossible(uri)
         uri.toProofAttachment(context = context, index = startIndex + offset)
     }
+}
+
+private fun List<ProofAttachment>.takeAllowedProofAttachments(
+    existingProofs: List<ProofAttachment>
+): List<ProofAttachment> {
+    var imageCount = existingProofs.count { it.type == ProofMediaType.Image }
+    var videoCount = existingProofs.count { it.type == ProofMediaType.Video }
+    val accepted = mutableListOf<ProofAttachment>()
+
+    for (attachment in this) {
+        when (attachment.type) {
+            ProofMediaType.Image -> {
+                if (imageCount < ProofUploadRule.maxImageCount) {
+                    accepted += attachment
+                    imageCount += 1
+                }
+            }
+            ProofMediaType.Video -> {
+                if (videoCount < ProofUploadRule.maxVideoCount) {
+                    accepted += attachment
+                    videoCount += 1
+                }
+            }
+        }
+    }
+
+    return accepted
 }
 
 private fun Uri.toProofAttachment(context: Context, index: Int): ProofAttachment {
@@ -1266,16 +1321,14 @@ private val CreditType.checkInIcon: ImageVector
 /**
  * Create a ProofAttachment from a camera-captured photo URI (AND-003).
  */
-private fun Uri.toProofAttachmentFromCamera(context: Context, index: Int): ProofAttachment? {
-    val fileName = "camera_${System.currentTimeMillis()}.jpg"
-    val file = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), fileName)
-    val byteCount = if (file.exists()) file.length() else null
+private fun File.toProofAttachmentFromCamera(sourceUri: Uri): ProofAttachment? {
+    if (!exists() || length() <= 0L) return null
     return ProofAttachment(
         id = UUID.randomUUID().toString(),
         type = ProofMediaType.Image,
-        fileName = fileName,
-        byteCount = byteCount,
+        fileName = name,
+        byteCount = length(),
         durationSeconds = null,
-        source = toString()
+        source = sourceUri.toString()
     )
 }

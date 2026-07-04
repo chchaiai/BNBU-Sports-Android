@@ -1,5 +1,6 @@
 package edu.bnbu.student.mvp.feature.exemption
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -70,6 +71,7 @@ import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.core.content.FileProvider
 import java.io.File
 import java.util.UUID
@@ -91,6 +93,13 @@ fun ExemptionScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var successMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val handleBack = {
+        focusManager.clearFocus(force = true)
+        onBack()
+    }
+
+    BackHandler(onBack = handleBack)
 
     fun loadExemptions() {
         isLoading = true
@@ -101,7 +110,7 @@ fun ExemptionScreen(
                     Exemption(
                         id = r.id,
                         studentId = r.studentId,
-                        studentName = r.studentName,
+                        studentName = r.studentName.orEmpty(),
                         type = r.type,
                         reason = r.reason ?: "",
                         status = r.status,
@@ -136,8 +145,8 @@ fun ExemptionScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onBack)
-                    .padding(vertical = 8.dp),
+                    .height(48.dp)
+                    .clickable(onClick = handleBack),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(

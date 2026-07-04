@@ -124,8 +124,29 @@ class ApiStudentRepository(
             }
             val allTasks = tasksResponse.pending + tasksResponse.completed
             val tasksLoadError = if (tasksResult.isFailure) tasksResult.exceptionOrNull()?.message else null
+            val gradesResult: Result<StudentGradesResponse> = try {
+                Result.success(
+                    apiClient.executeAndParse(
+                        apiClient.request(StudentEndpoint.StudentGrades),
+                        StudentGradesResponse::class.java
+                    )
+                )
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+            val gradesResponse = gradesResult.getOrNull()
+            val gradesLoadError = if (gradesResult.isFailure) gradesResult.exceptionOrNull()?.message else null
 
-            val workspace = buildWorkspace(summary, records, memberships, notices, allTasks, tasksLoadError)
+            val workspace = buildWorkspace(
+                summary = summary,
+                records = records,
+                memberships = memberships,
+                notices = notices,
+                taskItems = allTasks,
+                tasksLoadError = tasksLoadError,
+                gradesResponse = gradesResponse,
+                gradesLoadError = gradesLoadError
+            )
             // AND-006: Cache the latest workspace for offline fallback
             _cachedWorkspace = workspace
             workspace
@@ -205,7 +226,9 @@ class ApiStudentRepository(
         memberships: List<MembershipResponse>,
         notices: List<NotificationResponse>,
         taskItems: List<StudentTaskItemResponse> = emptyList(),
-        tasksLoadError: String? = null
+        tasksLoadError: String? = null,
+        gradesResponse: StudentGradesResponse? = null,
+        gradesLoadError: String? = null
     ): StudentWorkspace {
         // Student identity comes from the login response (userProfile), with
         // fallback defaults when not available (e.g. synchronous loadWorkspace).
@@ -313,7 +336,23 @@ class ApiStudentRepository(
         // Grade scores (exam, attendance, physical) are managed by teacher/admin
         // endpoints. Try to fetch from the student-facing grades endpoint;
         // fall back to zeros if not yet available.
-        val grades = GradeRow(
+        val studentGrade = gradesResponse?.grades
+            ?.firstOrNull { it.studentId == student.id }
+            ?: gradesResponse?.grades?.firstOrNull()
+
+        val grades = if (studentGrade != null) {
+            GradeRow(
+                studentId = studentGrade.studentId,
+                studentName = studentGrade.studentName,
+                checkinScore = studentGrade.resolvedCheckinScore,
+                exam = studentGrade.exam,
+                attendance = studentGrade.attendance,
+                physical = studentGrade.physical,
+                total = studentGrade.resolvedTotal,
+                sourceTrace = studentGrade.sourceTrace.orEmpty().ifBlank { "API: /student/grades" },
+                missingItems = buildMissingItems(summary)
+            )
+        } else GradeRow(
             studentId = student.id,
             studentName = student.name,
             checkinScore = 0,

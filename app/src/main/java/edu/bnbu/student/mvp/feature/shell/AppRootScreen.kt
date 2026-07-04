@@ -1,11 +1,13 @@
 package edu.bnbu.student.mvp.feature.shell
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.AddBox
@@ -84,37 +86,46 @@ fun AppRootScreen(appState: StudentAppState) {
 
     // Sub-screen overlay for tools launched from Profile
     if (subScreen != SubScreen.None) {
+        BackHandler {
+            subScreen = SubScreen.None
+        }
         val repo = appState.apiRepository
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(18.dp)
         ) {
             GridBackground(modifier = Modifier.fillMaxSize())
-            when (subScreen) {
-                SubScreen.EnduranceScoring -> {
-                    if (repo != null) {
-                        EnduranceScoringScreen(
-                            student = appState.workspace.student,
-                            repository = repo,
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .padding(18.dp)
+            ) {
+                when (subScreen) {
+                    SubScreen.EnduranceScoring -> {
+                        if (repo != null) {
+                            EnduranceScoringScreen(
+                                student = appState.workspace.student,
+                                repository = repo,
+                                onBack = { subScreen = SubScreen.None }
+                            )
+                        }
+                    }
+                    SubScreen.Exemption -> {
+                        if (repo != null) {
+                            ExemptionScreen(
+                                repository = repo,
+                                onBack = { subScreen = SubScreen.None }
+                            )
+                        }
+                    }
+                    SubScreen.PrivacyPolicy -> {
+                        PrivacyPolicyScreen(
                             onBack = { subScreen = SubScreen.None }
                         )
                     }
+                    SubScreen.None -> { /* unreachable */ }
                 }
-                SubScreen.Exemption -> {
-                    if (repo != null) {
-                        ExemptionScreen(
-                            repository = repo,
-                            onBack = { subScreen = SubScreen.None }
-                        )
-                    }
-                }
-                SubScreen.PrivacyPolicy -> {
-                    PrivacyPolicyScreen(
-                        onBack = { subScreen = SubScreen.None }
-                    )
-                }
-                SubScreen.None -> { /* unreachable */ }
             }
         }
         return

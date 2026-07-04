@@ -14,6 +14,7 @@ import edu.bnbu.student.mvp.core.model.Membership
 import edu.bnbu.student.mvp.core.model.NoticeCategory
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
+import edu.bnbu.student.mvp.core.model.ProofUploadRule
 import edu.bnbu.student.mvp.core.model.ReviewStatus
 import edu.bnbu.student.mvp.core.model.SportHourRule
 import edu.bnbu.student.mvp.core.model.StudentNotice
@@ -356,6 +357,10 @@ class StudentAppState(
             logValidationFailure("submitCheckIn", "凭证包含无效文件")
             return
         }
+        ProofUploadRule.limitMessage(proofAttachments)?.let { message ->
+            logValidationFailure("submitCheckIn", message)
+            return
+        }
 
         val submittedHours = normalizedHours(hours, task)
         val photoCount = proofAttachments.count { it.type == ProofMediaType.Image }
@@ -448,9 +453,13 @@ class StudentAppState(
 
         val index = workspace.records.indexOfFirst { it.id == record.id }
         if (index < 0) return
+        val mergedProofs = workspace.records[index].proofFiles + proofAttachments
+        ProofUploadRule.limitMessage(mergedProofs)?.let { message ->
+            logValidationFailure("submitSupplement", message)
+            return
+        }
 
         val submittedHours = hours.coerceIn(0.5, minOf(record.hours, hourRule.dailyLimit))
-        val mergedProofs = workspace.records[index].proofFiles + proofAttachments
         val updatedRecord = workspace.records[index].copy(
             hours = submittedHours,
             submittedAt = "刚刚补交",

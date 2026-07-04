@@ -1,5 +1,6 @@
 package edu.bnbu.student.mvp.feature.scoring
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -62,6 +64,13 @@ fun EnduranceScoringScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val handleBack = {
+        focusManager.clearFocus(force = true)
+        onBack()
+    }
+
+    BackHandler(onBack = handleBack)
 
     // Auto-determine run type from gender
     val runType = if (student.gender == "male") "1000m" else "800m"
@@ -70,9 +79,15 @@ fun EnduranceScoringScreen(
         val minVal = minutes.toIntOrNull() ?: 0
         val secVal = seconds.toIntOrNull() ?: 0
         val totalSeconds = minVal * 60 + secVal
+        result = null
 
         if (totalSeconds <= 0) {
             errorMessage = "请输入有效的跑步时间"
+            return
+        }
+
+        if (secVal !in 0..59) {
+            errorMessage = "秒数请输入 0-59 之间的数字"
             return
         }
 
@@ -82,6 +97,12 @@ fun EnduranceScoringScreen(
         }
         if (student.gradeLevel.isBlank()) {
             errorMessage = "请先在个人资料中设置年级"
+            return
+        }
+
+        val maxSupportedSeconds = if (student.gender == "male") 390 else 360
+        if (totalSeconds > maxSupportedSeconds) {
+            errorMessage = "输入时间超出当前换算表范围，请核对分钟/秒数或联系后端确认换算规则"
             return
         }
 
@@ -116,8 +137,8 @@ fun EnduranceScoringScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onBack)
-                .padding(vertical = 8.dp),
+                .height(48.dp)
+                .clickable(onClick = handleBack),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
