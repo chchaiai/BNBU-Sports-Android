@@ -3,18 +3,28 @@ package edu.bnbu.student.mvp.feature.shell
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.AddBox
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -28,11 +38,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import edu.bnbu.student.mvp.core.designsystem.BNBUColors
 import edu.bnbu.student.mvp.core.designsystem.GridBackground
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.checkin.CheckInScreen
@@ -65,7 +73,6 @@ enum class SubScreen {
 
 @Composable
 fun AppRootScreen(appState: StudentAppState) {
-    val context = LocalContext.current
     // Keep appState as-is — it's now managed by the Activity lifecycle.
     var selectedTab by remember { mutableStateOf(AppTab.Dashboard) }
     var subScreen by remember { mutableStateOf(SubScreen.None) }
@@ -132,7 +139,7 @@ fun AppRootScreen(appState: StudentAppState) {
     }
 
     Scaffold(
-        containerColor = BNBUColors.Paper,
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             StudentBottomBar(
                 selectedTab = selectedTab,
@@ -144,17 +151,75 @@ fun AppRootScreen(appState: StudentAppState) {
     ) { innerPadding ->
         Box(modifier = Modifier.fillMaxSize()) {
             GridBackground(modifier = Modifier.fillMaxSize())
-            RootTabContent(
-                tab = selectedTab,
-                appState = appState,
-                contentPadding = innerPadding,
-                openCheckIn = { selectedTab = AppTab.CheckIn },
-                openGrades = { selectedTab = AppTab.Grades },
-                openProfile = { selectedTab = AppTab.Profile },
-                openScoring = { subScreen = SubScreen.EnduranceScoring },
-                openExemption = { subScreen = SubScreen.Exemption },
-                openPrivacy = { subScreen = SubScreen.PrivacyPolicy }
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                if (appState.lastError != null || appState.isShowingCachedData) {
+                    SyncStatusBanner(appState)
+                }
+                Box(modifier = Modifier.weight(1f)) {
+                    RootTabContent(
+                        tab = selectedTab,
+                        appState = appState,
+                        contentPadding = PaddingValues(0.dp),
+                        openCheckIn = { selectedTab = AppTab.CheckIn },
+                        openGrades = { selectedTab = AppTab.Grades },
+                        openProfile = { selectedTab = AppTab.Profile },
+                        openScoring = { subScreen = SubScreen.EnduranceScoring },
+                        openExemption = { subScreen = SubScreen.Exemption },
+                        openPrivacy = { subScreen = SubScreen.PrivacyPolicy }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncStatusBanner(appState: StudentAppState) {
+    val cs = MaterialTheme.colorScheme
+    val message = appState.lastError
+        ?: "当前显示缓存数据，内容可能不是最新"
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(cs.errorContainer)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Filled.CloudOff,
+            contentDescription = null,
+            tint = cs.onErrorContainer,
+            modifier = Modifier.size(20.dp)
+        )
+        Text(
+            text = message,
+            color = cs.onErrorContainer,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f)
+        )
+        if (appState.isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(22.dp),
+                color = cs.onErrorContainer,
+                strokeWidth = 2.dp
             )
+        } else {
+            IconButton(
+                onClick = appState::retryLoadWorkspace,
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Refresh,
+                    contentDescription = "重新同步",
+                    tint = cs.onErrorContainer
+                )
+            }
         }
     }
 }
@@ -166,13 +231,12 @@ private fun StudentBottomBar(
     checkInBadge: Int,
     profileBadge: Int
 ) {
+    val cs = MaterialTheme.colorScheme
     NavigationBar(
-        containerColor = BNBUColors.Surface,
-        contentColor = BNBUColors.Ink,
-        tonalElevation = 0.dp,
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(BNBUColors.Surface)
+        containerColor = cs.surface,
+        contentColor = cs.onSurface,
+        tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth()
     ) {
         AppTab.entries.forEach { tab ->
             val badge = when (tab) {
@@ -190,14 +254,14 @@ private fun StudentBottomBar(
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
-                                    .background(BNBUColors.Blue)
+                                    .background(cs.primary, RoundedCornerShape(4.dp))
                                     .padding(horizontal = 4.dp, vertical = 1.dp)
                             ) {
                                 Text(
                                     text = badge.toString(),
-                                    color = BNBUColors.Surface,
+                                    color = cs.onPrimary,
                                     fontSize = 9.sp,
-                                    fontWeight = FontWeight.Black
+                                    fontWeight = FontWeight.Medium
                                 )
                             }
                         }
@@ -206,16 +270,15 @@ private fun StudentBottomBar(
                 label = {
                     Text(
                         text = tab.label,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Black
+                        style = MaterialTheme.typography.labelSmall
                     )
                 },
                 colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = BNBUColors.Ink,
-                    selectedTextColor = BNBUColors.Ink,
-                    indicatorColor = BNBUColors.BlueSoft,
-                    unselectedIconColor = BNBUColors.Muted,
-                    unselectedTextColor = BNBUColors.Muted
+                    selectedIconColor = cs.onSurface,
+                    selectedTextColor = cs.onSurface,
+                    indicatorColor = cs.primaryContainer,
+                    unselectedIconColor = cs.onSurfaceVariant,
+                    unselectedTextColor = cs.onSurfaceVariant
                 )
             )
         }

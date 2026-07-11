@@ -52,6 +52,34 @@ data class StudentCourseDto(
     val generalHours: Double = 0.0
 )
 
+data class StudentCoursesResponse(
+    val courses: List<StudentCourseDetailResponse> = emptyList(),
+    val scope: String = "all"
+)
+
+data class StudentCourseDetailResponse(
+    val id: String = "",
+    val code: String = "",
+    val section: String = "",
+    val name: String = "",
+    val teacherId: String = "",
+    val teacherName: String = "",
+    val status: String = "",
+    val enrollmentStatus: String = "enrolled",
+    val isCurrent: Boolean = false,
+    val semester: StudentSemesterResponse = StudentSemesterResponse()
+)
+
+data class StudentSemesterResponse(
+    val id: String = "",
+    val name: String = "",
+    val academicYear: String = "",
+    val term: String = "",
+    val startDate: String? = null,
+    val endDate: String? = null,
+    val status: String = "archived"
+)
+
 data class SportRuleDto(
     val total: Double = 20.0,
     val courseRequired: Double = 10.0,
@@ -67,11 +95,26 @@ data class SportRecordResponse(
     val hours: Double = 0.0,
     val approvedHours: Double = 0.0,
     val description: String? = null,
-    val proofFiles: List<String> = emptyList(),
+    val proofFiles: List<ProofFileResponse> = emptyList(),
+    val sportType: String? = null,
+    val aiReviewStatus: String? = null,
+    val aiRiskLevel: String? = null,
+    val aiRiskCodes: List<String> = emptyList(),
+    val aiReviewMessage: String? = null,
+    val aiConfidence: Double? = null,
+    val aiReviewedAt: String? = null,
     val status: String = "待审核",
     val reviewComment: String? = null,
     val submittedAt: String? = null,
     val reviewedAt: String? = null
+)
+
+data class ProofFileResponse(
+    val url: String = "",
+    val cosKey: String = "",
+    val mediaType: String = "image",
+    val mimeType: String = "",
+    val size: Long = 0
 )
 
 data class SubmitRecordResponse(
@@ -139,9 +182,11 @@ data class ExemptionResponse(
     val studentId: String,
     val studentName: String? = null,
     val type: String,
+    val category: String = "physical_test",
+    val organization: String? = null,
     val reason: String? = null,
     val status: String,
-    val proofFiles: List<String> = emptyList(),
+    val proofFiles: List<ProofFileResponse> = emptyList(),
     val reviewComment: String? = null,
     val reviewerId: String? = null,
     val reviewerName: String? = null,
@@ -165,13 +210,16 @@ data class StudentProfileResponse(
     val college: String = "",
     val gender: String? = null,
     val gradeLevel: String? = null,
+    val admissionYear: Int? = null,
+    val currentGradeLevel: String? = null,
+    val currentAcademicYear: String? = null,
+    val gradeCalculatedAt: String? = null,
     val status: String = "正常",
     val enrolledCourses: Int = 0
 )
 
 data class StudentProfileUpdateRequest(
-    val gender: String? = null,
-    val gradeLevel: String? = null
+    val gender: String? = null
 )
 
 // ── Student Tasks ──────────────────────────────────────────────────

@@ -1,6 +1,8 @@
 package edu.bnbu.student.mvp.core.data
 
 import edu.bnbu.student.mvp.core.model.CheckInRecord
+import edu.bnbu.student.mvp.core.model.AiReviewStatus
+import edu.bnbu.student.mvp.core.model.AiRiskLevel
 import edu.bnbu.student.mvp.core.model.Course
 import edu.bnbu.student.mvp.core.model.CourseTask
 import edu.bnbu.student.mvp.core.model.CreditType
@@ -37,6 +39,7 @@ import edu.bnbu.student.mvp.core.network.SubmitSportRecordRequest
 import edu.bnbu.student.mvp.core.network.SupplementResponse
 import edu.bnbu.student.mvp.core.network.SupplementSportRecordRequest
 import edu.bnbu.student.mvp.core.network.UploadProofResponse
+import edu.bnbu.student.mvp.core.network.UploadedProofFile
 import edu.bnbu.student.mvp.core.network.UserDto
 import edu.bnbu.student.mvp.core.network.EnduranceScoreResponse
 import edu.bnbu.student.mvp.core.network.ExemptionResponse
@@ -45,6 +48,8 @@ import edu.bnbu.student.mvp.core.network.StudentProfileResponse
 import edu.bnbu.student.mvp.core.network.StudentProfileUpdateRequest
 import edu.bnbu.student.mvp.core.network.StudentTaskListResponse
 import edu.bnbu.student.mvp.core.network.StudentTaskItemResponse
+import edu.bnbu.student.mvp.core.network.StudentCourseDetailResponse
+import edu.bnbu.student.mvp.core.network.StudentCoursesResponse
 import edu.bnbu.student.mvp.core.network.StudentGradesResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -89,8 +94,8 @@ class ApiStudentRepository(
      * identity + notifications), then map DTOs → domain model.
      *
      * Throws on any network or mapping error so the caller can surface it to the
-     * user. When the network is unavailable, returns a locally-cached workspace if one
-     * exists (AND-006) — otherwise rethrows.
+     * user. Persistent cache fallback is owned by StudentAppState so stale data is
+     * never returned silently from the network layer.
      */
     override suspend fun loadWorkspaceAsync(): StudentWorkspace = withContext(Dispatchers.IO) {
         try {
@@ -106,6 +111,11 @@ class ApiStudentRepository(
             val notices: List<NotificationResponse> = apiClient.executeAndParse(
                 notificationsRequest(), Array<NotificationResponse>::class.java
             ).toList()
+            val profileResult: Result<StudentProfileResponse> = try {
+                Result.success(fetchProfile())
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
             // Also fetch tasks from the backend — they are a separate API call.
             // AND-004: surface task fetch errors visibly instead of silently
             // returning an empty list (which would show "暂无近期任务" misleadingly).
@@ -124,6 +134,19 @@ class ApiStudentRepository(
             }
             val allTasks = tasksResponse.pending + tasksResponse.completed
             val tasksLoadError = if (tasksResult.isFailure) tasksResult.exceptionOrNull()?.message else null
+            // Week2 course contract is optional during the transition from the
+            // shared port 96 API. A 404 falls back to summary.courses below.
+            val coursesResult: Result<StudentCoursesResponse> = try {
+                Result.success(
+                    apiClient.executeAndParse(
+                        apiClient.request(StudentEndpoint.StudentCourses(scope = "all")),
+                        StudentCoursesResponse::class.java
+                    )
+                )
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+            val courseItems = coursesResult.getOrNull()?.courses.orEmpty()
             val gradesResult: Result<StudentGradesResponse> = try {
                 Result.success(
                     apiClient.executeAndParse(
@@ -142,32 +165,19 @@ class ApiStudentRepository(
                 records = records,
                 memberships = memberships,
                 notices = notices,
+                courseItems = courseItems,
                 taskItems = allTasks,
                 tasksLoadError = tasksLoadError,
                 gradesResponse = gradesResponse,
-                gradesLoadError = gradesLoadError
+                gradesLoadError = gradesLoadError,
+                remoteProfile = profileResult.getOrNull()
             )
-            // AND-006: Cache the latest workspace for offline fallback
-            _cachedWorkspace = workspace
             workspace
         } catch (e: Exception) {
-            // AND-006: Fall back to localized/cached workspace when backend is unreachable
-            val cached = _cachedWorkspace
-            if (cached != null) {
-                android.util.Log.w("ApiStudentRepository", "Backend unreachable, using cached workspace: ${e.message}")
-                cached
-            } else {
-                throw e
-            }
+            android.util.Log.w("ApiStudentRepository", "Workspace refresh failed: ${e.message}")
+            throw e
         }
     }
-
-    /**
-     * Cache the most recently loaded workspace for offline fallback (AND-006).
-     *
-     * Called by [loadWorkspaceAsync] on success to keep the cache fresh.
-     */
-    private var _cachedWorkspace: StudentWorkspace? = null
 
     // ── Grades ────────────────────────────────────────────────────
 
@@ -225,10 +235,12 @@ class ApiStudentRepository(
         records: List<SportRecordResponse>,
         memberships: List<MembershipResponse>,
         notices: List<NotificationResponse>,
+        courseItems: List<StudentCourseDetailResponse> = emptyList(),
         taskItems: List<StudentTaskItemResponse> = emptyList(),
         tasksLoadError: String? = null,
         gradesResponse: StudentGradesResponse? = null,
-        gradesLoadError: String? = null
+        gradesLoadError: String? = null,
+        remoteProfile: StudentProfileResponse? = null
     ): StudentWorkspace {
         // Student identity comes from the login response (userProfile), with
         // fallback defaults when not available (e.g. synchronous loadWorkspace).
@@ -240,8 +252,14 @@ class ApiStudentRepository(
             college = profile?.college ?: "",
             className = profile?.className ?: "",
             status = if (summary.completed) "已完成" else "进行中",
-            gender = profile?.gender ?: "",
-            gradeLevel = profile?.gradeLevel ?: ""
+            gender = remoteProfile?.gender ?: profile?.gender ?: "",
+            gradeLevel = remoteProfile?.currentGradeLevel
+                ?: remoteProfile?.gradeLevel
+                ?: profile?.gradeLevel
+                ?: "",
+            admissionYear = remoteProfile?.admissionYear,
+            currentAcademicYear = remoteProfile?.currentAcademicYear.orEmpty(),
+            gradeCalculatedAt = remoteProfile?.gradeCalculatedAt.orEmpty()
         )
 
         val orgCredit = memberships.firstOrNull { it.status == "认证有效" && it.offset == "可抵扣" }
@@ -264,21 +282,47 @@ class ApiStudentRepository(
 
         // Courses and tasks are now returned by the backend summary API —
         // map them from the new `courses` field.
-        val courses: List<Course> = summary.courses.map { c ->
-            Course(
-                id = c.courseId,
-                code = c.courseCode,
-                section = c.courseSection,
-                name = c.courseName,
-                semester = "",
-                students = 0,
-                pending = 0,
-                completion = 0,
-                missing = 0,
-                deadline = "",
-                teacher = c.teacherName,
-                teacherId = c.teacherId
-            )
+        val courses: List<Course> = if (courseItems.isNotEmpty()) {
+            courseItems.map { c ->
+                Course(
+                    id = c.id,
+                    code = c.code,
+                    section = c.section,
+                    name = c.name,
+                    semester = c.semester.name.ifBlank { c.semester.academicYear },
+                    students = 0,
+                    pending = 0,
+                    completion = 0,
+                    missing = 0,
+                    deadline = c.semester.endDate.orEmpty(),
+                    teacher = c.teacherName,
+                    teacherId = c.teacherId,
+                    semesterId = c.semester.id,
+                    academicYear = c.semester.academicYear,
+                    term = c.semester.term,
+                    semesterStatus = c.semester.status,
+                    enrollmentStatus = c.enrollmentStatus,
+                    isCurrent = c.isCurrent
+                )
+            }
+        } else {
+            summary.courses.map { c ->
+                Course(
+                    id = c.courseId,
+                    code = c.courseCode,
+                    section = c.courseSection,
+                    name = c.courseName,
+                    semester = "当前学期",
+                    students = 0,
+                    pending = 0,
+                    completion = 0,
+                    missing = 0,
+                    deadline = "",
+                    teacher = c.teacherName,
+                    teacherId = c.teacherId,
+                    isCurrent = true
+                )
+            }
         }
 
         // Map task items from the task API to domain CourseTask objects
@@ -421,19 +465,37 @@ class ApiStudentRepository(
             submittedAt = r.submittedAt ?: "",
             status = status,
             proofSummary = "${r.proofFiles.size} 个凭证",
-            proofPhotoCount = r.proofFiles.size,
-            proofVideoCount = 0,
-            proofFiles = r.proofFiles.map {
+            proofPhotoCount = r.proofFiles.count { it.mediaType == "image" },
+            proofVideoCount = r.proofFiles.count { it.mediaType == "video" },
+            proofFiles = r.proofFiles.map { proof ->
                 ProofAttachment(
-                    id = it,
-                    type = ProofMediaType.Image,
-                    fileName = it,
-                    byteCount = null,
-                    source = "api"
+                    id = proof.cosKey.ifBlank { proof.url },
+                    type = if (proof.mediaType == "video") ProofMediaType.Video else ProofMediaType.Image,
+                    fileName = proof.cosKey.substringAfterLast('/').ifBlank { "proof" },
+                    byteCount = proof.size.takeIf { it > 0 },
+                    source = proof.url.ifBlank { "api" }
                 )
             },
             teacherFeedback = r.reviewComment ?: "",
-            note = r.description ?: ""
+            note = r.description ?: "",
+            sportType = r.sportType,
+            aiReviewStatus = when (r.aiReviewStatus) {
+                "normal" -> AiReviewStatus.Normal
+                "abnormal" -> AiReviewStatus.Abnormal
+                "manual_review" -> AiReviewStatus.ManualReview
+                "pending" -> AiReviewStatus.Pending
+                else -> null
+            },
+            aiRiskLevel = when (r.aiRiskLevel) {
+                "low" -> AiRiskLevel.Low
+                "medium" -> AiRiskLevel.Medium
+                "high" -> AiRiskLevel.High
+                else -> null
+            },
+            aiRiskCodes = r.aiRiskCodes,
+            aiReviewMessage = r.aiReviewMessage,
+            aiConfidence = r.aiConfidence,
+            aiReviewedAt = r.aiReviewedAt
         )
     }
 
@@ -522,17 +584,37 @@ class ApiStudentRepository(
 
     suspend fun listExemptions(): List<ExemptionResponse> {
         return withContext(Dispatchers.IO) {
-            apiClient.executeAndParse(
-                apiClient.request(StudentEndpoint.StudentExemptions),
-                Array<ExemptionResponse>::class.java
-            ).toList()
+            val physical = runCatching {
+                apiClient.executeAndParse(
+                    apiClient.request(StudentEndpoint.PhysicalTestExemptions),
+                    Array<ExemptionResponse>::class.java
+                ).toList()
+            }.getOrElse {
+                // Shared port 96 still exposes the legacy physical-test path.
+                apiClient.executeAndParse(
+                    apiClient.request(StudentEndpoint.StudentExemptions),
+                    Array<ExemptionResponse>::class.java
+                ).toList()
+            }
+            val checkIn = runCatching {
+                apiClient.executeAndParse(
+                    apiClient.request(StudentEndpoint.CheckInExemptions),
+                    Array<ExemptionResponse>::class.java
+                ).toList()
+            }.getOrDefault(emptyList())
+            (physical + checkIn).sortedByDescending { it.createdAt }
         }
     }
 
     suspend fun submitExemption(payload: ExemptionApplication): ExemptionSubmitResponse {
         return withContext(Dispatchers.IO) {
+            val endpoint = if (payload.type == "team" || payload.type == "club") {
+                StudentEndpoint.SubmitCheckInExemption
+            } else {
+                StudentEndpoint.SubmitPhysicalTestExemption
+            }
             apiClient.executeAndParse(
-                apiClient.request(StudentEndpoint.SubmitExemption, payload),
+                apiClient.request(endpoint, payload),
                 ExemptionSubmitResponse::class.java
             )
         }
@@ -552,24 +634,24 @@ class ApiStudentRepository(
     // ── File upload ────────────────────────────────────────────────
 
     /**
-     * Upload proof images to the backend and return their permanent URLs.
+     * Upload proof media to the backend and return COS-backed file metadata.
      *
      * Copies files from [proofAttachments] that have valid local [ProofAttachment.source]
      * URIs to temporary files, then uploads them via multipart POST.
-     * Returns the list of server-assigned URLs (e.g. ["/uploads/xxx.jpg"]).
+     * Returns signed display URLs together with stable COS keys and media metadata.
      *
      * @param proofAttachments the attachments selected by the user. Only those whose
      *   [ProofAttachment.source] is a readable content:// or file:// URI are used.
      * @param cacheDir the app's cache directory — used for staging temp copies.
-     * @return server URLs on success; empty list if no valid files to upload.
+     * @return uploaded file metadata on success; empty list if no valid files to upload.
      */
     suspend fun uploadProofFiles(
         proofAttachments: List<ProofAttachment>,
         cacheDir: File
-    ): Result<List<String>> {
+    ): Result<List<UploadedProofFile>> {
         return withContext(Dispatchers.IO) {
+            val tempFiles = mutableListOf<File>()
             try {
-                val tempFiles = mutableListOf<File>()
                 for (attachment in proofAttachments) {
                     if (!attachment.isValidForUpload) continue
                     val uri = try {
@@ -606,12 +688,11 @@ class ApiStudentRepository(
 
                 val response = apiClient.uploadProofFiles(tempFiles)
 
-                // Clean up temp files
-                tempFiles.forEach { it.delete() }
-
-                Result.success(response.urls)
+                Result.success(response.files)
             } catch (e: Exception) {
                 Result.failure(e)
+            } finally {
+                tempFiles.forEach { it.delete() }
             }
         }
     }

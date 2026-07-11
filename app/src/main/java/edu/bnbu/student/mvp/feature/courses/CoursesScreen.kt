@@ -1,7 +1,6 @@
 package edu.bnbu.student.mvp.feature.courses
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,11 +21,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AssignmentTurnedIn
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -35,12 +38,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import edu.bnbu.student.mvp.core.designsystem.BNBUColors
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.HourProgressBar
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
@@ -79,6 +80,13 @@ private fun CourseList(
     appState: StudentAppState,
     onCourseSelected: (Course) -> Unit
 ) {
+    var historyExpanded by remember { mutableStateOf(false) }
+    val courses = appState.workspace.courses
+    val historyCourses = courses.filter {
+        it.semesterStatus == "archived" || it.enrollmentStatus in setOf("completed", "withdrawn")
+    }
+    val currentCourses = courses.filterNot { it in historyCourses }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -89,14 +97,12 @@ private fun CourseList(
         item {
             Text(
                 text = "教学班以课程代码 + Section 区分；同一课程代码的不同 Section 会作为不同教学班展示。",
-                color = BNBUColors.Muted,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                lineHeight = 21.sp
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
             )
         }
 
-        if (appState.workspace.courses.isEmpty()) {
+        if (courses.isEmpty()) {
             item {
                 EmptyPlaceholder(
                     title = "暂无课程",
@@ -104,13 +110,71 @@ private fun CourseList(
                 )
             }
         } else {
-            items(appState.workspace.courses) { course ->
-                CourseCard(
-                    course = course,
-                    onClick = { onCourseSelected(course) }
-                )
+            item { SectionTitle(eyebrow = "Current", title = "当前学期课程") }
+            if (currentCourses.isEmpty()) {
+                item {
+                    EmptyPlaceholder(
+                        title = "当前学期暂无课程",
+                        message = "历史课程仍可在下方展开查看。"
+                    )
+                }
+            } else {
+                items(currentCourses, key = { "current-${it.id}" }) { course ->
+                    CourseCard(course = course, onClick = { onCourseSelected(course) })
+                }
+            }
+
+            if (historyCourses.isNotEmpty()) {
+                item {
+                    HistoryCourseHeader(
+                        count = historyCourses.size,
+                        expanded = historyExpanded,
+                        onClick = { historyExpanded = !historyExpanded }
+                    )
+                }
+            }
+            if (historyExpanded) {
+                items(historyCourses, key = { "history-${it.id}" }) { course ->
+                    CourseCard(course = course, onClick = { onCourseSelected(course) })
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun HistoryCourseHeader(
+    count: Int,
+    expanded: Boolean,
+    onClick: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(cs.surfaceVariant, MaterialTheme.shapes.small)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Filled.History,
+            contentDescription = null,
+            tint = cs.primary,
+            modifier = Modifier.size(22.dp)
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = "历史课程（$count）",
+            color = cs.onSurface,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.weight(1f)
+        )
+        Icon(
+            imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+            contentDescription = if (expanded) "收起历史课程" else "展开历史课程",
+            tint = cs.onSurfaceVariant
+        )
     }
 }
 
@@ -119,6 +183,7 @@ private fun CourseCard(
     course: Course,
     onClick: () -> Unit
 ) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel(
         modifier = Modifier.clickable(onClick = onClick)
     ) {
@@ -130,18 +195,16 @@ private fun CourseCard(
                 ) {
                     Text(
                         text = course.displayTitle,
-                        color = BNBUColors.Ink,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Black
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.titleLarge
                     )
                     Text(
                         text = course.name,
-                        color = BNBUColors.Muted,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium
                     )
                 }
-                StatusBadge(text = course.semester)
+                StatusBadge(text = course.semester.ifBlank { "学期待定" })
             }
 
             LazyVerticalGrid(
@@ -155,53 +218,32 @@ private fun CourseCard(
             ) {
                 items(
                     listOf(
-                        CourseFact("任课老师", course.teacher),
-                        CourseFact("课程学生", course.students.toString()),
-                        CourseFact("待审核", course.pending.toString()),
-                        CourseFact("未完成", course.missing.toString())
+                        CourseFact("任课老师", course.teacher.ifBlank { "待公布" }),
+                        CourseFact("学年", course.academicYear.ifBlank { "待设置" }),
+                        CourseFact("学期", course.term.ifBlank { "待设置" }),
+                        CourseFact("选课状态", course.enrollmentStatus.enrollmentStatusLabel())
                     )
                 ) { fact ->
                     CourseFactCell(fact)
                 }
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "班级完成率",
-                        color = BNBUColors.Muted,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Black
-                    )
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        text = "${course.completion}%",
-                        color = BNBUColors.Ink,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Black
-                    )
-                }
-                HourProgressBar(value = course.completion.toDouble(), total = 100.0)
-            }
-
-            Text(
-                text = "下一截止：${course.deadline}",
-                color = BNBUColors.Ink,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Black
-            )
-
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "查看教学班详情",
-                    color = BNBUColors.Blue,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Black
+                    text = if (course.isCurrent) "当前教学班" else course.semesterStatus.semesterStatusLabel(),
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "查看课程详情",
+                    color = cs.primary,
+                    style = MaterialTheme.typography.labelMedium
                 )
                 Icon(
                     imageVector = Icons.Filled.ChevronRight,
                     contentDescription = null,
-                    tint = BNBUColors.Blue,
+                    tint = cs.primary,
                     modifier = Modifier.size(16.dp)
                 )
             }
@@ -215,6 +257,7 @@ private fun CourseDetail(
     course: Course,
     onBack: () -> Unit
 ) {
+    val cs = MaterialTheme.colorScheme
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -229,13 +272,12 @@ private fun CourseDetail(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
                     contentDescription = null,
-                    tint = BNBUColors.Ink
+                    tint = cs.onSurface
                 )
                 Text(
                     text = "返回我的课程",
-                    color = BNBUColors.Ink,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Black
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.bodyMedium
                 )
             }
         }
@@ -257,9 +299,8 @@ private fun CourseDetail(
             SwissPanel {
                 Text(
                     text = "我的课程相关进度",
-                    color = BNBUColors.Ink,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Black
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.titleMedium
                 )
                 Spacer(Modifier.height(14.dp))
                 HourProgressBar(
@@ -312,25 +353,24 @@ private fun CourseDetail(
 
 @Composable
 private fun CourseFactCell(fact: CourseFact) {
+    val cs = MaterialTheme.colorScheme
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(BNBUColors.BlueSoft)
-            .border(1.dp, BNBUColors.Line, RectangleShape)
+            .background(cs.surfaceVariant, MaterialTheme.shapes.small)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Text(
             text = fact.label.uppercase(),
-            color = BNBUColors.Muted,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Black
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall
         )
         Text(
             text = fact.value,
-            color = BNBUColors.Ink,
+            color = cs.onSurface,
             fontSize = 18.sp,
-            fontWeight = FontWeight.Black,
+            fontWeight = FontWeight.Medium,
             maxLines = 1
         )
     }
@@ -338,6 +378,7 @@ private fun CourseFactCell(fact: CourseFact) {
 
 @Composable
 private fun DetailFactRow(label: String, value: String) {
+    val cs = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -346,16 +387,14 @@ private fun DetailFactRow(label: String, value: String) {
     ) {
         Text(
             text = label,
-            color = BNBUColors.Ink,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Black
+            color = cs.onSurface,
+            style = MaterialTheme.typography.bodyMedium
         )
         Spacer(Modifier.width(12.dp))
         Text(
             text = value,
-            color = BNBUColors.Muted,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f)
         )
     }
@@ -363,6 +402,7 @@ private fun DetailFactRow(label: String, value: String) {
 
 @Composable
 private fun TaskRow(task: CourseTask, course: Course?) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel {
         Row(
             verticalAlignment = Alignment.Top,
@@ -371,7 +411,7 @@ private fun TaskRow(task: CourseTask, course: Course?) {
             Icon(
                 imageVector = task.creditType.courseIcon,
                 contentDescription = null,
-                tint = BNBUColors.Blue,
+                tint = cs.primary,
                 modifier = Modifier.size(32.dp)
             )
             Column(
@@ -381,25 +421,21 @@ private fun TaskRow(task: CourseTask, course: Course?) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = task.title,
-                        color = BNBUColors.Ink,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Black,
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f)
                     )
                     StatusBadge(text = task.status.label, filled = task.status == TaskStatus.Active)
                 }
                 Text(
                     text = "${task.creditType.label} · ${task.hours.hourText()} · 截止 ${task.deadline}",
-                    color = BNBUColors.Ink,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
                     text = "证明要求：${task.proof}",
-                    color = BNBUColors.Muted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    lineHeight = 17.sp
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
                 )
                 if (course != null) {
                     StatusBadge(text = course.displayTitle)
@@ -411,6 +447,7 @@ private fun TaskRow(task: CourseTask, course: Course?) {
 
 @Composable
 private fun RecordCard(record: CheckInRecord) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.Top) {
@@ -420,15 +457,13 @@ private fun RecordCard(record: CheckInRecord) {
                 ) {
                     Text(
                         text = record.taskTitle,
-                        color = BNBUColors.Ink,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Black
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.titleMedium
                     )
                     Text(
                         text = record.submittedAt,
-                        color = BNBUColors.Muted,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium
                     )
                 }
                 StatusBadge(
@@ -442,24 +477,41 @@ private fun RecordCard(record: CheckInRecord) {
                 Spacer(Modifier.width(8.dp))
                 Text(
                     text = record.hours.hourText(),
-                    color = BNBUColors.Ink,
+                    color = cs.onSurface,
                     fontSize = 18.sp,
-                    fontWeight = FontWeight.Black
+                    fontWeight = FontWeight.Medium
                 )
+            }
+
+            record.aiReviewStatus?.let { aiStatus ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    StatusBadge(
+                        text = aiStatus.label,
+                        filled = aiStatus == edu.bnbu.student.mvp.core.model.AiReviewStatus.Normal
+                    )
+                    record.aiRiskLevel?.let { risk -> StatusBadge(text = risk.label) }
+                }
+                record.aiReviewMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                    Text(
+                        text = message,
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
 
             Text(
                 text = "凭证：${record.proofSummary}",
-                color = BNBUColors.Muted,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold
+                color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
             )
             Text(
                 text = "老师反馈：${record.teacherFeedback}",
-                color = BNBUColors.Ink,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Black,
-                lineHeight = 21.sp
+                color = cs.onSurface,
+                style = MaterialTheme.typography.bodyMedium
             )
         }
     }
@@ -469,6 +521,20 @@ private data class CourseFact(
     val label: String,
     val value: String
 )
+
+private fun String.enrollmentStatusLabel(): String = when (this) {
+    "enrolled" -> "修读中"
+    "completed" -> "已完成"
+    "withdrawn" -> "已退课"
+    else -> ifBlank { "待确认" }
+}
+
+private fun String.semesterStatusLabel(): String = when (this) {
+    "upcoming" -> "即将开始"
+    "current" -> "当前学期"
+    "archived" -> "历史学期"
+    else -> ifBlank { "学期待定" }
+}
 
 private val CreditType.courseIcon: ImageVector
     get() = when (this) {

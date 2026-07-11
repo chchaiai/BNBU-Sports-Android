@@ -7,6 +7,7 @@ import android.security.keystore.KeyProperties
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import edu.bnbu.student.mvp.core.model.CheckInDraft
+import edu.bnbu.student.mvp.core.model.AppThemeMode
 import edu.bnbu.student.mvp.core.model.StudentTaskList
 import edu.bnbu.student.mvp.core.model.StudentWorkspace
 import java.security.KeyStore
@@ -106,6 +107,16 @@ class AndroidAppLocalStore(
 
     fun loadLastSyncTime(): String? {
         return preferences.getString(LastSyncKey, null)
+    }
+
+    fun loadThemeMode(): AppThemeMode {
+        return AppThemeMode.fromStorage(preferences.getString(ThemeModeKey, null))
+    }
+
+    fun saveThemeMode(mode: AppThemeMode): Boolean {
+        return try {
+            preferences.edit().putString(ThemeModeKey, mode.storageValue).commit()
+        } catch (_: RuntimeException) { false }
     }
 
     fun clearAuth() {
@@ -262,6 +273,7 @@ class AndroidAppLocalStore(
         const val AuthTokenKey = "bnbu.student.auth.token.v1"
         const val UserProfileKey = "bnbu.student.auth.profile.v1"
         const val LastSyncKey = "bnbu.student.last_sync.v1"
+        const val ThemeModeKey = "bnbu.student.theme.mode.v1"
 
         // Encrypted token storage keys
         private const val AuthTokenEncryptedKey = "bnbu.student.auth.token.encrypted"

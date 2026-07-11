@@ -1,7 +1,6 @@
 package edu.bnbu.student.mvp.feature.grades
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,16 +25,15 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import edu.bnbu.student.mvp.core.designsystem.BNBUColors
 import edu.bnbu.student.mvp.core.designsystem.HourProgressBar
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
 import edu.bnbu.student.mvp.core.designsystem.StatusBadge
@@ -63,6 +61,7 @@ fun GradesScreen(appState: StudentAppState) {
 
 @Composable
 private fun TotalPanel(grades: GradeRow) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(
@@ -71,24 +70,21 @@ private fun TotalPanel(grades: GradeRow) {
             ) {
                 Text(
                     text = "总分预估",
-                    color = BNBUColors.Ink,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Black
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.titleMedium
                 )
                 Text(
                     text = "基于当前已录入四块成绩与权重规则，待审核打卡暂不计入。",
-                    color = BNBUColors.Muted,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    lineHeight = 21.sp
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium
                 )
             }
             Spacer(Modifier.width(14.dp))
             Text(
                 text = grades.total.toString(),
-                color = BNBUColors.Ink,
+                color = cs.onSurface,
                 fontSize = 54.sp,
-                fontWeight = FontWeight.Black,
+                fontWeight = FontWeight.Medium,
                 lineHeight = 54.sp
             )
         }
@@ -114,13 +110,14 @@ private fun ComponentGrid(components: List<GradeComponentSummary>) {
 
 @Composable
 private fun GradeComponentCard(component: GradeComponentSummary) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = component.icon,
                     contentDescription = null,
-                    tint = BNBUColors.Blue,
+                    tint = cs.primary,
                     modifier = Modifier.size(24.dp)
                 )
                 Spacer(Modifier.weight(1f))
@@ -129,17 +126,15 @@ private fun GradeComponentCard(component: GradeComponentSummary) {
 
             Text(
                 text = component.title,
-                color = BNBUColors.Ink,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Black,
-                lineHeight = 20.sp
+                color = cs.onSurface,
+                style = MaterialTheme.typography.titleSmall
             )
 
             Text(
                 text = component.score.toString(),
-                color = BNBUColors.Ink,
+                color = cs.onSurface,
                 fontSize = 40.sp,
-                fontWeight = FontWeight.Black,
+                fontWeight = FontWeight.Medium,
                 lineHeight = 40.sp
             )
 
@@ -147,10 +142,8 @@ private fun GradeComponentCard(component: GradeComponentSummary) {
 
             Text(
                 text = component.note,
-                color = BNBUColors.Muted,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                lineHeight = 17.sp
+                color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
             )
         }
     }
@@ -161,13 +154,13 @@ private fun FormulaPanel(
     grades: GradeRow,
     components: List<GradeComponentSummary>
 ) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "总分计算",
-                color = BNBUColors.Ink,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Black
+                color = cs.onSurface,
+                style = MaterialTheme.typography.titleMedium
             )
             Spacer(Modifier.weight(1f))
             StatusBadge(text = "透明预估")
@@ -186,7 +179,7 @@ private fun FormulaPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(1.dp)
-                .background(BNBUColors.Line)
+                .background(cs.outline)
         )
         Spacer(Modifier.height(12.dp))
 
@@ -197,20 +190,19 @@ private fun FormulaPanel(
 
 @Composable
 private fun GradeContributionRow(component: GradeComponentSummary) {
+    val cs = MaterialTheme.colorScheme
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = component.title,
-                color = BNBUColors.Ink,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Black,
+                color = cs.onSurface,
+                style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.weight(1f)
             )
             Text(
                 text = "${component.score} x ${component.weightText} = ${component.contributionText}",
-                color = BNBUColors.Muted,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold
+                color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
             )
         }
         HourProgressBar(value = component.contribution, total = 30.0)
@@ -219,13 +211,13 @@ private fun GradeContributionRow(component: GradeComponentSummary) {
 
 @Composable
 private fun MissingPanel(grades: GradeRow) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "缺失项 / 风险",
-                color = BNBUColors.Ink,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Black
+                color = cs.onSurface,
+                style = MaterialTheme.typography.titleMedium
             )
             Spacer(Modifier.weight(1f))
             StatusBadge(
@@ -239,9 +231,8 @@ private fun MissingPanel(grades: GradeRow) {
         if (grades.missingItems.isEmpty()) {
             Text(
                 text = "当前没有阻塞项。",
-                color = BNBUColors.Muted,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold
+                color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
             )
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -255,27 +246,25 @@ private fun MissingPanel(grades: GradeRow) {
 
 @Composable
 private fun MissingItemRow(item: String) {
+    val cs = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(BNBUColors.BlueSoft)
-            .border(1.dp, BNBUColors.Line, RectangleShape)
+            .background(cs.errorContainer, MaterialTheme.shapes.small)
             .padding(12.dp),
         verticalAlignment = Alignment.Top
     ) {
         Icon(
             imageVector = Icons.Filled.Error,
             contentDescription = null,
-            tint = BNBUColors.Ink,
+            tint = cs.error,
             modifier = Modifier.size(20.dp)
         )
         Spacer(Modifier.width(8.dp))
         Text(
             text = item,
-            color = BNBUColors.Ink,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Black,
-            lineHeight = 20.sp,
+            color = cs.onErrorContainer,
+            style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f)
         )
     }
@@ -283,20 +272,20 @@ private fun MissingItemRow(item: String) {
 
 @Composable
 private fun TracePanel(grades: GradeRow) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 imageVector = Icons.Filled.TrackChanges,
                 contentDescription = null,
-                tint = BNBUColors.Blue,
+                tint = cs.primary,
                 modifier = Modifier.size(24.dp)
             )
             Spacer(Modifier.width(8.dp))
             Text(
                 text = "来源追溯",
-                color = BNBUColors.Ink,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Black
+                color = cs.onSurface,
+                style = MaterialTheme.typography.titleMedium
             )
         }
 
@@ -304,16 +293,15 @@ private fun TracePanel(grades: GradeRow) {
 
         Text(
             text = grades.sourceTrace,
-            color = BNBUColors.Muted,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            lineHeight = 21.sp
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium
         )
     }
 }
 
 @Composable
 private fun DetailFactRow(label: String, value: String) {
+    val cs = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -322,16 +310,14 @@ private fun DetailFactRow(label: String, value: String) {
     ) {
         Text(
             text = label,
-            color = BNBUColors.Ink,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Black
+            color = cs.onSurface,
+            style = MaterialTheme.typography.bodyMedium
         )
         Spacer(Modifier.width(12.dp))
         Text(
             text = value,
-            color = BNBUColors.Muted,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f)
         )
     }
