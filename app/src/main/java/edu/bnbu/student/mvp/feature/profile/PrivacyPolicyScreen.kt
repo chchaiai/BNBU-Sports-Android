@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -20,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import edu.bnbu.student.mvp.core.designsystem.BNBUColors
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 
 /**
@@ -42,9 +42,8 @@ fun PrivacyPolicyScreen(onBack: () -> Unit) {
             ) {
                 Text(
                     text = "隐私政策",
-                    color = BNBUColors.Ink,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Black
+                    color = MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.headlineSmall
                 )
                 Spacer(Modifier.weight(1f))
             }
@@ -111,21 +110,19 @@ fun PrivacyPolicyScreen(onBack: () -> Unit) {
 
 @Composable
 private fun PrivacySection(title: String, paragraphs: List<String>) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel {
         Text(
             text = title,
-            color = BNBUColors.Ink,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Black
+            color = cs.onSurface,
+            style = MaterialTheme.typography.titleMedium
         )
         Spacer(Modifier.height(12.dp))
         paragraphs.forEach { paragraph ->
             Text(
                 text = paragraph,
-                color = BNBUColors.Muted,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                lineHeight = 22.sp
+                color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
             )
             Spacer(Modifier.height(8.dp))
         }

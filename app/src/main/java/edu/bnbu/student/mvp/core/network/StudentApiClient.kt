@@ -4,6 +4,10 @@ import android.content.Context
 import android.provider.OpenableColumns
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
+import com.google.gson.JsonDeserializationContext
+import com.google.gson.JsonDeserializer
+import com.google.gson.JsonElement
+import com.google.gson.JsonParseException
 import com.google.gson.reflect.TypeToken
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -13,6 +17,7 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.IOException
+import java.lang.reflect.Type
 import java.util.concurrent.TimeUnit
 
 data class StudentApiClient(
@@ -119,12 +124,15 @@ data class StudentApiClient(
             if (!file.exists() || !file.canRead()) {
                 throw IOException("Upload file not readable: ${file.name}")
             }
-            val mimeType = when {
-                file.extension.equals("png", ignoreCase = true) -> "image/png"
-                file.extension.equals("webp", ignoreCase = true) -> "image/webp"
-                file.extension.equals("heic", ignoreCase = true) -> "image/heic"
-                file.extension.equals("heif", ignoreCase = true) -> "image/heif"
-                else -> "image/jpeg"
+            val mimeType = when (file.extension.lowercase()) {
+                "jpg", "jpeg" -> "image/jpeg"
+                "png" -> "image/png"
+                "webp" -> "image/webp"
+                "heic" -> "image/heic"
+                "heif" -> "image/heif"
+                "mp4" -> "video/mp4"
+                "mov" -> "video/quicktime"
+                else -> "application/octet-stream"
             }
             builder.addFormDataPart(
                 "files",
@@ -158,6 +166,7 @@ data class StudentApiClient(
 
     private val gson = GsonBuilder()
         .serializeNulls()
+        .registerTypeAdapter(ProofFileResponse::class.java, ProofFileResponseJsonDeserializer)
         .create()
 
     private fun resolve(path: String): String {
@@ -168,7 +177,48 @@ data class StudentApiClient(
         // ⚠️ Use HTTP for the raw IP server — Android TLS cannot verify
         // a certificate issued for a bare IP address. Switch to a domain
         // with proper HTTPS (e.g., "https://bnbu.example.com/api") for production.
-        const val DefaultBaseUrl = "http://123.207.5.70:96/api"
+        const val DefaultBaseUrl = "http://123.207.5.70:3334/api"
+    }
+}
+
+private object ProofFileResponseJsonDeserializer : JsonDeserializer<ProofFileResponse> {
+    override fun deserialize(
+        json: JsonElement,
+        typeOfT: Type,
+        context: JsonDeserializationContext
+    ): ProofFileResponse {
+        if (json.isJsonPrimitive && json.asJsonPrimitive.isString) {
+            val legacyValue = json.asString
+            val cosKey = legacyValue.takeIf { it.startsWith("proofs/") }.orEmpty()
+            val metadata = proofMetadata(cosKey.ifBlank { legacyValue })
+            return ProofFileResponse(
+                url = legacyValue.takeUnless { cosKey.isNotEmpty() }.orEmpty(),
+                cosKey = cosKey,
+                mediaType = metadata.first,
+                mimeType = metadata.second
+            )
+        }
+        if (!json.isJsonObject) throw JsonParseException("Invalid proof file response")
+        val value = json.asJsonObject
+        return ProofFileResponse(
+            url = value.get("url")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
+            cosKey = value.get("cosKey")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
+            mediaType = value.get("mediaType")?.takeUnless { it.isJsonNull }?.asString ?: "image",
+            mimeType = value.get("mimeType")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
+            size = value.get("size")?.takeUnless { it.isJsonNull }?.asLong ?: 0
+        )
+    }
+
+    private fun proofMetadata(value: String): Pair<String, String> {
+        return when (value.substringBefore('?').substringAfterLast('.').lowercase()) {
+            "mp4" -> "video" to "video/mp4"
+            "mov" -> "video" to "video/quicktime"
+            "png" -> "image" to "image/png"
+            "webp" -> "image" to "image/webp"
+            "heic" -> "image" to "image/heic"
+            "heif" -> "image" to "image/heif"
+            else -> "image" to "image/jpeg"
+        }
     }
 }
 
@@ -225,7 +275,15 @@ data class StudentApiRequest(
 )
 
 /** Response from POST /api/upload/proof */
+data class UploadedProofFile(
+    val url: String,
+    val cosKey: String,
+    val mediaType: String,
+    val mimeType: String,
+    val size: Long
+)
+
 data class UploadProofResponse(
-    val urls: List<String> = emptyList(),
+    val files: List<UploadedProofFile> = emptyList(),
     val count: Int = 0
 )

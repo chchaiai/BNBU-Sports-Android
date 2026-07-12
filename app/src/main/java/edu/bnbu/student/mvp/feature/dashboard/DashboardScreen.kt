@@ -1,7 +1,6 @@
 package edu.bnbu.student.mvp.feature.dashboard
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,17 +31,18 @@ import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import edu.bnbu.student.mvp.core.designsystem.BNBUColors
 import edu.bnbu.student.mvp.core.designsystem.BrandMark
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.HourProgressBar
@@ -81,6 +81,7 @@ fun DashboardScreen(
 
 @Composable
 private fun DashboardHeader(appState: StudentAppState) {
+    val cs = MaterialTheme.colorScheme
     Row(
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(14.dp)
@@ -92,15 +93,13 @@ private fun DashboardHeader(appState: StudentAppState) {
         ) {
             Text(
                 text = "你好，${appState.workspace.student.name}",
-                color = BNBUColors.Ink,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Black
+                color = cs.onSurface,
+                style = MaterialTheme.typography.headlineMedium
             )
             Text(
                 text = "${appState.workspace.student.college} · ${appState.workspace.student.id}",
-                color = BNBUColors.Muted,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
+                color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
             )
         }
         StatusBadge(text = appState.workspace.progress.status, filled = true)
@@ -109,6 +108,7 @@ private fun DashboardHeader(appState: StudentAppState) {
 
 @Composable
 private fun ProgressPanel(appState: StudentAppState) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel {
         SectionTitle(eyebrow = "Sports Credit", title = "体育学时进度")
 
@@ -117,24 +117,22 @@ private fun ProgressPanel(appState: StudentAppState) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 text = appState.totalCompleted.hourText(),
-                color = BNBUColors.Ink,
-                fontSize = 46.sp,
-                fontWeight = FontWeight.Black,
-                lineHeight = 46.sp
+                color = cs.onSurface,
+                style = MaterialTheme.typography.displaySmall
             )
             Spacer(Modifier.width(6.dp))
             Text(
                 text = "/ ${appState.hourRule.total.hourText()}",
-                color = BNBUColors.Muted,
+                color = cs.onSurfaceVariant,
                 fontSize = 20.sp,
-                fontWeight = FontWeight.Black
+                fontWeight = FontWeight.Medium
             )
             Spacer(Modifier.weight(1f))
             Text(
                 text = "${(appState.completionRatio * 100).toInt()}%",
-                color = BNBUColors.Blue,
+                color = cs.primary,
                 fontSize = 24.sp,
-                fontWeight = FontWeight.Black
+                fontWeight = FontWeight.Medium
             )
         }
 
@@ -185,6 +183,7 @@ private fun MetricsGrid(appState: StudentAppState) {
 
 @Composable
 private fun RiskPanel(appState: StudentAppState) {
+    val cs = MaterialTheme.colorScheme
     val hasHourRisk = appState.hasHourRisk
     SwissPanel {
         Row(
@@ -194,22 +193,19 @@ private fun RiskPanel(appState: StudentAppState) {
             Icon(
                 imageVector = if (hasHourRisk) Icons.Filled.Warning else Icons.Filled.CheckCircle,
                 contentDescription = null,
-                tint = if (hasHourRisk) BNBUColors.Blue else BNBUColors.Ink,
+                tint = if (hasHourRisk) cs.secondary else cs.primary,
                 modifier = Modifier.size(28.dp)
             )
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     text = if (hasHourRisk) "当前风险提示" else "当前状态稳定",
-                    color = BNBUColors.Ink,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Black
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.titleMedium
                 )
                 Text(
                     text = appState.riskText,
-                    color = BNBUColors.Muted,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    lineHeight = 21.sp
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium
                 )
             }
         }
@@ -223,19 +219,19 @@ private fun ActionPanel(
     openGrades: () -> Unit,
     openProfile: () -> Unit
 ) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 imageVector = if (appState.supplementRecordCount > 0) Icons.Filled.Error else Icons.Filled.CheckCircle,
                 contentDescription = null,
-                tint = BNBUColors.Ink
+                tint = cs.onSurface
             )
             Spacer(Modifier.width(8.dp))
             Text(
                 text = "待处理",
-                color = BNBUColors.Ink,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Black
+                color = cs.onSurface,
+                style = MaterialTheme.typography.titleMedium
             )
             Spacer(Modifier.weight(1f))
             StatusBadge(text = "${appState.actionableRecordCount + appState.unreadNoticeCount}")
@@ -253,10 +249,8 @@ private fun ActionPanel(
 
         Text(
             text = appState.actionText,
-            color = BNBUColors.Muted,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            lineHeight = 21.sp
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium
         )
 
         Spacer(Modifier.height(14.dp))
@@ -324,20 +318,19 @@ private fun ProgressLine(
     total: Double,
     detail: String
 ) {
+    val cs = MaterialTheme.colorScheme
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = title,
-                color = BNBUColors.Ink,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Black
+                color = cs.onSurface,
+                style = MaterialTheme.typography.bodyMedium
             )
             Spacer(Modifier.weight(1f))
             Text(
                 text = "${value.hourText()} / ${total.hourText()}",
-                color = BNBUColors.Ink,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Black
+                color = cs.onSurface,
+                style = MaterialTheme.typography.bodyMedium
             )
             Spacer(Modifier.width(8.dp))
             StatusBadge(text = detail)
@@ -348,51 +341,47 @@ private fun ProgressLine(
 
 @Composable
 private fun MetricCell(metric: Metric) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel {
         Text(
             text = metric.label.uppercase(),
-            color = BNBUColors.Muted,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Black
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall
         )
         Spacer(Modifier.height(10.dp))
         Text(
             text = metric.value,
-            color = BNBUColors.Ink,
-            fontSize = 34.sp,
-            fontWeight = FontWeight.Black
+            color = cs.onSurface,
+            style = MaterialTheme.typography.headlineLarge
         )
         Spacer(Modifier.height(10.dp))
         Text(
             text = metric.footnote,
-            color = BNBUColors.Muted,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            lineHeight = 17.sp
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.labelMedium
         )
     }
 }
 
 @Composable
 private fun ActionMiniMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
     Column(
         modifier = modifier
-            .background(BNBUColors.BlueSoft)
-            .border(1.dp, BNBUColors.Line, RectangleShape)
+            .background(cs.surfaceVariant, MaterialTheme.shapes.small)
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         Text(
             text = label,
-            color = BNBUColors.Muted,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Black
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall
         )
         Text(
             text = value,
-            color = BNBUColors.Ink,
+            color = cs.onSurface,
             fontSize = 20.sp,
-            fontWeight = FontWeight.Black
+            fontWeight = FontWeight.Medium
         )
     }
 }
@@ -404,33 +393,29 @@ private fun DashboardShortcutButton(
     modifier: Modifier = Modifier,
     action: () -> Unit
 ) {
-    Row(
-        modifier = modifier
-            .background(BNBUColors.Ink)
-            .clickable(onClick = action)
-            .padding(vertical = 11.dp, horizontal = 8.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
+    val cs = MaterialTheme.colorScheme
+    FilledTonalButton(
+        onClick = action,
+        modifier = modifier,
+        shape = MaterialTheme.shapes.large
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = BNBUColors.Surface,
             modifier = Modifier.size(16.dp)
         )
         Spacer(Modifier.width(5.dp))
         Text(
             text = title,
-            color = BNBUColors.Surface,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Black,
-            maxLines = 1
+            maxLines = 1,
+            style = MaterialTheme.typography.labelMedium
         )
     }
 }
 
 @Composable
 private fun FocusPlanRow(item: FocusPlanItem) {
+    val cs = MaterialTheme.colorScheme
     Row(
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -438,26 +423,23 @@ private fun FocusPlanRow(item: FocusPlanItem) {
         Icon(
             imageVector = item.icon,
             contentDescription = null,
-            tint = BNBUColors.Blue,
+            tint = cs.primary,
             modifier = Modifier.size(28.dp)
         )
         Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = item.title,
-                    color = BNBUColors.Ink,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Black,
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f)
                 )
                 StatusBadge(text = item.status)
             }
             Text(
                 text = item.detail,
-                color = BNBUColors.Muted,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                lineHeight = 17.sp
+                color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
             )
         }
     }
@@ -465,6 +447,7 @@ private fun FocusPlanRow(item: FocusPlanItem) {
 
 @Composable
 private fun TaskRow(task: CourseTask) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel {
         Row(
             verticalAlignment = Alignment.Top,
@@ -473,32 +456,28 @@ private fun TaskRow(task: CourseTask) {
             Icon(
                 imageVector = task.creditType.dashboardIcon,
                 contentDescription = null,
-                tint = BNBUColors.Blue,
+                tint = cs.primary,
                 modifier = Modifier.size(32.dp)
             )
             Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = task.title,
-                        color = BNBUColors.Ink,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Black,
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f)
                     )
                     StatusBadge(text = task.creditType.label)
                 }
                 Text(
                     text = "截止：${task.deadline}",
-                    color = BNBUColors.Ink,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
                     text = "证明：${task.proof}",
-                    color = BNBUColors.Muted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    lineHeight = 17.sp
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
                 )
             }
         }
@@ -507,28 +486,28 @@ private fun TaskRow(task: CourseTask) {
 
 @Composable
 private fun NoticeRow(notice: StudentNotice) {
+    val cs = MaterialTheme.colorScheme
     SwissPanel {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = notice.category.dashboardIcon,
                     contentDescription = null,
-                    tint = BNBUColors.Blue,
+                    tint = cs.primary,
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(Modifier.width(5.dp))
                 Text(
                     text = notice.category.label,
-                    color = BNBUColors.Blue,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Black
+                    color = cs.primary,
+                    style = MaterialTheme.typography.labelMedium
                 )
                 Spacer(Modifier.weight(1f))
                 if (notice.isUnread) {
                     Box(
                         modifier = Modifier
                             .size(9.dp)
-                            .background(BNBUColors.Blue)
+                            .background(cs.primary, RoundedCornerShape(4.dp))
                     )
                 }
             }
@@ -536,9 +515,8 @@ private fun NoticeRow(notice: StudentNotice) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = notice.title,
-                    color = BNBUColors.Ink,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Black,
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f)
                 )
                 StatusBadge(text = notice.time)
@@ -546,10 +524,8 @@ private fun NoticeRow(notice: StudentNotice) {
 
             Text(
                 text = notice.message,
-                color = BNBUColors.Muted,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                lineHeight = 21.sp
+                color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
             )
         }
     }

@@ -7,6 +7,8 @@ import edu.bnbu.student.mvp.core.data.ApiStudentRepository
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.model.CheckInDraft
 import edu.bnbu.student.mvp.core.model.CheckInRecord
+import edu.bnbu.student.mvp.core.model.AiReviewStatus
+import edu.bnbu.student.mvp.core.model.AppThemeMode
 import edu.bnbu.student.mvp.core.model.Course
 import edu.bnbu.student.mvp.core.model.CourseTask
 import edu.bnbu.student.mvp.core.model.CreditType
@@ -14,6 +16,7 @@ import edu.bnbu.student.mvp.core.model.Membership
 import edu.bnbu.student.mvp.core.model.NoticeCategory
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
+import edu.bnbu.student.mvp.core.model.ProofUploadRule
 import edu.bnbu.student.mvp.core.model.ReviewStatus
 import edu.bnbu.student.mvp.core.model.SportHourRule
 import edu.bnbu.student.mvp.core.model.StudentNotice
@@ -25,16 +28,21 @@ import edu.bnbu.student.mvp.core.model.TaskStatus
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.network.StudentApiClient
 import edu.bnbu.student.mvp.core.network.StudentLoginRequest
+import edu.bnbu.student.mvp.core.network.ProofFileReference
 import edu.bnbu.student.mvp.core.network.SubmitSportRecordRequest
 import edu.bnbu.student.mvp.core.network.SupplementSportRecordRequest
 import edu.bnbu.student.mvp.core.network.UserDto
 import java.io.File
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.UUID
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
+import com.google.gson.JsonParser
 
 class StudentAppState(
     private val localStore: AndroidAppLocalStore? = null,
@@ -72,7 +80,17 @@ class StudentAppState(
     var lastError by mutableStateOf<String?>(null)
         private set
 
+    var themeMode by mutableStateOf(
+        localStore?.loadThemeMode() ?: AppThemeMode.Light
+    )
+        private set
+
     val hourRule: SportHourRule = SportHourRule.Standard
+
+    fun updateThemeMode(mode: AppThemeMode) {
+        themeMode = mode
+        localStore?.saveThemeMode(mode)
+    }
 
     // ── API repository (set after successful login) ───────────────
 
@@ -166,6 +184,7 @@ class StudentAppState(
                 val remoteWorkspace = apiRepo.loadWorkspaceAsync()
                 workspace = remoteWorkspace
                 isAuthenticated = true
+                isShowingCachedData = false
                 saveWorkspace(event = "登录成功，工作台已同步")
                 onResult(true)
             } catch (e: Exception) {
@@ -215,11 +234,16 @@ class StudentAppState(
                     lastError = null
                     onResult(false)
                 } else {
-                    // Network error — keep cached workspace, show offline banner
-                    isShowingCachedData = workspace != StudentWorkspace.empty()
-                    isAuthenticated = true
-                    lastError = "无法连接服务器，显示缓存数据"
-                    onResult(true)
+                    // Network error — enter offline mode only when usable cache exists.
+                    val hasCachedWorkspace = workspace != StudentWorkspace.empty()
+                    isShowingCachedData = hasCachedWorkspace
+                    isAuthenticated = hasCachedWorkspace
+                    lastError = if (hasCachedWorkspace) {
+                        "无法连接服务器，显示缓存数据"
+                    } else {
+                        "无法连接服务器，请检查网络后重试"
+                    }
+                    onResult(hasCachedWorkspace)
                 }
             } finally {
                 isLoading = false
@@ -239,8 +263,11 @@ class StudentAppState(
         scope.launch {
             try {
                 workspace = apiRepo.loadWorkspaceAsync()
+                isShowingCachedData = false
+                recordSyncTime()
                 saveWorkspace(event = "工作台已刷新")
             } catch (e: Exception) {
+                isShowingCachedData = workspace != StudentWorkspace.empty()
                 lastError = errorMessage(e)
             } finally {
                 isLoading = false
@@ -342,87 +369,118 @@ class StudentAppState(
         task: CourseTask,
         hours: Double,
         note: String,
-        proofAttachments: List<ProofAttachment>
+        sportType: String?,
+        proofAttachments: List<ProofAttachment>,
+        onResult: (Result<Unit>) -> Unit = {}
     ) {
+        if (hasSubmittedCheckInToday()) {
+            failSubmission("submitCheckIn", "今日已打卡，每天只能提交一次", onResult)
+            return
+        }
         if (task.status != TaskStatus.Active) {
-            logValidationFailure("submitCheckIn", "任务状态非 Active")
+            failSubmission("submitCheckIn", "当前任务不可提交", onResult)
             return
         }
         if (proofAttachments.isEmpty()) {
-            logValidationFailure("submitCheckIn", "至少需要添加 1 个凭证")
+            failSubmission("submitCheckIn", "至少需要添加 1 个凭证", onResult)
             return
         }
         if (proofAttachments.any { !it.isValidForUpload }) {
-            logValidationFailure("submitCheckIn", "凭证包含无效文件")
+            failSubmission("submitCheckIn", "凭证包含无效文件", onResult)
+            return
+        }
+        ProofUploadRule.limitMessage(proofAttachments)?.let { message ->
+            failSubmission("submitCheckIn", message, onResult)
             return
         }
 
+        val repo = apiRepository ?: run {
+            failSubmission("submitCheckIn", "尚未连接服务器，请重新登录", onResult)
+            return
+        }
         val submittedHours = normalizedHours(hours, task)
-        val photoCount = proofAttachments.count { it.type == ProofMediaType.Image }
-        val videoCount = proofAttachments.count { it.type == ProofMediaType.Video }
-        val record = CheckInRecord(
-            id = UUID.randomUUID().toString(),
-            courseId = if (task.courseId == "self-general") null else task.courseId,
-            taskTitle = task.title,
-            creditType = task.creditType,
-            hours = submittedHours,
-            submittedAt = "刚刚",
-            status = ReviewStatus.Pending,
-            proofSummary = proofSummary(proofAttachments),
-            proofPhotoCount = photoCount,
-            proofVideoCount = videoCount,
-            proofFiles = proofAttachments,
-            teacherFeedback = "已提交，等待老师审核。",
-            note = note.ifBlank { "学生未填写补充说明。" }
-        )
-
-        val notice = StudentNotice(
-            id = UUID.randomUUID().toString(),
-            title = "打卡已提交",
-            message = "${task.title} 已进入待审核状态，审核通过后才会计入有效小时。",
-            time = "刚刚",
-            category = NoticeCategory.Review,
-            isUnread = true
-        )
-
-        workspace = workspace.copy(
-            records = listOf(record) + workspace.records,
-            notices = listOf(notice) + workspace.notices
-        )
-        enqueueSyncOperation(
-            type = SyncOperationType.SubmitRecord,
-            title = "提交打卡记录",
-            detail = "${task.title} · ${submittedHours.hourText()} · ${proofAttachments.size} 个凭证"
-        )
-        clearDraft()
-        saveWorkspace(event = "打卡提交已保存")
-
-        // Upload proof files first, then submit record with server URLs
-        apiRepository?.let { repo ->
-            scope.launch {
-                try {
-                    val cDir = cacheDir ?: File(System.getProperty("java.io.tmpdir") ?: "/tmp")
-                    var proofUrls: List<String> = emptyList()
-                    if (proofAttachments.isNotEmpty()) {
-                        val uploadResult = repo.uploadProofFiles(
-                            proofAttachments = proofAttachments,
-                            cacheDir = cDir
-                        )
-                        proofUrls = uploadResult.getOrDefault(emptyList())
-                    }
-
-                    val payload = SubmitSportRecordRequest(
-                        creditType = task.creditType.label,
-                        courseId = if (task.courseId == "self-general") null else task.courseId,
-                        taskId = task.id,
-                        hours = submittedHours,
-                        description = note,
-                        proofFiles = proofUrls
+        isLoading = true
+        lastError = null
+        scope.launch {
+            try {
+                val cDir = cacheDir ?: File(System.getProperty("java.io.tmpdir") ?: "/tmp")
+                val uploadedFiles = repo.uploadProofFiles(
+                    proofAttachments = proofAttachments,
+                    cacheDir = cDir
+                ).getOrThrow()
+                val proofFiles = uploadedFiles.map { uploaded ->
+                    ProofFileReference(
+                        cosKey = uploaded.cosKey,
+                        mediaType = uploaded.mediaType,
+                        mimeType = uploaded.mimeType,
+                        size = uploaded.size
                     )
-                    repo.submitRecord(payload)
-                } catch (e: Exception) {
-                    android.util.Log.e("StudentAppState", "submitCheckIn API failed", e)
                 }
+                val payload = SubmitSportRecordRequest(
+                    creditType = task.creditType.label,
+                    courseId = if (task.courseId == "self-general") null else task.courseId,
+                    taskId = task.id,
+                    hours = submittedHours,
+                    description = note,
+                    proofFiles = proofFiles,
+                    sportType = sportType
+                )
+                val response = repo.submitRecord(payload).getOrThrow()
+                val serverProofs = uploadedFiles.map { uploaded ->
+                    ProofAttachment(
+                        id = uploaded.cosKey,
+                        type = if (uploaded.mediaType == "video") ProofMediaType.Video else ProofMediaType.Image,
+                        fileName = uploaded.cosKey.substringAfterLast('/'),
+                        byteCount = uploaded.size,
+                        source = uploaded.url
+                    )
+                }
+                val record = CheckInRecord(
+                    id = response.id,
+                    courseId = if (task.courseId == "self-general") null else task.courseId,
+                    taskTitle = task.title,
+                    creditType = task.creditType,
+                    hours = submittedHours,
+                    submittedAt = response.submittedAt,
+                    status = ReviewStatus.Pending,
+                    proofSummary = proofSummary(serverProofs),
+                    proofPhotoCount = serverProofs.count { it.type == ProofMediaType.Image },
+                    proofVideoCount = serverProofs.count { it.type == ProofMediaType.Video },
+                    proofFiles = serverProofs,
+                    teacherFeedback = "已提交，等待老师审核。",
+                    note = note.ifBlank { "学生未填写补充说明。" },
+                    sportType = sportType,
+                    aiReviewStatus = AiReviewStatus.Pending,
+                    aiReviewMessage = "凭证已进入 AI 初审队列。"
+                )
+                val notice = StudentNotice(
+                    id = UUID.randomUUID().toString(),
+                    title = "打卡已提交",
+                    message = "${task.title} 已进入待审核状态，审核通过后才会计入有效小时。",
+                    time = "刚刚",
+                    category = NoticeCategory.Review,
+                    isUnread = true
+                )
+                workspace = workspace.copy(
+                    records = listOf(record) + workspace.records,
+                    notices = listOf(notice) + workspace.notices
+                )
+                enqueueSyncOperation(
+                    type = SyncOperationType.SubmitRecord,
+                    title = "提交打卡记录",
+                    detail = "${task.title} · ${submittedHours.hourText()} · ${serverProofs.size} 个凭证",
+                    status = SyncOperationStatus.Synced
+                )
+                clearDraft()
+                saveWorkspace(event = "打卡提交已同步")
+                onResult(Result.success(Unit))
+            } catch (e: Exception) {
+                android.util.Log.e("StudentAppState", "submitCheckIn API failed", e)
+                val message = errorMessage(e)
+                lastError = message
+                onResult(Result.failure(IllegalStateException(message, e)))
+            } finally {
+                isLoading = false
             }
         }
     }
@@ -431,84 +489,114 @@ class StudentAppState(
         record: CheckInRecord,
         hours: Double,
         note: String,
-        proofAttachments: List<ProofAttachment>
+        proofAttachments: List<ProofAttachment>,
+        onResult: (Result<Unit>) -> Unit = {}
     ) {
         if (record.status != ReviewStatus.Supplement && record.status != ReviewStatus.Rejected) {
-            logValidationFailure("submitSupplement", "记录状态不允许补交")
+            failSubmission("submitSupplement", "记录状态不允许补交", onResult)
             return
         }
         if (proofAttachments.isEmpty()) {
-            logValidationFailure("submitSupplement", "至少需要添加 1 个凭证")
+            failSubmission("submitSupplement", "至少需要添加 1 个凭证", onResult)
             return
         }
         if (proofAttachments.any { !it.isValidForUpload }) {
-            logValidationFailure("submitSupplement", "凭证包含无效文件")
+            failSubmission("submitSupplement", "凭证包含无效文件", onResult)
             return
         }
 
         val index = workspace.records.indexOfFirst { it.id == record.id }
         if (index < 0) return
-
-        val submittedHours = hours.coerceIn(0.5, minOf(record.hours, hourRule.dailyLimit))
         val mergedProofs = workspace.records[index].proofFiles + proofAttachments
-        val updatedRecord = workspace.records[index].copy(
-            hours = submittedHours,
-            submittedAt = "刚刚补交",
-            status = ReviewStatus.Pending,
-            proofSummary = proofSummary(mergedProofs),
-            proofPhotoCount = mergedProofs.count { it.type == ProofMediaType.Image },
-            proofVideoCount = mergedProofs.count { it.type == ProofMediaType.Video },
-            proofFiles = mergedProofs,
-            teacherFeedback = "补充材料已提交，等待老师复审。",
-            note = note.ifBlank { "学生已按反馈补交材料。" }
-        )
-
-        val updatedRecords = workspace.records.toMutableList().also {
-            it[index] = updatedRecord
+        ProofUploadRule.limitMessage(mergedProofs)?.let { message ->
+            failSubmission("submitSupplement", message, onResult)
+            return
         }
-        val notice = StudentNotice(
-            id = UUID.randomUUID().toString(),
-            title = "补充材料已提交",
-            message = "${record.taskTitle} 的补充材料已进入复审队列。",
-            time = "刚刚",
-            category = NoticeCategory.Review,
-            isUnread = true
-        )
 
-        workspace = workspace.copy(
-            records = updatedRecords,
-            notices = listOf(notice) + workspace.notices
-        )
-        enqueueSyncOperation(
-            type = SyncOperationType.SupplementRecord,
-            title = "提交补充材料",
-            detail = "${record.taskTitle} · 新增 ${proofAttachments.size} 个凭证"
-        )
-        saveWorkspace(event = "补充材料已保存")
-
-        // Upload proof files first, then submit supplement record with server URLs
-        apiRepository?.let { repo ->
-            scope.launch {
-                try {
-                    val cDir = cacheDir ?: File(System.getProperty("java.io.tmpdir") ?: "/tmp")
-                    var proofUrls: List<String> = emptyList()
-                    if (proofAttachments.isNotEmpty()) {
-                        val uploadResult = repo.uploadProofFiles(
-                            proofAttachments = proofAttachments,
-                            cacheDir = cDir
-                        )
-                        proofUrls = uploadResult.getOrDefault(emptyList())
-                    }
-
-                    val payload = SupplementSportRecordRequest(
-                        hours = submittedHours,
-                        description = note,
-                        proofFiles = proofUrls
+        val repo = apiRepository ?: run {
+            failSubmission("submitSupplement", "尚未连接服务器，请重新登录", onResult)
+            return
+        }
+        val supplementMaxHours = minOf(record.hours, hourRule.dailyLimit)
+        val submittedHours = if (hours >= 2.0 && supplementMaxHours >= 2.0) 2.0 else 1.0
+        isLoading = true
+        lastError = null
+        scope.launch {
+            try {
+                val cDir = cacheDir ?: File(System.getProperty("java.io.tmpdir") ?: "/tmp")
+                val uploadedFiles = repo.uploadProofFiles(
+                    proofAttachments = proofAttachments,
+                    cacheDir = cDir
+                ).getOrThrow()
+                val proofFiles = uploadedFiles.map { uploaded ->
+                    ProofFileReference(
+                        cosKey = uploaded.cosKey,
+                        mediaType = uploaded.mediaType,
+                        mimeType = uploaded.mimeType,
+                        size = uploaded.size
                     )
-                    repo.supplementRecord(record.id, payload)
-                } catch (e: Exception) {
-                    android.util.Log.e("StudentAppState", "submitSupplement API failed", e)
                 }
+                val payload = SupplementSportRecordRequest(
+                    hours = submittedHours,
+                    description = note,
+                    proofFiles = proofFiles
+                )
+                repo.supplementRecord(record.id, payload).getOrThrow()
+                val serverProofs = uploadedFiles.map { uploaded ->
+                    ProofAttachment(
+                        id = uploaded.cosKey,
+                        type = if (uploaded.mediaType == "video") ProofMediaType.Video else ProofMediaType.Image,
+                        fileName = uploaded.cosKey.substringAfterLast('/'),
+                        byteCount = uploaded.size,
+                        source = uploaded.url
+                    )
+                }
+                val allProofs = workspace.records[index].proofFiles + serverProofs
+                val updatedRecord = workspace.records[index].copy(
+                    hours = submittedHours,
+                    submittedAt = Instant.now().toString(),
+                    status = ReviewStatus.Pending,
+                    proofSummary = proofSummary(allProofs),
+                    proofPhotoCount = allProofs.count { it.type == ProofMediaType.Image },
+                    proofVideoCount = allProofs.count { it.type == ProofMediaType.Video },
+                    proofFiles = allProofs,
+                    teacherFeedback = "补充材料已提交，等待老师复审。",
+                    note = note.ifBlank { "学生已按反馈补交材料。" },
+                    aiReviewStatus = AiReviewStatus.Pending,
+                    aiRiskLevel = null,
+                    aiRiskCodes = emptyList(),
+                    aiReviewMessage = "补充材料已进入 AI 复审队列。",
+                    aiConfidence = null,
+                    aiReviewedAt = null
+                )
+                val updatedRecords = workspace.records.toMutableList().also { it[index] = updatedRecord }
+                val notice = StudentNotice(
+                    id = UUID.randomUUID().toString(),
+                    title = "补充材料已提交",
+                    message = "${record.taskTitle} 的补充材料已进入复审队列。",
+                    time = "刚刚",
+                    category = NoticeCategory.Review,
+                    isUnread = true
+                )
+                workspace = workspace.copy(
+                    records = updatedRecords,
+                    notices = listOf(notice) + workspace.notices
+                )
+                enqueueSyncOperation(
+                    type = SyncOperationType.SupplementRecord,
+                    title = "提交补充材料",
+                    detail = "${record.taskTitle} · 新增 ${serverProofs.size} 个凭证",
+                    status = SyncOperationStatus.Synced
+                )
+                saveWorkspace(event = "补充材料已同步")
+                onResult(Result.success(Unit))
+            } catch (e: Exception) {
+                android.util.Log.e("StudentAppState", "submitSupplement API failed", e)
+                val message = errorMessage(e)
+                lastError = message
+                onResult(Result.failure(IllegalStateException(message, e)))
+            } finally {
+                isLoading = false
             }
         }
     }
@@ -517,6 +605,8 @@ class StudentAppState(
         taskId: String,
         hours: Double,
         note: String,
+        sportType: String?,
+        customSportType: String,
         proofAttachments: List<ProofAttachment>
     ) {
         val task = workspace.tasks.firstOrNull { it.id == taskId && it.status == TaskStatus.Active }
@@ -531,7 +621,9 @@ class StudentAppState(
             hours = normalizedHours(hours, task),
             note = note,
             proofAttachments = proofAttachments,
-            updatedAt = "刚刚"
+            updatedAt = "刚刚",
+            sportType = sportType,
+            customSportType = customSportType.takeIf { it.isNotBlank() }
         )
         saveDraft(event = "打卡草稿已保存")
     }
@@ -540,8 +632,16 @@ class StudentAppState(
         return minOf(task.hours, hourRule.dailyLimit)
     }
 
+    fun hasSubmittedCheckInToday(today: LocalDate = LocalDate.now()): Boolean {
+        return workspace.records.any { record ->
+            record.creditType != CreditType.OrganizationOffset &&
+                record.submittedAt.toLocalSubmissionDate() == today
+        }
+    }
+
     fun normalizedHours(hours: Double, task: CourseTask): Double {
-        return hours.coerceIn(0.5, hourLimitFor(task))
+        val maxHours = hourLimitFor(task)
+        return if (hours >= 2.0 && maxHours >= 2.0) 2.0 else 1.0
     }
 
     fun clearDraft() {
@@ -553,6 +653,14 @@ class StudentAppState(
 
     private fun errorMessage(e: Exception): String {
         val msg = e.message.orEmpty()
+        val serverMessage = msg.indexOf('{').takeIf { it >= 0 }?.let { start ->
+            runCatching {
+                JsonParser.parseString(msg.substring(start)).asJsonObject
+                    .get("message")
+                    ?.asString
+            }.getOrNull()
+        }
+        if (!serverMessage.isNullOrBlank()) return serverMessage
         return when {
             msg.contains("401") -> "账号或密码错误"
             msg.contains("400") -> "请输入账号和密码"
@@ -578,6 +686,15 @@ class StudentAppState(
 
     private fun logValidationFailure(method: String, reason: String) {
         android.util.Log.w("StudentAppState", "$method blocked: $reason")
+    }
+
+    private fun failSubmission(
+        method: String,
+        reason: String,
+        onResult: (Result<Unit>) -> Unit
+    ) {
+        logValidationFailure(method, reason)
+        onResult(Result.failure(IllegalArgumentException(reason)))
     }
 
     private fun proofSummary(proofAttachments: List<ProofAttachment>): String {
@@ -642,4 +759,13 @@ class StudentAppState(
             status = SyncOperationStatus.LocalOnly
         )
     }
+}
+
+private fun String.toLocalSubmissionDate(): LocalDate? {
+    val value = trim()
+    return runCatching {
+        Instant.parse(value).atZone(ZoneId.systemDefault()).toLocalDate()
+    }.getOrNull() ?: value.take(10)
+        .takeIf { it.matches(Regex("\\d{4}-\\d{2}-\\d{2}")) }
+        ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
 }

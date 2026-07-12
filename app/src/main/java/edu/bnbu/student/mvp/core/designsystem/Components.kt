@@ -15,70 +15,87 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+// ═══════════════════════════════════════════════════════════════
+//  GridBackground — subtle dot-grid in M3 surfaceVariant tone
+// ═══════════════════════════════════════════════════════════════
+
 @Composable
 fun GridBackground(modifier: Modifier = Modifier) {
     Canvas(
         modifier = modifier
-            .background(BNBUColors.Paper)
+            .background(MaterialTheme.colorScheme.background)
             .clipToBounds()
     ) {
         val spacing = 42.dp.toPx()
+        val outlineColor = Color(0xFF747775).copy(alpha = 0.06f)
         var x = 0f
         while (x <= size.width) {
-            drawLine(
-                color = BNBUColors.Blue.copy(alpha = 0.10f),
-                start = Offset(x, 0f),
-                end = Offset(x, size.height),
-                strokeWidth = 1f
-            )
+            drawLine(outlineColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
             x += spacing
         }
-
         var y = 0f
         while (y <= size.height) {
-            drawLine(
-                color = BNBUColors.Blue.copy(alpha = 0.10f),
-                start = Offset(0f, y),
-                end = Offset(size.width, y),
-                strokeWidth = 1f
-            )
+            drawLine(outlineColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
             y += spacing
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  SwissPanel  →  Google M3 Card
+//
+//  Card replaces the old white-background + black-border panel.
+//  It uses tonal elevation for subtle depth and the M3 medium
+//  shape (12 dp corner radius) defined in BNBUShapes.
+// ═══════════════════════════════════════════════════════════════
 
 @Composable
 fun SwissPanel(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(BNBUColors.Surface)
-            .border(width = 1.5.dp, color = BNBUColors.Line, shape = RectangleShape)
-            .padding(18.dp),
-        content = content
-    )
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(modifier = Modifier.padding(18.dp), content = content)
+    }
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  BrandMark — BNBU brand identity (softened for M3)
+// ═══════════════════════════════════════════════════════════════
 
 @Composable
 fun BrandMark(modifier: Modifier = Modifier, compact: Boolean = false) {
@@ -86,86 +103,111 @@ fun BrandMark(modifier: Modifier = Modifier, compact: Boolean = false) {
     val barWidth = if (compact) 7.dp else 10.dp
     val barHeight = if (compact) 20.dp else 28.dp
     val labelSize = if (compact) 9.sp else 12.sp
+    val cs = MaterialTheme.colorScheme
 
     Box(
         modifier = modifier
             .size(size)
-            .background(BNBUColors.Surface)
-            .border(2.dp, BNBUColors.Line),
+            .background(cs.surface, RoundedCornerShape(8.dp))
+            .border(1.5.dp, cs.outline, RoundedCornerShape(8.dp)),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Box(Modifier.width(barWidth).height(barHeight).background(BNBUColors.Ink))
-                Box(Modifier.width(barWidth).height(barHeight).background(BNBUColors.BlueLight))
-                Box(Modifier.width(barWidth).height(barHeight).background(BNBUColors.Ink))
+                Box(Modifier.width(barWidth).height(barHeight).background(cs.onSurface))
+                Box(Modifier.width(barWidth).height(barHeight).background(cs.primary))
+                Box(Modifier.width(barWidth).height(barHeight).background(cs.onSurface))
             }
             Spacer(Modifier.height(if (compact) 3.dp else 6.dp))
             Text(
                 text = "BNBU",
-                color = BNBUColors.Ink,
+                color = cs.onSurface,
                 fontSize = labelSize,
-                fontWeight = FontWeight.Black,
+                fontWeight = FontWeight.Medium,
                 maxLines = 1
             )
         }
     }
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  SectionTitle — M3-flavored two-line heading
+// ═══════════════════════════════════════════════════════════════
+
 @Composable
 fun SectionTitle(eyebrow: String, title: String, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
             text = eyebrow.uppercase(),
-            color = BNBUColors.Muted,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Black,
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall,
             maxLines = 1
         )
         Text(
             text = title,
-            color = BNBUColors.Ink,
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Black
+            color = cs.onSurface,
+            style = MaterialTheme.typography.headlineSmall
         )
     }
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  StatusBadge — low-saturation rounded chip
+//
+//  Google M3 style:  unchecked → surfaceVariant background,
+//  checked → primaryContainer.  No more black border.
+// ═══════════════════════════════════════════════════════════════
+
 @Composable
 fun StatusBadge(text: String, modifier: Modifier = Modifier, filled: Boolean = false) {
-    Text(
-        text = text,
-        modifier = modifier
-            .background(if (filled) BNBUColors.Ink else BNBUColors.BlueSoft)
-            .border(1.dp, BNBUColors.Line)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        color = if (filled) BNBUColors.Surface else BNBUColors.Ink,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.Black,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis
-    )
+    val cs = MaterialTheme.colorScheme
+    val bg = if (filled) cs.primaryContainer else cs.surfaceVariant
+    val fg = if (filled) cs.onPrimaryContainer else cs.onSurfaceVariant
+
+    Surface(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.extraSmall,
+        color = bg
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            color = fg,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  HourProgressBar — M3 LinearProgressIndicator wrapper
+// ═══════════════════════════════════════════════════════════════
 
 @Composable
 fun HourProgressBar(value: Double, total: Double, modifier: Modifier = Modifier) {
-    val ratio = if (total <= 0.0) 0f else (value / total).coerceIn(0.0, 1.0).toFloat()
+    val cs = MaterialTheme.colorScheme
+    val progress = if (total <= 0.0) 0f else (value / total).toFloat().coerceIn(0f, 1f)
 
     Box(
         modifier = modifier
             .fillMaxWidth()
             .height(12.dp)
-            .background(BNBUColors.Surface)
-            .border(1.5.dp, BNBUColors.Line)
+            .background(cs.surfaceVariant, MaterialTheme.shapes.small)
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth(ratio)
+                .fillMaxWidth(progress.toFloat())
                 .height(12.dp)
-                .background(BNBUColors.Blue)
+                .background(cs.primary, MaterialTheme.shapes.small)
         )
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  EmptyPlaceholder — Card with muted message
+// ═══════════════════════════════════════════════════════════════
 
 @Composable
 fun EmptyPlaceholder(
@@ -173,23 +215,31 @@ fun EmptyPlaceholder(
     message: String,
     modifier: Modifier = Modifier
 ) {
-    SwissPanel(modifier = modifier) {
-        Text(
-            text = title,
-            color = BNBUColors.Ink,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Black
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = message,
-            color = BNBUColors.Muted,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            lineHeight = 21.sp
-        )
+    val cs = MaterialTheme.colorScheme
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = cs.surfaceVariant.copy(alpha = 0.5f))
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Text(
+                text = title,
+                color = cs.onSurface,
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = message,
+                color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  PrimaryActionButton  →  M3 FilledButton
+// ═══════════════════════════════════════════════════════════════
 
 @Composable
 fun PrimaryActionButton(
@@ -198,35 +248,21 @@ fun PrimaryActionButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(BNBUColors.Ink)
-            .clickable(onClick = onClick)
-            .padding(vertical = 14.dp, horizontal = 16.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
+    Button(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.extraLarge
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = title,
-            tint = BNBUColors.Surface,
-            modifier = Modifier.size(20.dp)
-        )
+        Icon(imageVector = icon, contentDescription = title, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(8.dp))
-        Text(
-            text = title,
-            color = BNBUColors.Surface,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Black
-        )
+        Text(text = title)
     }
 }
 
-/**
- * Horizontal segmented control bar.  Each value produces one equally-weighted
- * segment that toggles [selected].
- */
+// ═══════════════════════════════════════════════════════════════
+//  SegmentedControl — M3 chip-style segmented bar
+// ═══════════════════════════════════════════════════════════════
+
 @Composable
 fun <T> SegmentedControl(
     values: List<T>,
@@ -234,27 +270,31 @@ fun <T> SegmentedControl(
     label: (T) -> String,
     onSelected: (T) -> Unit
 ) {
+    val cs = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.5.dp, BNBUColors.Line, RectangleShape)
-            .background(BNBUColors.Surface)
+            .background(cs.surfaceVariant, MaterialTheme.shapes.small)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         values.forEach { value ->
             val isSelected = value == selected
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .background(if (isSelected) BNBUColors.Ink else BNBUColors.Surface)
+                    .background(
+                        if (isSelected) cs.surface else Color.Transparent,
+                        MaterialTheme.shapes.small
+                    )
                     .clickable { onSelected(value) }
-                    .padding(vertical = 11.dp),
+                    .padding(vertical = 10.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = label(value),
-                    color = if (isSelected) BNBUColors.Surface else BNBUColors.Ink,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Black,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (isSelected) cs.onSurface else cs.onSurfaceVariant,
                     maxLines = 1
                 )
             }
@@ -262,11 +302,13 @@ fun <T> SegmentedControl(
     }
 }
 
-/**
- * Primary / secondary action button used throughout check-in and profile flows.
- * When [filled] is true, the button renders in ink-on-white; otherwise it
- * renders with an outlined style.
- */
+// ═══════════════════════════════════════════════════════════════
+//  ActionButton
+//
+//  filled=true   → M3 FilledTonalButton (PrimaryContainer)
+//  filled=false  → M3 OutlinedButton
+// ═══════════════════════════════════════════════════════════════
+
 @Composable
 fun ActionButton(
     title: String,
@@ -275,96 +317,97 @@ fun ActionButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(if (filled) BNBUColors.Ink else BNBUColors.Surface)
-            .border(1.5.dp, BNBUColors.Line, RectangleShape)
-            .clickable(onClick = onClick)
-            .padding(vertical = 13.dp, horizontal = 14.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = title,
-            tint = if (filled) BNBUColors.Surface else BNBUColors.Ink,
-            modifier = Modifier.size(18.dp)
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = title,
-            color = if (filled) BNBUColors.Surface else BNBUColors.Ink,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Black,
-            maxLines = 1
-        )
+    if (filled) {
+        FilledTonalButton(
+            onClick = onClick,
+            modifier = modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.large
+        ) {
+            Icon(imageVector = icon, contentDescription = title, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(text = title, maxLines = 1)
+        }
+    } else {
+        OutlinedButton(
+            onClick = onClick,
+            modifier = modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.large
+        ) {
+            Icon(imageVector = icon, contentDescription = title, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(text = title, maxLines = 1)
+        }
     }
 }
 
-/**
- * A dismissible success message panel with a "我知道了" action.
- */
+// ═══════════════════════════════════════════════════════════════
+//  StatusMessagePanel — success toast in a Card
+// ═══════════════════════════════════════════════════════════════
+
 @Composable
 fun StatusMessagePanel(
     message: String,
     onDismiss: () -> Unit
 ) {
-    SwissPanel {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Filled.CheckCircle,
-                contentDescription = "操作成功",
-                tint = BNBUColors.Blue,
-                modifier = Modifier.size(24.dp)
+    val cs = MaterialTheme.colorScheme
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = cs.primaryContainer.copy(alpha = 0.6f))
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.CheckCircle,
+                    contentDescription = "操作成功",
+                    tint = cs.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = message,
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                StatusBadge(text = "完成", filled = true)
+            }
+            Spacer(Modifier.height(10.dp))
+            ActionButton(
+                title = "知道了",
+                icon = Icons.Filled.Clear,
+                filled = false,
+                onClick = onDismiss
             )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                text = message,
-                color = BNBUColors.Ink,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Black,
-                modifier = Modifier.weight(1f),
-                lineHeight = 20.sp
-            )
-            StatusBadge(text = "完成", filled = true)
         }
-        Spacer(Modifier.height(10.dp))
-        ActionButton(
-            title = "知道了",
-            icon = Icons.Filled.Clear,
-            filled = false,
-            onClick = onDismiss
-        )
     }
 }
 
-/**
- * A non-dismissible validation / error panel.
- */
+// ═══════════════════════════════════════════════════════════════
+//  ValidationPanel — error / warning card
+// ═══════════════════════════════════════════════════════════════
+
 @Composable
 fun ValidationPanel(message: String) {
+    val cs = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(BNBUColors.BlueSoft)
-            .border(1.5.dp, BNBUColors.Line, RectangleShape)
+            .background(cs.errorContainer, MaterialTheme.shapes.small)
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = Icons.Filled.Error,
             contentDescription = "验证错误",
-            tint = BNBUColors.Ink,
+            tint = cs.error,
             modifier = Modifier.size(20.dp)
         )
         Spacer(Modifier.width(8.dp))
         Text(
             text = message,
-            color = BNBUColors.Ink,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Black,
-            lineHeight = 18.sp
+            color = cs.onErrorContainer,
+            style = MaterialTheme.typography.bodySmall
         )
     }
 }

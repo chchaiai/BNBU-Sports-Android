@@ -1,10 +1,9 @@
 package edu.bnbu.student.mvp.feature.scoring
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,6 +21,7 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,14 +33,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import edu.bnbu.student.mvp.core.data.ApiStudentRepository
 import edu.bnbu.student.mvp.core.designsystem.ActionButton
-import edu.bnbu.student.mvp.core.designsystem.BNBUColors
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
 import edu.bnbu.student.mvp.core.designsystem.StatusBadge
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
@@ -62,6 +61,14 @@ fun EnduranceScoringScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val cs = MaterialTheme.colorScheme
+    val handleBack = {
+        focusManager.clearFocus(force = true)
+        onBack()
+    }
+
+    BackHandler(onBack = handleBack)
 
     // Auto-determine run type from gender
     val runType = if (student.gender == "male") "1000m" else "800m"
@@ -70,9 +77,15 @@ fun EnduranceScoringScreen(
         val minVal = minutes.toIntOrNull() ?: 0
         val secVal = seconds.toIntOrNull() ?: 0
         val totalSeconds = minVal * 60 + secVal
+        result = null
 
         if (totalSeconds <= 0) {
             errorMessage = "请输入有效的跑步时间"
+            return
+        }
+
+        if (secVal !in 0..59) {
+            errorMessage = "秒数请输入 0-59 之间的数字"
             return
         }
 
@@ -116,20 +129,19 @@ fun EnduranceScoringScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onBack)
-                .padding(vertical = 8.dp),
+                .height(48.dp)
+                .clickable(onClick = handleBack),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
                 contentDescription = null,
-                tint = BNBUColors.Ink
+                tint = cs.onSurface
             )
             Text(
                 text = "返回",
-                color = BNBUColors.Ink,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Black
+                color = cs.onSurface,
+                style = MaterialTheme.typography.bodyMedium
             )
         }
 
@@ -147,22 +159,20 @@ fun EnduranceScoringScreen(
                 Icon(
                     imageVector = Icons.Filled.FitnessCenter,
                     contentDescription = null,
-                    tint = BNBUColors.Blue,
+                    tint = cs.primary,
                     modifier = Modifier.size(22.dp)
                 )
                 Spacer(Modifier.width(8.dp))
                 Column {
                     Text(
                         text = "测试项目: $runType",
-                        color = BNBUColors.Ink,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Black
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.titleMedium
                     )
                     Text(
                         text = "${student.genderLabel} · ${student.gradeLabel}",
-                        color = BNBUColors.Muted,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium
                     )
                 }
             }
@@ -179,9 +189,8 @@ fun EnduranceScoringScreen(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "分钟",
-                        color = BNBUColors.Muted,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Black
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium
                     )
                     Spacer(Modifier.height(6.dp))
                     OutlinedTextField(
@@ -196,17 +205,16 @@ fun EnduranceScoringScreen(
 
                 Text(
                     text = "′",
-                    color = BNBUColors.Ink,
+                    color = cs.onSurface,
                     fontSize = 28.sp,
-                    fontWeight = FontWeight.Black
+                    fontWeight = FontWeight.Medium
                 )
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "秒",
-                        color = BNBUColors.Muted,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Black
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium
                     )
                     Spacer(Modifier.height(6.dp))
                     OutlinedTextField(
@@ -221,9 +229,9 @@ fun EnduranceScoringScreen(
 
                 Text(
                     text = "″",
-                    color = BNBUColors.Ink,
+                    color = cs.onSurface,
                     fontSize = 28.sp,
-                    fontWeight = FontWeight.Black
+                    fontWeight = FontWeight.Medium
                 )
             }
 
@@ -251,11 +259,11 @@ fun EnduranceScoringScreen(
             Spacer(Modifier.height(8.dp))
 
             val scoreColor = when (score.tier) {
-                "excellent" -> Color(0xFF3A9DF6)
+                "excellent" -> cs.primary
                 "good" -> Color(0xFF4CAF50)
-                "pass" -> Color(0xFFFF9800)
-                "fail" -> Color(0xFFF44336)
-                else -> Color(0xFF757575)
+                "pass" -> cs.secondary
+                "fail" -> cs.error
+                else -> cs.onSurfaceVariant
             }
 
             SwissPanel {
@@ -266,23 +274,21 @@ fun EnduranceScoringScreen(
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
                             text = "单项得分",
-                            color = BNBUColors.Muted,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Black
+                            color = cs.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelMedium
                         )
                         Text(
                             text = "${score.score}",
                             color = scoreColor,
                             fontSize = 48.sp,
-                            fontWeight = FontWeight.Black
+                            fontWeight = FontWeight.Medium
                         )
                     }
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
                             text = "等级",
-                            color = BNBUColors.Muted,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Black
+                            color = cs.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelMedium
                         )
                         StatusBadge(text = score.tierLabel, filled = true)
                     }
@@ -293,8 +299,7 @@ fun EnduranceScoringScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(BNBUColors.BlueSoft)
-                        .border(1.dp, BNBUColors.Line, RectangleShape)
+                        .background(cs.primaryContainer, MaterialTheme.shapes.small)
                         .padding(12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -302,20 +307,18 @@ fun EnduranceScoringScreen(
                     Icon(
                         imageVector = Icons.Filled.CheckCircle,
                         contentDescription = null,
-                        tint = BNBUColors.Blue,
+                        tint = cs.primary,
                         modifier = Modifier.size(20.dp)
                     )
                     Text(
                         text = "输入时间: ${score.timeSeconds / 60}′${score.timeSeconds % 60}″",
-                        color = BNBUColors.Ink,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Black
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.bodyMedium
                     )
                     Text(
                         text = "${student.genderLabel} · ${student.gradeLabel}",
-                        color = BNBUColors.Muted,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
                     )
                 }
             }

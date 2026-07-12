@@ -1,5 +1,17 @@
 package edu.bnbu.student.mvp.core.model
 
+enum class AppThemeMode(val label: String, val storageValue: String) {
+    Light("浅色", "light"),
+    Dark("深色", "dark"),
+    System("跟随系统", "system");
+
+    companion object {
+        fun fromStorage(value: String?): AppThemeMode {
+            return entries.firstOrNull { it.storageValue == value } ?: Light
+        }
+    }
+}
+
 data class StudentProfile(
     val id: String,
     val name: String,
@@ -8,7 +20,10 @@ data class StudentProfile(
     val className: String,
     val status: String,
     val gender: String = "",
-    val gradeLevel: String = ""
+    val gradeLevel: String = "",
+    val admissionYear: Int? = null,
+    val currentAcademicYear: String = "",
+    val gradeCalculatedAt: String = ""
 ) {
     val genderLabel: String
         get() = when (gender) {
@@ -105,7 +120,13 @@ data class Course(
     val missing: Int,
     val deadline: String,
     val teacher: String,
-    val teacherId: String = ""
+    val teacherId: String = "",
+    val semesterId: String = "",
+    val academicYear: String = "",
+    val term: String = "",
+    val semesterStatus: String = "current",
+    val enrollmentStatus: String = "enrolled",
+    val isCurrent: Boolean = true
 ) {
     val displayTitle: String
         get() = "$code / Section $section"
@@ -159,6 +180,19 @@ enum class ReviewStatus(val label: String) {
     Offset("系统抵扣")
 }
 
+enum class AiReviewStatus(val label: String) {
+    Pending("AI 审核中"),
+    Normal("AI 初审正常"),
+    Abnormal("AI 发现异常"),
+    ManualReview("等待人工复核")
+}
+
+enum class AiRiskLevel(val label: String) {
+    Low("低风险"),
+    Medium("中风险"),
+    High("高风险")
+}
+
 data class CheckInRecord(
     val id: String,
     val courseId: String?,
@@ -172,7 +206,14 @@ data class CheckInRecord(
     val proofVideoCount: Int,
     val proofFiles: List<ProofAttachment>,
     val teacherFeedback: String,
-    val note: String
+    val note: String,
+    val sportType: String? = null,
+    val aiReviewStatus: AiReviewStatus? = null,
+    val aiRiskLevel: AiRiskLevel? = null,
+    val aiRiskCodes: List<String> = emptyList(),
+    val aiReviewMessage: String? = null,
+    val aiConfidence: Double? = null,
+    val aiReviewedAt: String? = null
 )
 
 enum class ProofMediaType(val label: String) {
@@ -181,13 +222,24 @@ enum class ProofMediaType(val label: String) {
 }
 
 object ProofUploadRule {
-    const val maxAttachmentCount = 8
-    const val maxImageBytes = 10_000_000
-    const val maxVideoBytes = 80_000_000
-    const val maxVideoDurationSeconds = 30
+    const val maxImageCount = 6
+    const val maxVideoCount = 1
+    const val maxAttachmentCount = maxImageCount + maxVideoCount
+    const val maxImageBytes = 8_000_000
+    const val maxVideoBytes = 100_000_000
 
     val summaryText: String
-        get() = "最多 $maxAttachmentCount 个；图片不超过 10MB；视频不超过 80MB，视频不超过 $maxVideoDurationSeconds 秒。"
+        get() = "最多 $maxImageCount 张照片（每张不超过 8MB），最多 $maxVideoCount 个视频（不超过 100MB）。"
+
+    fun limitMessage(proofs: List<ProofAttachment>): String? {
+        val imageCount = proofs.count { it.type == ProofMediaType.Image }
+        val videoCount = proofs.count { it.type == ProofMediaType.Video }
+        return when {
+            imageCount > maxImageCount -> "同一条记录最多上传 $maxImageCount 张照片。"
+            videoCount > maxVideoCount -> "同一条记录最多上传 $maxVideoCount 个视频。"
+            else -> null
+        }
+    }
 }
 
 data class ProofAttachment(
@@ -201,7 +253,7 @@ data class ProofAttachment(
 ) {
     val displaySize: String
         get() {
-            val bytes = byteCount ?: return "本地占位"
+            val bytes = byteCount ?: return "本地文件"
             return if (bytes >= 1_000_000) {
                 "%.1f MB".format(bytes / 1_000_000.0)
             } else {
@@ -224,18 +276,11 @@ data class ProofAttachment(
             val bytes = byteCount
             if (bytes != null) {
                 if (type == ProofMediaType.Image && bytes > ProofUploadRule.maxImageBytes) {
-                    return "图片超过 10MB"
+                    return "图片超过 8MB"
                 }
                 if (type == ProofMediaType.Video && bytes > ProofUploadRule.maxVideoBytes) {
-                    return "视频超过 80MB"
+                    return "视频超过 100MB"
                 }
-            }
-            if (
-                type == ProofMediaType.Video &&
-                durationSeconds != null &&
-                durationSeconds > ProofUploadRule.maxVideoDurationSeconds
-            ) {
-                return "视频超过 ${ProofUploadRule.maxVideoDurationSeconds} 秒"
             }
             return null
         }
@@ -259,7 +304,9 @@ data class CheckInDraft(
     val hours: Double,
     val note: String,
     val proofAttachments: List<ProofAttachment>,
-    val updatedAt: String
+    val updatedAt: String,
+    val sportType: String? = null,
+    val customSportType: String? = null
 )
 
 data class Membership(
@@ -363,9 +410,14 @@ data class EnduranceConversionRequest(
 
 // ── Exemptions ─────────────────────────────────────────────────────
 
-enum class ExemptionType(val label: String) {
-    Run800("800m"),
-    Run1000("1000m")
+enum class ExemptionType(val apiValue: String, val label: String) {
+    Run800("800m", "800m 免测"),
+    Run1000("1000m", "1000m 免测"),
+    Team("team", "校队免打卡"),
+    Club("club", "社团免打卡");
+
+    val isCheckInExemption: Boolean
+        get() = this == Team || this == Club
 }
 
 enum class ExemptionStatus(val label: String) {
@@ -379,6 +431,8 @@ data class Exemption(
     val studentId: String,
     val studentName: String = "",
     val type: String,
+    val category: String = "physical_test",
+    val organization: String = "",
     val reason: String,
     val status: String,
     val proofFiles: List<String> = emptyList(),
@@ -389,13 +443,20 @@ data class Exemption(
     val updatedAt: String = ""
 ) {
     val typeLabel: String
-        get() = if (type == "800m") ExemptionType.Run800.label else ExemptionType.Run1000.label
+        get() = when (type) {
+            "800m" -> ExemptionType.Run800.label
+            "1000m" -> ExemptionType.Run1000.label
+            "team" -> ExemptionType.Team.label
+            "club" -> ExemptionType.Club.label
+            else -> type
+        }
 }
 
 data class ExemptionApplication(
     val type: String,
     val reason: String,
-    val proofFiles: List<String>
+    val proofFiles: List<String>,
+    val organization: String? = null
 )
 
 // ── Student Tasks ──────────────────────────────────────────────────

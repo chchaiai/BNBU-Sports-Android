@@ -25,7 +25,7 @@ class MainActivity : ComponentActivity() {
         appState.tryRestoreSession()
 
         setContent {
-            BNBUStudentTheme {
+            BNBUStudentTheme(themeMode = appState.themeMode) {
                 AppRootScreen(appState = appState)
             }
         }
