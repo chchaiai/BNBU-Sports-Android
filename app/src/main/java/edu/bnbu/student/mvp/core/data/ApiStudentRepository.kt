@@ -518,7 +518,7 @@ class ApiStudentRepository(
     private fun noticeResponseToNotice(n: NotificationResponse): StudentNotice {
         val category = when (n.category) {
             "截止提醒" -> NoticeCategory.Deadline
-            "审核反馈" -> NoticeCategory.Review
+            "审核反馈", "申请与材料" -> NoticeCategory.Review
             "组织认证" -> NoticeCategory.Organization
             else -> NoticeCategory.System
         }
@@ -528,7 +528,9 @@ class ApiStudentRepository(
             message = n.message,
             time = n.time,
             category = category,
-            isUnread = n.isUnread
+            isUnread = n.isUnread,
+            targetType = n.targetType,
+            targetId = n.targetId
         )
     }
 

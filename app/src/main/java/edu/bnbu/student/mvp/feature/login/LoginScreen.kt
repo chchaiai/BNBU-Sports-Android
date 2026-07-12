@@ -96,7 +96,7 @@ fun LoginScreen(
                     lineHeight = 38.sp
                 )
                 Text(
-                    text = "课程相关 10 小时 + 其他运动 10 小时，进度、缺口、审核反馈一次看清。",
+                    text = "课程相关 10 小时 + 其他运动 10 小时，进度、缺口与打卡记录一次看清。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyLarge
                 )

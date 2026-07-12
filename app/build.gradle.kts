@@ -54,6 +54,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("com.google.code.gson:gson:2.11.0")
+    implementation("io.coil-kt.coil3:coil-compose:3.0.4")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.4")
+    implementation("io.coil-kt.coil3:coil-video:3.0.4")
 
     // Networking & async (student backend integration)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

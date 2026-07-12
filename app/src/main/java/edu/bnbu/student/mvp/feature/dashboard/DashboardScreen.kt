@@ -23,16 +23,14 @@ import androidx.compose.material.icons.filled.AssignmentTurnedIn
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
-import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.TrackChanges
-import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -52,7 +50,6 @@ import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.model.CourseTask
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.NoticeCategory
-import edu.bnbu.student.mvp.core.model.ReviewStatus
 import edu.bnbu.student.mvp.core.model.StudentNotice
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.state.StudentAppState
@@ -60,27 +57,23 @@ import edu.bnbu.student.mvp.core.state.StudentAppState
 @Composable
 fun DashboardScreen(
     appState: StudentAppState,
-    openCheckIn: () -> Unit = {},
-    openGrades: () -> Unit = {},
-    openProfile: () -> Unit = {}
+    onOpenNotificationSheet: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-        item { DashboardHeader(appState) }
+        item { DashboardHeader(appState, onOpenNotificationSheet) }
         item { ProgressPanel(appState) }
         item { MetricsGrid(appState) }
         item { RiskPanel(appState) }
-        item { ActionPanel(appState, openCheckIn, openGrades, openProfile) }
         item { FocusPlan(appState) }
         item { NextTasks(appState) }
-        item { Notices(appState) }
     }
 }
 
 @Composable
-private fun DashboardHeader(appState: StudentAppState) {
+private fun DashboardHeader(appState: StudentAppState, onOpenNotificationSheet: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Row(
         verticalAlignment = Alignment.Top,
@@ -102,7 +95,45 @@ private fun DashboardHeader(appState: StudentAppState) {
                 style = MaterialTheme.typography.bodyMedium
             )
         }
-        StatusBadge(text = appState.workspace.progress.status, filled = true)
+        Column(horizontalAlignment = Alignment.End) {
+            NotificationBell(
+                unreadCount = appState.unreadNoticeCount,
+                onClick = onOpenNotificationSheet
+            )
+            Spacer(Modifier.height(6.dp))
+            StatusBadge(text = appState.workspace.progress.status, filled = true)
+        }
+    }
+}
+
+@Composable
+private fun NotificationBell(unreadCount: Int, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Box {
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier
+                .size(44.dp)
+                .background(cs.surfaceVariant, MaterialTheme.shapes.small)
+        ) {
+            Icon(
+                imageVector = if (unreadCount > 0) Icons.Filled.NotificationsActive else Icons.Filled.Notifications,
+                contentDescription = "打开通知",
+                tint = cs.onSurface
+            )
+        }
+        if (unreadCount > 0) {
+            Text(
+                text = if (unreadCount > 99) "99+" else unreadCount.toString(),
+                color = cs.onPrimary,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .background(cs.primary, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 4.dp, vertical = 1.dp)
+            )
+        }
     }
 }
 
@@ -163,7 +194,7 @@ private fun MetricsGrid(appState: StudentAppState) {
         Metric("Total", "20h", "本学期总要求"),
         Metric("Course", "10h", "老师任务与课程相关"),
         Metric("General", "10h", "自主运动 / 组织抵扣"),
-        Metric("Pending", appState.pendingCount.toString(), "当前待审核记录")
+        Metric("Records", appState.workspace.records.count { it.creditType != CreditType.OrganizationOffset }.toString(), "本学期打卡记录")
     )
 
     LazyVerticalGrid(
@@ -213,57 +244,6 @@ private fun RiskPanel(appState: StudentAppState) {
 }
 
 @Composable
-private fun ActionPanel(
-    appState: StudentAppState,
-    openCheckIn: () -> Unit,
-    openGrades: () -> Unit,
-    openProfile: () -> Unit
-) {
-    val cs = MaterialTheme.colorScheme
-    SwissPanel {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = if (appState.supplementRecordCount > 0) Icons.Filled.Error else Icons.Filled.CheckCircle,
-                contentDescription = null,
-                tint = cs.onSurface
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = "待处理",
-                color = cs.onSurface,
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(Modifier.weight(1f))
-            StatusBadge(text = "${appState.actionableRecordCount + appState.unreadNoticeCount}")
-        }
-
-        Spacer(Modifier.height(14.dp))
-
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ActionMiniMetric(label = "需补材料", value = appState.supplementRecordCount.toString(), modifier = Modifier.weight(1f))
-            ActionMiniMetric(label = "待审核", value = appState.pendingRecordCount.toString(), modifier = Modifier.weight(1f))
-            ActionMiniMetric(label = "未读通知", value = appState.unreadNoticeCount.toString(), modifier = Modifier.weight(1f))
-        }
-
-        Spacer(Modifier.height(14.dp))
-
-        Text(
-            text = appState.actionText,
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.bodyMedium
-        )
-
-        Spacer(Modifier.height(14.dp))
-
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            DashboardShortcutButton("处理打卡", Icons.Filled.AddBox, Modifier.weight(1f), openCheckIn)
-            DashboardShortcutButton("看通知", Icons.Filled.Notifications, Modifier.weight(1f), openProfile)
-            DashboardShortcutButton("看成绩", Icons.Filled.BarChart, Modifier.weight(1f), openGrades)
-        }
-    }
-}
-
-@Composable
 private fun FocusPlan(appState: StudentAppState) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionTitle(eyebrow = "Plan", title = "本周行动计划")
@@ -291,21 +271,6 @@ private fun NextTasks(appState: StudentAppState) {
         } else {
             appState.activeTasks.take(2).forEach { task ->
                 TaskRow(task = task)
-            }
-        }
-    }
-}
-
-@Composable
-private fun Notices(appState: StudentAppState) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle(eyebrow = "Notice", title = "通知 / 截止提醒")
-
-        if (appState.workspace.notices.isEmpty()) {
-            EmptyPlaceholder(title = "暂无通知", message = "当前没有截止提醒或审核反馈。")
-        } else {
-            appState.workspace.notices.take(2).forEach { notice ->
-                NoticeRow(notice = notice)
             }
         }
     }
@@ -544,9 +509,6 @@ private data class FocusPlanItem(
     val status: String
 )
 
-private val StudentAppState.pendingCount: Int
-    get() = workspace.records.count { it.status == ReviewStatus.Pending || it.status == ReviewStatus.Supplement }
-
 private val StudentAppState.hasHourRisk: Boolean
     get() = courseRemaining > 0.0 || generalRemaining > 0.0
 
@@ -561,18 +523,7 @@ private val StudentAppState.riskText: String
         if (generalRemaining > 0.0) {
             return "其他运动还差 ${generalRemaining.hourText()}。可通过自主运动打卡或有效组织认证完成。"
         }
-        return "课程相关与其他运动均达到本学期要求，请继续关注审核反馈和成绩缺失项。"
-    }
-
-private val StudentAppState.actionText: String
-    get() {
-        if (supplementRecordCount > 0) {
-            return "有 ${supplementRecordCount} 条记录需要补充材料，请进入打卡记录处理。"
-        }
-        if (pendingRecordCount > 0) {
-            return "已有记录进入审核队列，审核通过后才会计入有效小时。"
-        }
-        return "暂无需要补交的材料，继续关注截止提醒与课程任务。"
+        return "课程相关与其他运动均达到本学期要求，请继续保持运动并关注课程通知。"
     }
 
 private val StudentAppState.focusPlanItems: List<FocusPlanItem>
@@ -588,30 +539,6 @@ private val StudentAppState.focusPlanItems: List<FocusPlanItem>
                 },
                 icon = Icons.Filled.TrackChanges,
                 status = "高优先级"
-            )
-        }
-        if (supplementRecordCount > 0) {
-            items += FocusPlanItem(
-                title = "处理 ${supplementRecordCount} 条补材料记录",
-                detail = "按老师反馈补充图片或视频后，会重新进入待审核队列。",
-                icon = Icons.Filled.UploadFile,
-                status = "需动作"
-            )
-        }
-        if (pendingRecordCount > 0) {
-            items += FocusPlanItem(
-                title = "等待 ${pendingRecordCount} 条审核结果",
-                detail = "待审核记录暂不计入有效小时，请留意审核反馈。",
-                icon = Icons.Filled.HourglassEmpty,
-                status = "跟进"
-            )
-        }
-        if (unreadNoticeCount > 0) {
-            items += FocusPlanItem(
-                title = "查看 ${unreadNoticeCount} 条未读提醒",
-                detail = "优先确认截止时间和补材料通知。",
-                icon = Icons.Filled.NotificationsActive,
-                status = "提醒"
             )
         }
         if (items.isEmpty()) {

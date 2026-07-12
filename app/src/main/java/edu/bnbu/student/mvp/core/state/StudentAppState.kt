@@ -105,7 +105,10 @@ class StudentAppState(
         }
 
         val savedDraft = draftRead?.value
-        if (savedDraft != null && workspace.tasks.any { it.id == savedDraft.taskId && it.status == TaskStatus.Active }) {
+        if (
+            savedDraft != null &&
+            (savedDraft.taskId == "self-general" || workspace.tasks.any { it.id == savedDraft.taskId && it.status == TaskStatus.Active })
+        ) {
             draft = savedDraft
         } else if (savedDraft != null) {
             localStore?.clearDraft()
@@ -136,19 +139,26 @@ class StudentAppState(
         get() = if (hourRule.total <= 0.0) 0.0 else (totalCompleted / hourRule.total).coerceIn(0.0, 1.0)
 
     val unreadNoticeCount: Int
-        get() = workspace.notices.count { it.isUnread }
+        get() = visibleNotices.count { it.isUnread }
+
+    val visibleNotices: List<StudentNotice>
+        get() = workspace.notices.filter { it.isStudentVisible }
 
     val activeTasks: List<CourseTask>
         get() = workspace.tasks.filter { it.status == TaskStatus.Active }
 
-    val pendingRecordCount: Int
-        get() = workspace.records.count { it.status == ReviewStatus.Pending }
-
-    val supplementRecordCount: Int
-        get() = workspace.records.count { it.status == ReviewStatus.Supplement }
-
-    val actionableRecordCount: Int
-        get() = pendingRecordCount + supplementRecordCount
+    val selfCheckInTask: CourseTask
+        get() = CourseTask(
+            id = "self-general",
+            courseId = "self-general",
+            creditType = CreditType.General,
+            title = "自主运动打卡",
+            hours = hourRule.dailyLimit,
+            deadline = "",
+            proof = ProofUploadRule.summaryText,
+            status = TaskStatus.Active,
+            updatedAt = ""
+        )
 
     // ── Auth (real API login only — no demo path) ─────────────────
 
@@ -308,7 +318,9 @@ class StudentAppState(
     }
 
     fun recordsFor(course: Course): List<CheckInRecord> {
-        return workspace.records.filter { it.courseId == course.id }
+        return workspace.records.filter {
+            it.courseId == course.id && it.creditType != CreditType.OrganizationOffset
+        }
     }
 
     // ── Notifications ─────────────────────────────────────────────
@@ -340,10 +352,12 @@ class StudentAppState(
         if (count == 0) return
 
         // Capture which notices were unread BEFORE mutating
-        val previouslyUnreadIds = workspace.notices.filter { it.isUnread }.map { it.id }
+        val previouslyUnreadIds = visibleNotices.filter { it.isUnread }.map { it.id }
 
         workspace = workspace.copy(
-            notices = workspace.notices.map { it.copy(isUnread = false) }
+            notices = workspace.notices.map {
+                if (it.id in previouslyUnreadIds) it.copy(isUnread = false) else it
+            }
         )
         enqueueSyncOperation(
             type = SyncOperationType.MarkNoticeRead,
@@ -419,7 +433,7 @@ class StudentAppState(
                 val payload = SubmitSportRecordRequest(
                     creditType = task.creditType.label,
                     courseId = if (task.courseId == "self-general") null else task.courseId,
-                    taskId = task.id,
+                    taskId = task.id.takeUnless { it == "self-general" },
                     hours = submittedHours,
                     description = note,
                     proofFiles = proofFiles,
@@ -453,17 +467,8 @@ class StudentAppState(
                     aiReviewStatus = AiReviewStatus.Pending,
                     aiReviewMessage = "凭证已进入 AI 初审队列。"
                 )
-                val notice = StudentNotice(
-                    id = UUID.randomUUID().toString(),
-                    title = "打卡已提交",
-                    message = "${task.title} 已进入待审核状态，审核通过后才会计入有效小时。",
-                    time = "刚刚",
-                    category = NoticeCategory.Review,
-                    isUnread = true
-                )
                 workspace = workspace.copy(
-                    records = listOf(record) + workspace.records,
-                    notices = listOf(notice) + workspace.notices
+                    records = listOf(record) + workspace.records
                 )
                 enqueueSyncOperation(
                     type = SyncOperationType.SubmitRecord,

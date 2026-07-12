@@ -74,7 +74,7 @@ private fun TotalPanel(grades: GradeRow) {
                     style = MaterialTheme.typography.titleMedium
                 )
                 Text(
-                    text = "基于当前已录入四块成绩与权重规则，待审核打卡暂不计入。",
+                    text = "基于当前已录入的四块成绩与权重规则展示，最终结果以教务汇总为准。",
                     color = cs.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -347,7 +347,7 @@ private fun GradeRow.gradeComponents(): List<GradeComponentSummary> {
             score = checkinScore,
             weight = 0.25,
             icon = Icons.Filled.AssignmentTurnedIn,
-            note = "仅统计已通过和系统抵扣小时"
+            note = "打卡与组织认证学时以教务汇总为准"
         ),
         GradeComponentSummary(
             title = "专项考试",

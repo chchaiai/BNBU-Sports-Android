@@ -340,7 +340,7 @@ data class GradeRow(
 
 enum class NoticeCategory(val label: String) {
     Deadline("截止提醒"),
-    Review("审核反馈"),
+    Review("申请与材料"),
     Organization("组织认证"),
     System("系统通知")
 }
@@ -351,8 +351,26 @@ data class StudentNotice(
     val message: String,
     val time: String,
     val category: NoticeCategory = NoticeCategory.System,
-    val isUnread: Boolean
-)
+    val isUnread: Boolean,
+    val targetType: String? = null,
+    val targetId: String? = null
+) {
+    val targetsExemption: Boolean
+        get() = targetType?.lowercase() in setOf(
+            "exemption",
+            "physical_test_exemption",
+            "checkin_exemption",
+            "application"
+        )
+
+    val isStudentVisible: Boolean
+        get() {
+            if (category != NoticeCategory.Review) return true
+            if (targetsExemption) return true
+            val applicationKeywords = listOf("免测", "免打卡", "校队", "社团", "证明材料", "申请")
+            return applicationKeywords.any { keyword -> title.contains(keyword) || message.contains(keyword) }
+        }
+}
 
 data class SportHourRule(
     val total: Double,

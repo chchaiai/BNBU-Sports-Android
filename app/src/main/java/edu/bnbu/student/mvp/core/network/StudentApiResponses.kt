@@ -149,7 +149,9 @@ data class NotificationResponse(
     val message: String,
     val time: String,
     val category: String = "系统通知",
-    val isUnread: Boolean = true
+    val isUnread: Boolean = true,
+    val targetType: String? = null,
+    val targetId: String? = null
 )
 
 data class MarkReadResponse(
