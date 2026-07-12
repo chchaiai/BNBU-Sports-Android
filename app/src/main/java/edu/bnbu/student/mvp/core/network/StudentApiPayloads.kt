@@ -17,7 +17,7 @@ data class ProofFileReference(
 data class SubmitSportRecordRequest(
     val creditType: String,
     val courseId: String?,
-    val taskId: String,
+    val taskId: String?,
     val hours: Double,
     val description: String,
     val proofFiles: List<ProofFileReference>,

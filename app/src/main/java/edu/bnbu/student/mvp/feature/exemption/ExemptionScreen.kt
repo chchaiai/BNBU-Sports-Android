@@ -83,6 +83,7 @@ private enum class ExemptionTab(val label: String) {
 @Composable
 fun ExemptionScreen(
     repository: ApiStudentRepository,
+    initialApplicationId: String? = null,
     onBack: () -> Unit
 ) {
     var selectedTab by remember { mutableStateOf(ExemptionTab.MyApplications) }
@@ -90,12 +91,14 @@ fun ExemptionScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var successMessage by remember { mutableStateOf<String?>(null) }
+    var selectedExemptionId by remember { mutableStateOf(initialApplicationId) }
+    var resubmittingExemption by remember { mutableStateOf<Exemption?>(null) }
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val cs = MaterialTheme.colorScheme
     val handleBack = {
         focusManager.clearFocus(force = true)
-        onBack()
+        if (selectedExemptionId != null) selectedExemptionId = null else onBack()
     }
 
     BackHandler(onBack = handleBack)
@@ -123,6 +126,9 @@ fun ExemptionScreen(
                         updatedAt = r.updatedAt ?: ""
                     )
                 }
+                if (selectedExemptionId != null && exemptions.none { it.id == selectedExemptionId }) {
+                    selectedExemptionId = null
+                }
             } catch (e: Exception) {
                 errorMessage = "加载失败: ${e.message}"
             } finally {
@@ -136,6 +142,20 @@ fun ExemptionScreen(
         if (exemptions.isEmpty() && !isLoading) {
             loadExemptions()
         }
+    }
+
+    val selectedExemption = selectedExemptionId?.let { id -> exemptions.firstOrNull { it.id == id } }
+    if (selectedExemption != null) {
+        ExemptionDetail(
+            exemption = selectedExemption,
+            onBack = { selectedExemptionId = null },
+            onSupplement = {
+                resubmittingExemption = selectedExemption
+                selectedExemptionId = null
+                selectedTab = ExemptionTab.NewApplication
+            }
+        )
+        return
     }
 
     LazyColumn(
@@ -208,7 +228,7 @@ fun ExemptionScreen(
                 } else {
                     exemptions.forEach { exemption ->
                         item {
-                            ExemptionCard(exemption)
+                            ExemptionCard(exemption = exemption, onClick = { selectedExemptionId = exemption.id })
                         }
                     }
                 }
@@ -218,8 +238,10 @@ fun ExemptionScreen(
                 item {
                     NewExemptionForm(
                         repository = repository,
+                        initialExemption = resubmittingExemption,
                         onSuccess = { msg ->
                             successMessage = msg
+                            resubmittingExemption = null
                             selectedTab = ExemptionTab.MyApplications
                             loadExemptions()
                         },
@@ -232,7 +254,7 @@ fun ExemptionScreen(
 }
 
 @Composable
-private fun ExemptionCard(exemption: Exemption) {
+private fun ExemptionCard(exemption: Exemption, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val statusColor = when (exemption.status) {
         "已通过" -> cs.primary
@@ -240,7 +262,7 @@ private fun ExemptionCard(exemption: Exemption) {
         else -> cs.secondary
     }
 
-    SwissPanel {
+    SwissPanel(modifier = Modifier.clickable(onClick = onClick)) {
         Row(verticalAlignment = Alignment.Top) {
             Icon(
                 imageVector = Icons.Filled.FitnessCenter,
@@ -327,9 +349,86 @@ private fun ExemptionCard(exemption: Exemption) {
                 }
 
                 Text(
-                    text = "提交时间: ${exemption.createdAt}",
+                    text = "提交时间: ${exemption.createdAt} · 点击查看详情",
                     color = cs.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExemptionDetail(
+    exemption: Exemption,
+    onBack: () -> Unit,
+    onSupplement: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    BackHandler(onBack = onBack)
+    LazyColumn(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(48.dp).clickable(onClick = onBack),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null, tint = cs.onSurface)
+                Text("返回我的申请", color = cs.onSurface, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        item { SectionTitle(eyebrow = "Application", title = exemption.typeLabel) }
+        item {
+            SwissPanel {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("申请状态", color = cs.onSurface, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    StatusBadge(text = exemption.status, filled = exemption.status == "已通过")
+                }
+                Spacer(Modifier.height(14.dp))
+                if (exemption.organization.isNotBlank()) {
+                    Text("所属组织：${exemption.organization}", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(8.dp))
+                }
+                Text("申请理由：${exemption.reason}", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(8.dp))
+                Text("提交时间：${exemption.createdAt}", color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        item {
+            SwissPanel {
+                Text("证明材料", color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(10.dp))
+                if (exemption.proofFiles.isEmpty()) {
+                    Text("尚未上传证明材料", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    exemption.proofFiles.forEachIndexed { index, proof ->
+                        Text(
+                            text = "${index + 1}. ${proof.substringAfterLast('/').ifBlank { "证明文件" }}",
+                            color = cs.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+        }
+        if (exemption.reviewComment.isNotBlank()) {
+            item {
+                SwissPanel {
+                    Text("处理意见", color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Text(exemption.reviewComment, color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+        if (exemption.status == "需补材料" || exemption.status == "已驳回") {
+            item {
+                ActionButton(
+                    title = "补交证明材料",
+                    icon = Icons.Filled.FileUpload,
+                    filled = true,
+                    onClick = onSupplement
                 )
             }
         }
@@ -377,12 +476,13 @@ private fun ExemptionTypeSelector(
 @Composable
 private fun NewExemptionForm(
     repository: ApiStudentRepository,
+    initialExemption: Exemption? = null,
     onSuccess: (String) -> Unit,
     onError: (String) -> Unit
 ) {
-    var selectedType by remember { mutableStateOf(ExemptionType.Run800) }
-    var organization by remember { mutableStateOf("") }
-    var reason by remember { mutableStateOf("") }
+    var selectedType by remember(initialExemption?.id) { mutableStateOf(initialExemption?.type.toExemptionType()) }
+    var organization by remember(initialExemption?.id) { mutableStateOf(initialExemption?.organization.orEmpty()) }
+    var reason by remember(initialExemption?.id) { mutableStateOf(initialExemption?.reason.orEmpty()) }
     var proofAttachments by remember { mutableStateOf<List<ProofAttachment>>(emptyList()) }
     var isSubmitting by remember { mutableStateOf(false) }
     var attachmentNotice by remember { mutableStateOf<String?>(null) }
@@ -437,6 +537,13 @@ private fun NewExemptionForm(
 
     SwissPanel {
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            if (initialExemption != null) {
+                Text(
+                    text = "正在为 ${initialExemption.typeLabel} 补交证明，请上传新的有效材料。",
+                    color = cs.primary,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
             Text(
                 text = "选择申请类型",
                 color = cs.onSurfaceVariant,
@@ -580,7 +687,7 @@ private fun NewExemptionForm(
             }
 
             ActionButton(
-                title = if (isSubmitting) "提交中..." else "提交申请",
+                title = if (isSubmitting) "提交中..." else if (initialExemption != null) "提交补充材料" else "提交申请",
                 icon = Icons.Filled.Add,
                 filled = true,
                 onClick = {
@@ -618,7 +725,10 @@ private fun NewExemptionForm(
                                     organization = organization.takeIf { it.isNotBlank() }
                                 )
                             )
-                            onSuccess("申请已提交 (${response.id})")
+                            onSuccess(
+                                if (initialExemption != null) "补充材料已提交 (${response.id})"
+                                else "申请已提交 (${response.id})"
+                            )
                         } catch (e: Exception) {
                             onError("提交失败: ${e.message}")
                         } finally {
@@ -705,6 +815,13 @@ private fun String.exemptionStatusLabel(): String = when (this) {
     "rejected" -> "已驳回"
     "expired" -> "已过期"
     else -> this
+}
+
+private fun String?.toExemptionType(): ExemptionType = when (this) {
+    "1000m" -> ExemptionType.Run1000
+    "team" -> ExemptionType.Team
+    "club" -> ExemptionType.Club
+    else -> ExemptionType.Run800
 }
 
 private fun Uri.toProofAttachmentFromCamera(context: Context, index: Int): ProofAttachment? {

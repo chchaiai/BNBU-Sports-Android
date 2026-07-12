@@ -2,20 +2,24 @@ package edu.bnbu.student.mvp.feature.checkin
 
 import android.content.Context
 import android.content.Intent
+import android.content.ActivityNotFoundException
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Environment
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -23,10 +27,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.AssignmentTurnedIn
 import androidx.compose.material.icons.filled.CameraAlt
@@ -37,6 +43,7 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Pool
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.RemoveCircle
@@ -47,6 +54,7 @@ import androidx.compose.material.icons.filled.SportsTennis
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,7 +64,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -64,6 +75,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import coil3.ImageLoader
+import coil3.compose.SubcomposeAsyncImage
+import coil3.request.ImageRequest
+import coil3.video.VideoFrameDecoder
 import edu.bnbu.student.mvp.core.designsystem.ActionButton
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
@@ -79,7 +94,6 @@ import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
 import edu.bnbu.student.mvp.core.model.ProofUploadRule
-import edu.bnbu.student.mvp.core.model.ReviewStatus
 import edu.bnbu.student.mvp.core.model.TaskStatus
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.state.StudentAppState
@@ -87,24 +101,8 @@ import java.io.File
 import java.util.UUID
 
 private enum class CheckInSegment(val label: String) {
-    Tasks("任务"),
     Submit("提交"),
     Records("记录")
-}
-
-private enum class TaskScopeFilter(val label: String) {
-    All("全部"),
-    Course("课程相关"),
-    General("其他运动")
-}
-
-private enum class RecordScopeFilter(val label: String) {
-    All("全部"),
-    Pending("待审核"),
-    Approved("已通过"),
-    Rejected("被驳回"),
-    Supplement("需补材料"),
-    Offset("系统抵扣")
 }
 
 private data class SportTypeOption(
@@ -128,23 +126,37 @@ private val SportTypeOptions = listOf(
 
 @Composable
 fun CheckInScreen(appState: StudentAppState) {
-    var selectedSegment by remember { mutableStateOf(CheckInSegment.Tasks) }
-    var selectedTaskFilter by remember { mutableStateOf(TaskScopeFilter.All) }
-    var selectedRecordFilter by remember { mutableStateOf(RecordScopeFilter.All) }
-    var selectedTaskId by remember { mutableStateOf(appState.activeTasks.firstOrNull()?.id.orEmpty()) }
+    val context = LocalContext.current
+    val imageLoader = remember(context) {
+        ImageLoader.Builder(context)
+            .components { add(VideoFrameDecoder.Factory()) }
+            .build()
+    }
+    val listState = rememberLazyListState()
+    var selectedSegment by remember { mutableStateOf(CheckInSegment.Submit) }
+    var selectedRecordId by remember { mutableStateOf<String?>(null) }
     var hours by remember { mutableStateOf(1.0) }
     var note by remember { mutableStateOf("") }
     var selectedSportType by remember { mutableStateOf<String?>(null) }
     var customSportType by remember { mutableStateOf("") }
     var proofAttachments by remember { mutableStateOf<List<ProofAttachment>>(emptyList()) }
-    var supplementingRecordId by remember { mutableStateOf<String?>(null) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
 
-    val supplementingRecord = supplementingRecordId?.let { id ->
+    val selectedRecord = selectedRecordId?.let { id ->
         appState.workspace.records.firstOrNull { it.id == id }
+    }
+    if (selectedRecord != null) {
+        BackHandler { selectedRecordId = null }
+        CheckInRecordDetail(
+            record = selectedRecord,
+            imageLoader = imageLoader,
+            onBack = { selectedRecordId = null }
+        )
+        return
     }
 
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -167,74 +179,15 @@ fun CheckInScreen(appState: StudentAppState) {
         }
 
         when (selectedSegment) {
-            CheckInSegment.Tasks -> {
-                item {
-                    TaskListIntro(
-                        selectedTaskFilter = selectedTaskFilter,
-                        onFilterSelected = { selectedTaskFilter = it }
-                    )
-                }
-
-                val tasks = appState.workspace.tasks.filter { task ->
-                    when (selectedTaskFilter) {
-                        TaskScopeFilter.All -> true
-                        TaskScopeFilter.Course -> task.creditType == CreditType.CourseRelated
-                        TaskScopeFilter.General -> task.creditType == CreditType.General
-                    }
-                }
-
-                if (tasks.isEmpty()) {
-                    item {
-                        EmptyPlaceholder(
-                            title = if (selectedTaskFilter == TaskScopeFilter.All) "暂无打卡任务" else "暂无${selectedTaskFilter.label}任务",
-                            message = "当前没有可展示的任务；若老师后续发布新任务，会出现在这里。"
-                        )
-                    }
-                } else {
-                    items(tasks) { task ->
-                        TaskActionCard(
-                            task = task,
-                            course = appState.workspace.courses.firstOrNull { it.id == task.courseId },
-                            onStart = {
-                                if (task.status == TaskStatus.Active) {
-                                    if (appState.hasSubmittedCheckInToday()) {
-                                        statusMessage = "今日已打卡，每天只能提交一次。"
-                                    } else {
-                                        selectedTaskId = task.id
-                                        hours = appState.normalizedHours(1.0, task)
-                                        note = ""
-                                        selectedSportType = null
-                                        customSportType = ""
-                                        proofAttachments = emptyList()
-                                        supplementingRecordId = null
-                                        statusMessage = null
-                                        selectedSegment = CheckInSegment.Submit
-                                    }
-                                }
-                            }
-                        )
-                    }
-                }
-            }
-
             CheckInSegment.Submit -> {
                 item {
                     SubmitShell(
                         appState = appState,
-                        selectedTaskId = selectedTaskId,
                         hours = hours,
                         note = note,
                         selectedSportType = selectedSportType,
                         customSportType = customSportType,
                         proofAttachments = proofAttachments,
-                        supplementingRecord = supplementingRecord,
-                        onTaskSelected = { taskId ->
-                            selectedTaskId = taskId
-                            supplementingRecordId = null
-                            appState.activeTasks.firstOrNull { it.id == taskId }?.let { task ->
-                                hours = appState.normalizedHours(hours, task)
-                            }
-                        },
                         onHoursChanged = { hours = it },
                         onNoteChanged = { note = it },
                         onSportTypeSelected = {
@@ -243,18 +196,9 @@ fun CheckInScreen(appState: StudentAppState) {
                         },
                         onCustomSportTypeChanged = { customSportType = it },
                         onProofAttachmentsChanged = { proofAttachments = it },
-                        onClearSupplement = {
-                            supplementingRecordId = null
-                            note = ""
-                            selectedSportType = null
-                            customSportType = ""
-                            proofAttachments = emptyList()
-                        },
                         onSubmitComplete = { message ->
                             statusMessage = message
-                            selectedRecordFilter = RecordScopeFilter.Pending
                             selectedSegment = CheckInSegment.Records
-                            supplementingRecordId = null
                             note = ""
                             selectedSportType = null
                             customSportType = ""
@@ -266,21 +210,11 @@ fun CheckInScreen(appState: StudentAppState) {
 
             CheckInSegment.Records -> {
                 item {
-                    RecordListIntro(
-                        selectedRecordFilter = selectedRecordFilter,
-                        onFilterSelected = { selectedRecordFilter = it }
-                    )
+                    RecordListIntro()
                 }
 
-                val records = appState.workspace.records.filter { record ->
-                    when (selectedRecordFilter) {
-                        RecordScopeFilter.All -> true
-                        RecordScopeFilter.Pending -> record.status == ReviewStatus.Pending
-                        RecordScopeFilter.Approved -> record.status == ReviewStatus.Approved
-                        RecordScopeFilter.Rejected -> record.status == ReviewStatus.Rejected
-                        RecordScopeFilter.Supplement -> record.status == ReviewStatus.Supplement
-                        RecordScopeFilter.Offset -> record.status == ReviewStatus.Offset
-                    }
+                val records = appState.workspace.records.filter {
+                    it.creditType != CreditType.OrganizationOffset
                 }
 
                 if (records.isEmpty()) {
@@ -288,28 +222,12 @@ fun CheckInScreen(appState: StudentAppState) {
                         EmptyPlaceholder(title = "暂无记录", message = "当前筛选条件下没有打卡记录。")
                     }
                 } else {
-                    items(records) { record ->
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            RecordCard(record)
-                            if (record.status == ReviewStatus.Supplement || record.status == ReviewStatus.Rejected) {
-                                ActionButton(
-                                    title = if (record.status == ReviewStatus.Supplement) "补交材料" else "重新提交材料",
-                                    icon = Icons.Filled.UploadFile,
-                                    filled = true,
-                                    onClick = {
-                                        supplementingRecordId = record.id
-                                        selectedTaskId = ""
-                                        hours = record.hours.coerceIn(1.0, appState.hourRule.dailyLimit)
-                                        note = "按老师反馈补充材料：${record.teacherFeedback}"
-                                        selectedSportType = null
-                                        customSportType = ""
-                                        proofAttachments = emptyList()
-                                        statusMessage = null
-                                        selectedSegment = CheckInSegment.Submit
-                                    }
-                                )
-                            }
-                        }
+                    items(records, key = { it.id }) { record ->
+                        RecordCard(
+                            record = record,
+                            imageLoader = imageLoader,
+                            onOpenDetail = { selectedRecordId = record.id }
+                        )
                     }
                 }
             }
@@ -318,108 +236,60 @@ fun CheckInScreen(appState: StudentAppState) {
 }
 
 @Composable
-private fun TaskListIntro(
-    selectedTaskFilter: TaskScopeFilter,
-    onFilterSelected: (TaskScopeFilter) -> Unit
-) {
-    val cs = MaterialTheme.colorScheme
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        SectionTitle(eyebrow = "Check-In Tasks", title = "打卡任务列表")
-        Text(
-            text = "课程相关任务由老师发布；其他运动任务用于自主运动或组织活动。审核通过后才计入有效学时。",
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        SegmentedControl(
-            values = TaskScopeFilter.entries,
-            selected = selectedTaskFilter,
-            label = { it.label },
-            onSelected = onFilterSelected
-        )
-    }
-}
-
-@Composable
-private fun RecordListIntro(
-    selectedRecordFilter: RecordScopeFilter,
-    onFilterSelected: (RecordScopeFilter) -> Unit
-) {
+private fun RecordListIntro() {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         SectionTitle(eyebrow = "Records", title = "打卡记录")
-        SegmentedControl(
-            values = RecordScopeFilter.entries,
-            selected = selectedRecordFilter,
-            label = { it.label },
-            onSelected = onFilterSelected
-        )
     }
 }
 
 @Composable
 private fun SubmitShell(
     appState: StudentAppState,
-    selectedTaskId: String,
     hours: Double,
     note: String,
     selectedSportType: String?,
     customSportType: String,
     proofAttachments: List<ProofAttachment>,
-    supplementingRecord: CheckInRecord?,
-    onTaskSelected: (String) -> Unit,
     onHoursChanged: (Double) -> Unit,
     onNoteChanged: (String) -> Unit,
     onSportTypeSelected: (String?) -> Unit,
     onCustomSportTypeChanged: (String) -> Unit,
     onProofAttachmentsChanged: (List<ProofAttachment>) -> Unit,
-    onClearSupplement: () -> Unit,
     onSubmitComplete: (String) -> Unit
 ) {
-    val activeTasks = appState.activeTasks
-    val selectedTask = activeTasks.firstOrNull { it.id == selectedTaskId } ?: activeTasks.firstOrNull()
-    val maxHours = selectedTask?.let { appState.hourLimitFor(it) } ?: appState.hourRule.dailyLimit
-    val existingProofs = supplementingRecord?.proofFiles ?: emptyList()
-    val totalProofCount = proofAttachments.size + existingProofs.size
+    val selectedTask = appState.selfCheckInTask
+    val maxHours = appState.hourLimitFor(selectedTask)
+    val existingProofs = emptyList<ProofAttachment>()
+    val totalProofCount = proofAttachments.size
     val resolvedSportType = when (selectedSportType) {
         OtherSportType -> customSportType.trim().takeIf { it.isNotEmpty() }
         else -> selectedSportType
     }
     val validationMessage = submitValidationMessage(
         selectedTask = selectedTask,
-        supplementingRecord = supplementingRecord,
         hasSubmittedToday = appState.hasSubmittedCheckInToday(),
         hours = hours,
         maxHours = maxHours,
         existingProofs = existingProofs,
         newProofs = proofAttachments,
         totalProofCount = totalProofCount,
-        customSportTypeMissing = supplementingRecord == null &&
-            selectedSportType == OtherSportType && customSportType.isBlank()
+        customSportTypeMissing = selectedSportType == OtherSportType && customSportType.isBlank()
     )
     var showConfirm by remember { mutableStateOf(false) }
     var isSubmitting by remember { mutableStateOf(false) }
     var submitError by remember { mutableStateOf<String?>(null) }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        SectionTitle(
-            eyebrow = if (supplementingRecord == null) "Submit" else "Supplement",
-            title = if (supplementingRecord == null) "提交打卡" else "补交材料"
-        )
+        SectionTitle(eyebrow = "Submit", title = "提交打卡")
 
-        if (activeTasks.isEmpty() && supplementingRecord == null) {
-            EmptyPlaceholder(
-                title = "暂无可提交任务",
-                message = "当前没有进行中的打卡任务。已关闭任务只能查看，不能提交；请等待老师发布新任务或查看已有记录。"
-            )
-        } else {
-            if (appState.draft != null && supplementingRecord == null) {
+        run {
+            if (appState.draft != null) {
                 DraftPanel(
                     appState = appState,
                     onRestore = {
                         val draft = appState.draft
                         if (draft != null) {
-                            val draftTask = activeTasks.firstOrNull { it.id == draft.taskId }
-                            if (draftTask != null) {
-                                onTaskSelected(draft.taskId)
+                            if (draft.taskId == selectedTask.id) {
                                 onHoursChanged(draft.hours)
                                 onNoteChanged(draft.note)
                                 onSportTypeSelected(draft.sportType)
@@ -431,22 +301,8 @@ private fun SubmitShell(
                 )
             }
 
-            supplementingRecord?.let { record ->
-                SupplementPanel(record = record, onCancel = onClearSupplement)
-            }
-
-            if (supplementingRecord == null) {
-                TaskSelectionPanel(
-                    activeTasks = activeTasks,
-                    selectedTask = selectedTask,
-                    appState = appState,
-                    onTaskSelected = onTaskSelected
-                )
-            }
-
             SubmitDetailPanel(
                 selectedTask = selectedTask,
-                supplementingRecord = supplementingRecord,
                 appState = appState,
                 hours = hours,
                 maxHours = maxHours,
@@ -472,7 +328,6 @@ private fun SubmitShell(
 
             if (showConfirm) {
                 ConfirmSubmitPanel(
-                    supplementingRecord = supplementingRecord,
                     selectedTask = selectedTask,
                     hours = hours,
                     proofCount = proofAttachments.size,
@@ -481,26 +336,7 @@ private fun SubmitShell(
                         showConfirm = false
                         isSubmitting = true
                         submitError = null
-                        if (supplementingRecord != null) {
-                            appState.submitSupplement(
-                                record = supplementingRecord,
-                                hours = hours,
-                                note = note,
-                                proofAttachments = proofAttachments,
-                                onResult = { result ->
-                                    isSubmitting = false
-                                    result.fold(
-                                        onSuccess = {
-                                            onSubmitComplete("补充材料已提交，记录已回到待审核状态。")
-                                        },
-                                        onFailure = {
-                                            submitError = it.message ?: "补充材料提交失败，请重试"
-                                        }
-                                    )
-                                }
-                            )
-                        } else if (selectedTask != null) {
-                            appState.submitCheckIn(
+                        appState.submitCheckIn(
                                 task = selectedTask,
                                 hours = hours,
                                 note = note,
@@ -510,7 +346,7 @@ private fun SubmitShell(
                                     isSubmitting = false
                                     result.fold(
                                         onSuccess = {
-                                            onSubmitComplete("打卡已提交，审核通过后将计入有效学时。")
+                                            onSubmitComplete("打卡已记录，可在打卡记录中查看。")
                                         },
                                         onFailure = {
                                             submitError = it.message ?: "打卡提交失败，请重试"
@@ -518,16 +354,12 @@ private fun SubmitShell(
                                     )
                                 }
                             )
-                        } else {
-                            isSubmitting = false
-                        }
                     }
                 )
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (supplementingRecord == null && selectedTask != null) {
-                    ActionButton(
+                ActionButton(
                         title = "保存草稿",
                         icon = Icons.Filled.Save,
                         filled = false,
@@ -543,14 +375,11 @@ private fun SubmitShell(
                             )
                         }
                     )
-                }
                 ActionButton(
                     title = if (isSubmitting) {
                         "提交中..."
-                    } else if (supplementingRecord == null) {
-                        "提交审核"
                     } else {
-                        "提交补交"
+                        "提交打卡"
                     },
                     icon = Icons.Filled.UploadFile,
                     filled = validationMessage == null,
@@ -573,7 +402,11 @@ private fun DraftPanel(
 ) {
     val cs = MaterialTheme.colorScheme
     val draft = appState.draft ?: return
-    val task = appState.workspace.tasks.firstOrNull { it.id == draft.taskId }
+    val task = if (draft.taskId == appState.selfCheckInTask.id) {
+        appState.selfCheckInTask
+    } else {
+        appState.workspace.tasks.firstOrNull { it.id == draft.taskId }
+    }
 
     SwissPanel {
         Row(verticalAlignment = Alignment.Top) {
@@ -608,31 +441,6 @@ private fun DraftPanel(
                 onClick = appState::clearDraft
             )
         }
-    }
-}
-
-@Composable
-private fun SupplementPanel(record: CheckInRecord, onCancel: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    SwissPanel {
-        Text(
-            text = "正在补交",
-            color = cs.onSurface,
-            style = MaterialTheme.typography.titleMedium
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = "${record.taskTitle} · 原凭证 ${record.proofFiles.size} 个 · 老师反馈：${record.teacherFeedback}",
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.bodySmall
-        )
-        Spacer(Modifier.height(12.dp))
-        ActionButton(
-            title = "取消补交",
-            icon = Icons.Filled.Clear,
-            filled = false,
-            onClick = onCancel
-        )
     }
 }
 
@@ -687,7 +495,6 @@ private fun TaskSelectionPanel(
 @Composable
 private fun SubmitDetailPanel(
     selectedTask: CourseTask?,
-    supplementingRecord: CheckInRecord?,
     appState: StudentAppState,
     hours: Double,
     maxHours: Double,
@@ -724,15 +531,13 @@ private fun SubmitDetailPanel(
             }
         )
 
-        if (supplementingRecord == null) {
-            Spacer(Modifier.height(18.dp))
-            SportTypeSelector(
-                selectedValue = selectedSportType,
-                customValue = customSportType,
-                onSelected = onSportTypeSelected,
-                onCustomValueChanged = onCustomSportTypeChanged
-            )
-        }
+        Spacer(Modifier.height(18.dp))
+        SportTypeSelector(
+            selectedValue = selectedSportType,
+            customValue = customSportType,
+            onSelected = onSportTypeSelected,
+            onCustomValueChanged = onCustomSportTypeChanged
+        )
 
         Spacer(Modifier.height(18.dp))
         Text(
@@ -743,11 +548,7 @@ private fun SubmitDetailPanel(
         Spacer(Modifier.height(10.dp))
         NoteEditor(
             value = note,
-            placeholder = if (supplementingRecord == null) {
-                "例如：今天在南区操场完成 5km 慢跑，上传运动轨迹截图和现场照片。"
-            } else {
-                "说明本次补交了哪些材料，回应老师反馈。"
-            },
+            placeholder = "例如：今天在南区操场完成 5km 慢跑，上传运动轨迹截图和现场照片。",
             onValueChange = onNoteChanged
         )
 
@@ -1154,7 +955,6 @@ private fun ProofAttachmentRow(
 
 @Composable
 private fun ConfirmSubmitPanel(
-    supplementingRecord: CheckInRecord?,
     selectedTask: CourseTask?,
     hours: Double,
     proofCount: Int,
@@ -1162,7 +962,7 @@ private fun ConfirmSubmitPanel(
     onConfirm: () -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
-    val title = supplementingRecord?.taskTitle ?: selectedTask?.title ?: "当前任务"
+    val title = selectedTask?.title ?: "当前任务"
 
     SwissPanel {
         Text(
@@ -1172,7 +972,7 @@ private fun ConfirmSubmitPanel(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "$title · ${hours.hourText()} · 新增 $proofCount 个凭证。提交后会先进入待审核，并在后续 API 接入后进入同步队列。",
+            text = "$title · ${hours.hourText()} · 新增 $proofCount 个凭证。确认后将提交并保存到打卡记录。",
             color = cs.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall
         )
@@ -1290,7 +1090,11 @@ private fun TaskPickerRow(
 }
 
 @Composable
-private fun RecordCard(record: CheckInRecord) {
+private fun RecordCard(
+    record: CheckInRecord,
+    imageLoader: ImageLoader,
+    onOpenDetail: () -> Unit
+) {
     val cs = MaterialTheme.colorScheme
     SwissPanel {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1310,10 +1114,6 @@ private fun RecordCard(record: CheckInRecord) {
                         style = MaterialTheme.typography.labelMedium
                     )
                 }
-                StatusBadge(
-                    text = record.status.label,
-                    filled = record.status == ReviewStatus.Approved || record.status == ReviewStatus.Offset
-                )
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1335,39 +1135,347 @@ private fun RecordCard(record: CheckInRecord) {
                 )
             }
 
-            record.aiReviewStatus?.let { aiStatus ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    StatusBadge(
-                        text = aiStatus.label,
-                        filled = aiStatus == edu.bnbu.student.mvp.core.model.AiReviewStatus.Normal
-                    )
-                    record.aiRiskLevel?.let { risk ->
-                        StatusBadge(text = risk.label)
-                    }
-                }
-                record.aiReviewMessage?.takeIf { it.isNotBlank() }?.let { message ->
-                    Text(
-                        text = message,
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall
+            Text(
+                text = "打卡照片 / 视频",
+                color = cs.onSurface,
+                style = MaterialTheme.typography.titleMedium
+            )
+            RecordMediaGrid(
+                proofs = record.proofFiles,
+                imageLoader = imageLoader,
+                onClick = onOpenDetail
+            )
+            if (record.note.isNotBlank()) {
+                Text(
+                    text = "备注：${record.note}",
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecordMediaGrid(
+    proofs: List<ProofAttachment>,
+    imageLoader: ImageLoader,
+    onClick: () -> Unit
+) {
+    when {
+        proofs.isEmpty() -> {
+            MediaPlaceholder(
+                mediaType = ProofMediaType.Image,
+                message = "暂无打卡照片或视频",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(96.dp)
+                    .clickable(onClick = onClick)
+            )
+        }
+        proofs.size == 1 -> {
+            ProofThumbnail(
+                proof = proofs[0],
+                imageLoader = imageLoader,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f),
+                onClick = onClick
+            )
+        }
+        proofs.size == 2 -> {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                proofs.forEach { proof ->
+                    ProofThumbnail(
+                        proof = proof,
+                        imageLoader = imageLoader,
+                        modifier = Modifier.weight(1f).aspectRatio(1f),
+                        onClick = onClick
                     )
                 }
             }
+        }
+        else -> {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(190.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ProofThumbnail(
+                    proof = proofs[0],
+                    imageLoader = imageLoader,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    onClick = onClick
+                )
+                Column(
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ProofThumbnail(
+                        proof = proofs[1],
+                        imageLoader = imageLoader,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        onClick = onClick
+                    )
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        ProofThumbnail(
+                            proof = proofs[2],
+                            imageLoader = imageLoader,
+                            modifier = Modifier.fillMaxSize(),
+                            onClick = onClick
+                        )
+                        val remaining = proofs.size - 3
+                        if (remaining > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.48f))
+                                    .clickable(onClick = onClick),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "+$remaining",
+                                    color = Color.White,
+                                    fontSize = 22.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
-            Text(
-                text = "凭证：${record.proofSummary}",
-                color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium
+@Composable
+private fun ProofThumbnail(
+    proof: ProofAttachment,
+    imageLoader: ImageLoader,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val context = LocalContext.current
+    val cs = MaterialTheme.colorScheme
+    val sourceAvailable = proof.source.isDisplayableMediaSource()
+    val imageRequest = remember(proof.source, proof.type) {
+        ImageRequest.Builder(context)
+            .data(proof.source)
+            .apply {
+                if (proof.type == ProofMediaType.Video) {
+                    decoderFactory(VideoFrameDecoder.Factory())
+                }
+            }
+            .build()
+    }
+    Box(
+        modifier = modifier
+            .clip(MaterialTheme.shapes.medium)
+            .background(cs.surfaceVariant)
+            .clickable(onClick = onClick)
+    ) {
+        if (sourceAvailable) {
+            SubcomposeAsyncImage(
+                model = imageRequest,
+                imageLoader = imageLoader,
+                contentDescription = "${proof.type.label}：${proof.fileName}",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+                loading = {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
+                },
+                error = {
+                    MediaPlaceholder(
+                        mediaType = proof.type,
+                        message = "暂时无法加载",
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             )
-            Text(
-                text = "老师反馈：${record.teacherFeedback}",
-                color = cs.onSurface,
-                style = MaterialTheme.typography.bodyMedium
+        } else {
+            MediaPlaceholder(
+                mediaType = proof.type,
+                message = proof.fileName.ifBlank { "媒体文件" },
+                modifier = Modifier.fillMaxSize()
             )
         }
+
+        if (proof.type == ProofMediaType.Video) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.45f), MaterialTheme.shapes.large)
+                    .padding(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayCircle,
+                    contentDescription = "视频",
+                    tint = Color.White,
+                    modifier = Modifier.size(30.dp)
+                )
+            }
+            Text(
+                text = "视频",
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp)
+                    .background(Color.Black.copy(alpha = 0.62f), MaterialTheme.shapes.small)
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun MediaPlaceholder(
+    mediaType: ProofMediaType,
+    message: String,
+    modifier: Modifier = Modifier
+) {
+    val cs = MaterialTheme.colorScheme
+    Column(
+        modifier = modifier
+            .background(cs.surfaceVariant)
+            .padding(12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = if (mediaType == ProofMediaType.Video) Icons.Filled.Videocam else Icons.Filled.Photo,
+            contentDescription = null,
+            tint = cs.onSurfaceVariant,
+            modifier = Modifier.size(28.dp)
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = message,
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 2
+        )
+    }
+}
+
+@Composable
+private fun CheckInRecordDetail(
+    record: CheckInRecord,
+    imageLoader: ImageLoader,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val cs = MaterialTheme.colorScheme
+    var openError by remember { mutableStateOf<String?>(null) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .clickable(onClick = onBack),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                    contentDescription = "返回打卡记录",
+                    tint = cs.onSurface
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("返回打卡记录", color = cs.onSurface, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        item { SectionTitle(eyebrow = "Check-In Detail", title = "打卡记录详情") }
+        item {
+            SwissPanel {
+                Text(record.taskTitle, color = cs.onSurface, style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StatusBadge(text = record.creditType.label)
+                    Spacer(Modifier.width(8.dp))
+                    Text(record.hours.hourText(), color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("提交时间：${record.submittedAt}", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                record.sportType?.takeIf { it.isNotBlank() }?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text("运动项目：${it.displaySportType()}", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                }
+                if (record.note.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("备注：${record.note}", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+        openError?.let { message ->
+            item { ValidationPanel(message = message) }
+        }
+        item {
+            SectionTitle(
+                eyebrow = "Media",
+                title = "打卡照片 / 视频 (${record.proofFiles.size})"
+            )
+        }
+        if (record.proofFiles.isEmpty()) {
+            item {
+                EmptyPlaceholder(title = "暂无照片或视频", message = "这条记录没有可展示的媒体文件。")
+            }
+        } else {
+            items(record.proofFiles, key = { it.id }) { proof ->
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ProofThumbnail(
+                        proof = proof,
+                        imageLoader = imageLoader,
+                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                        onClick = {
+                            openError = context.openProofInSystemApp(proof)
+                        }
+                    )
+                    Text(
+                        text = buildList {
+                            add(proof.type.label)
+                            add(proof.fileName)
+                            proof.displayDuration?.let { add(it) }
+                        }.joinToString(" · "),
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+        }
+        item { Spacer(Modifier.height(28.dp)) }
+    }
+}
+
+private fun String.isDisplayableMediaSource(): Boolean {
+    return startsWith("https://", ignoreCase = true) ||
+        startsWith("http://", ignoreCase = true) ||
+        startsWith("content://", ignoreCase = true) ||
+        startsWith("file://", ignoreCase = true) ||
+        startsWith("/")
+}
+
+private fun Context.openProofInSystemApp(proof: ProofAttachment): String? {
+    if (!proof.source.isDisplayableMediaSource()) return "该媒体文件没有可用的预览地址。"
+    val mimeType = if (proof.type == ProofMediaType.Video) "video/*" else "image/*"
+    val intent = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(Uri.parse(proof.source), mimeType)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    return try {
+        startActivity(Intent.createChooser(intent, "打开${proof.type.label}"))
+        null
+    } catch (_: ActivityNotFoundException) {
+        "设备上没有可以打开该${proof.type.label}的应用。"
+    } catch (_: Exception) {
+        "暂时无法打开该${proof.type.label}，请稍后重试。"
     }
 }
 
@@ -1399,7 +1507,6 @@ private fun SquareIconButton(
 
 private fun submitValidationMessage(
     selectedTask: CourseTask?,
-    supplementingRecord: CheckInRecord?,
     hasSubmittedToday: Boolean,
     hours: Double,
     maxHours: Double,
@@ -1408,8 +1515,8 @@ private fun submitValidationMessage(
     totalProofCount: Int,
     customSportTypeMissing: Boolean
 ): String? {
-    if (selectedTask == null && supplementingRecord == null) return "请选择一个可提交的任务。"
-    if (supplementingRecord == null && hasSubmittedToday) return "今日已打卡，每天只能提交一次。"
+    if (selectedTask == null) return "请选择一个可提交的任务。"
+    if (hasSubmittedToday) return "今日已打卡，每天只能提交一次。"
     if (hours != 1.0 && hours != 2.0) return "本次打卡只能选择 1h 或 2h。"
     if (hours > maxHours) return "本次学时不能超过 ${maxHours.hourText()}。"
     if (customSportTypeMissing) return "请填写其他运动项目。"

@@ -51,7 +51,6 @@ import edu.bnbu.student.mvp.core.model.CheckInRecord
 import edu.bnbu.student.mvp.core.model.Course
 import edu.bnbu.student.mvp.core.model.CourseTask
 import edu.bnbu.student.mvp.core.model.CreditType
-import edu.bnbu.student.mvp.core.model.ReviewStatus
 import edu.bnbu.student.mvp.core.model.TaskStatus
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.state.StudentAppState
@@ -466,10 +465,6 @@ private fun RecordCard(record: CheckInRecord) {
                         style = MaterialTheme.typography.labelMedium
                     )
                 }
-                StatusBadge(
-                    text = record.status.label,
-                    filled = record.status == ReviewStatus.Approved || record.status == ReviewStatus.Offset
-                )
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -483,24 +478,12 @@ private fun RecordCard(record: CheckInRecord) {
                 )
             }
 
-            record.aiReviewStatus?.let { aiStatus ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    StatusBadge(
-                        text = aiStatus.label,
-                        filled = aiStatus == edu.bnbu.student.mvp.core.model.AiReviewStatus.Normal
-                    )
-                    record.aiRiskLevel?.let { risk -> StatusBadge(text = risk.label) }
-                }
-                record.aiReviewMessage?.takeIf { it.isNotBlank() }?.let { message ->
-                    Text(
-                        text = message,
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
+            record.sportType?.takeIf { it.isNotBlank() }?.let { sportType ->
+                Text(
+                    text = "运动项目：$sportType",
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium
+                )
             }
 
             Text(
@@ -508,11 +491,13 @@ private fun RecordCard(record: CheckInRecord) {
                 color = cs.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium
             )
-            Text(
-                text = "老师反馈：${record.teacherFeedback}",
-                color = cs.onSurface,
-                style = MaterialTheme.typography.bodyMedium
-            )
+            if (record.note.isNotBlank()) {
+                Text(
+                    text = "备注：${record.note}",
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
         }
     }
 }

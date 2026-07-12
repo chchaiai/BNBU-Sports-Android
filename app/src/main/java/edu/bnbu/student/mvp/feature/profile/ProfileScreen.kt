@@ -14,13 +14,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -44,38 +42,44 @@ import edu.bnbu.student.mvp.core.designsystem.StatusBadge
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.model.Membership
 import edu.bnbu.student.mvp.core.model.AppThemeMode
-import edu.bnbu.student.mvp.core.model.NoticeCategory
-import edu.bnbu.student.mvp.core.model.StudentNotice
 import edu.bnbu.student.mvp.core.state.StudentAppState
 
-private enum class NoticeFilter(val label: String) {
-    All("全部"),
-    Unread("未读"),
-    Deadline("截止"),
-    Review("审核")
-}
-
 @Composable
-private fun QuickActionsPanel(
-    onOpenScoring: () -> Unit,
-    onOpenExemption: () -> Unit
-) {
+private fun ApplicationPanel(onOpenExemption: (String?) -> Unit) {
+    val cs = MaterialTheme.colorScheme
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle(eyebrow = "Tools", title = "体测工具")
+        SectionTitle(eyebrow = "Applications", title = "申请与审核")
 
-        SwissPanel {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                ActionButton(
-                    title = "耐力跑成绩换算",
-                    icon = Icons.Filled.Timer,
-                    filled = false,
-                    onClick = onOpenScoring
+        SwissPanel(modifier = Modifier.clickable { onOpenExemption(null) }) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.FitnessCenter,
+                    contentDescription = null,
+                    tint = cs.primary,
+                    modifier = Modifier.size(24.dp)
                 )
-                ActionButton(
-                    title = "免测与免打卡申请",
-                    icon = Icons.Filled.FitnessCenter,
-                    filled = false,
-                    onClick = onOpenExemption
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "免测与免打卡",
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = "查看申请进度、提交新申请",
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = "进入免测与免打卡申请",
+                    tint = cs.onSurfaceVariant
                 )
             }
         }
@@ -85,42 +89,18 @@ private fun QuickActionsPanel(
 @Composable
 fun ProfileScreen(
     appState: StudentAppState,
-    onOpenScoring: () -> Unit = {},
-    onOpenExemption: () -> Unit = {},
+    onOpenExemption: (String?) -> Unit = {},
     onOpenPrivacy: () -> Unit = {}
 ) {
-    var selectedNoticeFilter by remember { mutableStateOf(NoticeFilter.All) }
-    var selectedNoticeId by remember { mutableStateOf<String?>(null) }
-    val selectedNotice = selectedNoticeId?.let { id ->
-        appState.workspace.notices.firstOrNull { it.id == id }
-    }
-
-    if (selectedNotice != null) {
-        NoticeDetailScreen(
-            appState = appState,
-            notice = selectedNotice,
-            onBack = { selectedNoticeId = null }
-        )
-        return
-    }
-
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item { ProfileHeader(appState) }
 
-        item { QuickActionsPanel(onOpenScoring, onOpenExemption) }
+        item { ApplicationPanel(onOpenExemption) }
         item { TeacherPanel(appState) }
         item { IdentityPanel(appState) }
-        item {
-            NotificationPanel(
-                appState = appState,
-                selectedFilter = selectedNoticeFilter,
-                onFilterSelected = { selectedNoticeFilter = it },
-                onNoticeSelected = { selectedNoticeId = it.id }
-            )
-        }
         item {
             SettingsPanel(appState = appState, onOpenPrivacy = onOpenPrivacy)
         }
@@ -207,7 +187,7 @@ private fun TeacherPanel(appState: StudentAppState) {
 @Composable
 private fun IdentityPanel(appState: StudentAppState) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle(eyebrow = "Identity", title = "校队 / 社团抵扣状态")
+        SectionTitle(eyebrow = "Identity", title = "组织认证与抵扣记录")
 
         if (appState.workspace.memberships.isEmpty()) {
             EmptyPlaceholder(
@@ -276,177 +256,6 @@ private fun MembershipCard(membership: Membership) {
                         modifier = Modifier.weight(1f)
                     )
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NotificationPanel(
-    appState: StudentAppState,
-    selectedFilter: NoticeFilter,
-    onFilterSelected: (NoticeFilter) -> Unit,
-    onNoticeSelected: (StudentNotice) -> Unit
-) {
-    val filteredNotices = appState.workspace.notices.filter { notice ->
-        when (selectedFilter) {
-            NoticeFilter.All -> true
-            NoticeFilter.Unread -> notice.isUnread
-            NoticeFilter.Deadline -> notice.category == NoticeCategory.Deadline
-            NoticeFilter.Review -> notice.category == NoticeCategory.Review
-        }
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            SectionTitle(
-                eyebrow = "Notifications",
-                title = "通知 (${filteredNotices.size})",
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            NoticeFilter.entries.forEach { filter ->
-                val isSelected = selectedFilter == filter
-                val cs = MaterialTheme.colorScheme
-                Text(
-                    text = filter.label,
-                    color = if (isSelected) cs.onPrimary else cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier
-                        .background(
-                            if (isSelected) cs.primary else cs.surfaceVariant,
-                            MaterialTheme.shapes.small
-                        )
-                        .clickable { onFilterSelected(filter) }
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                )
-            }
-        }
-
-        if (filteredNotices.isEmpty()) {
-            EmptyPlaceholder(
-                title = "暂无通知",
-                message = "当前筛选条件下没有匹配的通知。"
-            )
-        } else {
-            filteredNotices.forEach { notice ->
-                NoticeRow(
-                    notice = notice,
-                    onClick = { onNoticeSelected(notice) }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun NoticeRow(
-    notice: StudentNotice,
-    onClick: () -> Unit
-) {
-    val cs = MaterialTheme.colorScheme
-    SwissPanel(
-        modifier = Modifier.clickable(onClick = onClick)
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = if (notice.isUnread) Icons.Filled.Notifications else Icons.Filled.CheckCircle,
-                    contentDescription = null,
-                    tint = if (notice.isUnread) cs.primary else cs.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = notice.title,
-                    color = cs.onSurface,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = notice.time,
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-            Text(
-                text = notice.message,
-                color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-    }
-}
-
-@Composable
-private fun NoticeDetailScreen(
-    appState: StudentAppState,
-    notice: StudentNotice,
-    onBack: () -> Unit
-) {
-    val cs = MaterialTheme.colorScheme
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onBack),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                    contentDescription = null,
-                    tint = cs.onSurface
-                )
-                Text(
-                    text = "返回",
-                    color = cs.onSurface,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        }
-
-        item {
-            SwissPanel {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = notice.title,
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                    Text(
-                        text = notice.time,
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                    Text(
-                        text = notice.message,
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            }
-        }
-
-        if (notice.isUnread) {
-            item {
-                ActionButton(
-                    title = "标记为已读",
-                    icon = Icons.Filled.CheckCircle,
-                    filled = true,
-                    onClick = {
-                        if (notice.isUnread) {
-                            appState.markNoticeRead(notice.id)
-                        }
-                    }
-                )
             }
         }
     }

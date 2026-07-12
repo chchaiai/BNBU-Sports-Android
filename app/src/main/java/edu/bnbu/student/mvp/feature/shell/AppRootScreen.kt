@@ -48,6 +48,7 @@ import edu.bnbu.student.mvp.feature.courses.CoursesScreen
 import edu.bnbu.student.mvp.feature.dashboard.DashboardScreen
 import edu.bnbu.student.mvp.feature.grades.GradesScreen
 import edu.bnbu.student.mvp.feature.login.LoginScreen
+import edu.bnbu.student.mvp.feature.notifications.NotificationSheet
 import edu.bnbu.student.mvp.feature.profile.PrivacyPolicyScreen
 import edu.bnbu.student.mvp.feature.profile.ProfileScreen
 import edu.bnbu.student.mvp.feature.scoring.EnduranceScoringScreen
@@ -76,6 +77,8 @@ fun AppRootScreen(appState: StudentAppState) {
     // Keep appState as-is — it's now managed by the Activity lifecycle.
     var selectedTab by remember { mutableStateOf(AppTab.Dashboard) }
     var subScreen by remember { mutableStateOf(SubScreen.None) }
+    var exemptionTargetId by remember { mutableStateOf<String?>(null) }
+    var showNotificationSheet by remember { mutableStateOf(false) }
 
     if (!appState.isAuthenticated) {
         Box(modifier = Modifier.fillMaxSize().padding(18.dp)) {
@@ -122,7 +125,11 @@ fun AppRootScreen(appState: StudentAppState) {
                         if (repo != null) {
                             ExemptionScreen(
                                 repository = repo,
-                                onBack = { subScreen = SubScreen.None }
+                                initialApplicationId = exemptionTargetId,
+                                onBack = {
+                                    exemptionTargetId = null
+                                    subScreen = SubScreen.None
+                                }
                             )
                         }
                     }
@@ -143,9 +150,7 @@ fun AppRootScreen(appState: StudentAppState) {
         bottomBar = {
             StudentBottomBar(
                 selectedTab = selectedTab,
-                onTabSelected = { selectedTab = it },
-                checkInBadge = appState.actionableRecordCount,
-                profileBadge = appState.unreadNoticeCount
+                onTabSelected = { selectedTab = it }
             )
         }
     ) { innerPadding ->
@@ -164,16 +169,31 @@ fun AppRootScreen(appState: StudentAppState) {
                         tab = selectedTab,
                         appState = appState,
                         contentPadding = PaddingValues(0.dp),
-                        openCheckIn = { selectedTab = AppTab.CheckIn },
-                        openGrades = { selectedTab = AppTab.Grades },
-                        openProfile = { selectedTab = AppTab.Profile },
-                        openScoring = { subScreen = SubScreen.EnduranceScoring },
-                        openExemption = { subScreen = SubScreen.Exemption },
+                        onOpenNotificationSheet = { showNotificationSheet = true },
+                        openExemption = { targetId ->
+                            exemptionTargetId = targetId
+                            subScreen = SubScreen.Exemption
+                        },
                         openPrivacy = { subScreen = SubScreen.PrivacyPolicy }
                     )
                 }
             }
         }
+    }
+
+    if (showNotificationSheet) {
+        NotificationSheet(
+            notices = appState.visibleNotices,
+            unreadCount = appState.unreadNoticeCount,
+            onDismiss = { showNotificationSheet = false },
+            onMarkRead = appState::markNoticeRead,
+            onMarkAllRead = appState::markAllNoticesRead,
+            onOpenExemption = { targetId ->
+                showNotificationSheet = false
+                exemptionTargetId = targetId
+                subScreen = SubScreen.Exemption
+            }
+        )
     }
 }
 
@@ -227,9 +247,7 @@ private fun SyncStatusBanner(appState: StudentAppState) {
 @Composable
 private fun StudentBottomBar(
     selectedTab: AppTab,
-    onTabSelected: (AppTab) -> Unit,
-    checkInBadge: Int,
-    profileBadge: Int
+    onTabSelected: (AppTab) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
     NavigationBar(
@@ -239,33 +257,11 @@ private fun StudentBottomBar(
         modifier = Modifier.fillMaxWidth()
     ) {
         AppTab.entries.forEach { tab ->
-            val badge = when (tab) {
-                AppTab.CheckIn -> checkInBadge
-                AppTab.Profile -> profileBadge
-                else -> 0
-            }
             NavigationBarItem(
                 selected = selectedTab == tab,
                 onClick = { onTabSelected(tab) },
                 icon = {
-                    Box {
-                        Icon(imageVector = tab.icon, contentDescription = tab.label)
-                        if (badge > 0) {
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .background(cs.primary, RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 4.dp, vertical = 1.dp)
-                            ) {
-                                Text(
-                                    text = badge.toString(),
-                                    color = cs.onPrimary,
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
+                    Icon(imageVector = tab.icon, contentDescription = tab.label)
                 },
                 label = {
                     Text(
@@ -290,11 +286,8 @@ private fun RootTabContent(
     tab: AppTab,
     appState: StudentAppState,
     contentPadding: PaddingValues,
-    openCheckIn: () -> Unit,
-    openGrades: () -> Unit,
-    openProfile: () -> Unit,
-    openScoring: () -> Unit = {},
-    openExemption: () -> Unit = {},
+    onOpenNotificationSheet: () -> Unit,
+    openExemption: (String?) -> Unit = {},
     openPrivacy: () -> Unit = {}
 ) {
     Box(
@@ -304,13 +297,12 @@ private fun RootTabContent(
             .padding(18.dp)
     ) {
         when (tab) {
-            AppTab.Dashboard -> DashboardScreen(appState, openCheckIn, openGrades, openProfile)
+            AppTab.Dashboard -> DashboardScreen(appState, onOpenNotificationSheet)
             AppTab.Courses -> CoursesScreen(appState)
             AppTab.CheckIn -> CheckInScreen(appState)
             AppTab.Grades -> GradesScreen(appState)
             AppTab.Profile -> ProfileScreen(
                     appState = appState,
-                    onOpenScoring = openScoring,
                     onOpenExemption = openExemption,
                     onOpenPrivacy = openPrivacy
                 )
