@@ -1,6 +1,18 @@
 package edu.bnbu.student.mvp.feature.shell
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,13 +24,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.AddBox
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material3.Icon
@@ -31,17 +41,20 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import edu.bnbu.student.mvp.core.designsystem.GridBackground
+import edu.bnbu.student.mvp.R
+import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.checkin.CheckInScreen
 import edu.bnbu.student.mvp.feature.courses.CoursesScreen
@@ -56,9 +69,9 @@ import edu.bnbu.student.mvp.feature.exemption.ExemptionScreen
 
 enum class AppTab(
     val label: String,
-    val icon: ImageVector
+    val icon: ImageVector?
 ) {
-    Dashboard("首页", Icons.Filled.GridView),
+    Dashboard("首页", null),
     Courses("课程", Icons.AutoMirrored.Filled.MenuBook),
     CheckIn("打卡", Icons.Filled.AddBox),
     Grades("成绩", Icons.Filled.BarChart),
@@ -74,110 +87,128 @@ enum class SubScreen {
 
 @Composable
 fun AppRootScreen(appState: StudentAppState) {
-    // Keep appState as-is — it's now managed by the Activity lifecycle.
-    var selectedTab by remember { mutableStateOf(AppTab.Dashboard) }
-    var subScreen by remember { mutableStateOf(SubScreen.None) }
-    var exemptionTargetId by remember { mutableStateOf<String?>(null) }
-    var showNotificationSheet by remember { mutableStateOf(false) }
-
-    if (!appState.isAuthenticated) {
-        Box(modifier = Modifier.fillMaxSize().padding(18.dp)) {
-            GridBackground(modifier = Modifier.fillMaxSize())
+    AnimatedContent(
+        targetState = appState.isAuthenticated,
+        modifier = Modifier.fillMaxSize(),
+        transitionSpec = {
+            val direction = if (targetState) 1 else -1
+            (fadeIn(tween(BNBUMotion.Standard, delayMillis = 40)) +
+                slideInHorizontally(
+                    animationSpec = tween(BNBUMotion.Emphasized, easing = FastOutSlowInEasing),
+                    initialOffsetX = { direction * (it / 10) }
+                )) togetherWith
+                (fadeOut(tween(BNBUMotion.Quick)) +
+                    slideOutHorizontally(
+                        animationSpec = tween(BNBUMotion.Standard, easing = FastOutSlowInEasing),
+                        targetOffsetX = { -direction * (it / 12) }
+                    ))
+        },
+        label = "authentication-transition"
+    ) { isAuthenticated ->
+        if (isAuthenticated) {
+            AuthenticatedAppContent(appState)
+        } else {
             LoginScreen(
-                onLogin = { account, password ->
-                    appState.login(account, password)
-                },
+                onLogin = { account, password -> appState.login(account, password) },
                 isLoading = appState.isLoading,
                 errorMessage = appState.lastError
             )
         }
-        return
+    }
+}
+
+@Composable
+private fun AuthenticatedAppContent(appState: StudentAppState) {
+    var selectedTab by rememberSaveable { mutableStateOf(AppTab.Dashboard) }
+    var subScreen by rememberSaveable { mutableStateOf(SubScreen.None) }
+    var renderedSubScreen by rememberSaveable { mutableStateOf(subScreen) }
+    var exemptionTargetId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showNotificationSheet by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(subScreen) {
+        if (subScreen != SubScreen.None) renderedSubScreen = subScreen
     }
 
-    // Sub-screen overlay for tools launched from Profile
-    if (subScreen != SubScreen.None) {
-        BackHandler {
-            subScreen = SubScreen.None
-        }
-        val repo = appState.apiRepository
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-        ) {
-            GridBackground(modifier = Modifier.fillMaxSize())
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .padding(18.dp)
-            ) {
-                when (subScreen) {
-                    SubScreen.EnduranceScoring -> {
-                        if (repo != null) {
-                            EnduranceScoringScreen(
-                                student = appState.workspace.student,
-                                repository = repo,
-                                onBack = { subScreen = SubScreen.None }
-                            )
-                        }
+    BackHandler(enabled = subScreen != SubScreen.None) {
+        exemptionTargetId = null
+        subScreen = SubScreen.None
+    }
+    BackHandler(
+        enabled = subScreen == SubScreen.None &&
+            selectedTab != AppTab.Dashboard &&
+            !showNotificationSheet
+    ) {
+        selectedTab = AppTab.Dashboard
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            bottomBar = {
+                StudentBottomBar(
+                    selectedTab = selectedTab,
+                    onTabSelected = { selectedTab = it }
+                )
+            }
+        ) { innerPadding ->
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                ) {
+                    AnimatedVisibility(
+                        visible = appState.lastError != null || appState.isShowingCachedData,
+                        enter = expandVertically(tween(BNBUMotion.Standard)) +
+                            fadeIn(tween(BNBUMotion.Standard)),
+                        exit = shrinkVertically(tween(BNBUMotion.Standard)) +
+                            fadeOut(tween(BNBUMotion.Quick))
+                    ) {
+                        SyncStatusBanner(appState)
                     }
-                    SubScreen.Exemption -> {
-                        if (repo != null) {
-                            ExemptionScreen(
-                                repository = repo,
-                                initialApplicationId = exemptionTargetId,
-                                onBack = {
-                                    exemptionTargetId = null
-                                    subScreen = SubScreen.None
-                                }
-                            )
-                        }
-                    }
-                    SubScreen.PrivacyPolicy -> {
-                        PrivacyPolicyScreen(
-                            onBack = { subScreen = SubScreen.None }
+                    Box(modifier = Modifier.weight(1f)) {
+                        RootTabContent(
+                            tab = selectedTab,
+                            appState = appState,
+                            contentPadding = PaddingValues(0.dp),
+                            onOpenNotificationSheet = { showNotificationSheet = true },
+                            openExemption = { targetId ->
+                                exemptionTargetId = targetId
+                                renderedSubScreen = SubScreen.Exemption
+                                subScreen = SubScreen.Exemption
+                            },
+                            openPrivacy = {
+                                renderedSubScreen = SubScreen.PrivacyPolicy
+                                subScreen = SubScreen.PrivacyPolicy
+                            }
                         )
                     }
-                    SubScreen.None -> { /* unreachable */ }
                 }
             }
         }
-        return
-    }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            StudentBottomBar(
-                selectedTab = selectedTab,
-                onTabSelected = { selectedTab = it }
+        AnimatedVisibility(
+            visible = subScreen != SubScreen.None,
+            enter = fadeIn(tween(BNBUMotion.Standard)) +
+                slideInHorizontally(
+                    animationSpec = tween(BNBUMotion.Emphasized, easing = FastOutSlowInEasing),
+                    initialOffsetX = { it / 8 }
+                ),
+            exit = fadeOut(tween(BNBUMotion.Quick)) +
+                slideOutHorizontally(
+                    animationSpec = tween(BNBUMotion.Standard, easing = FastOutSlowInEasing),
+                    targetOffsetX = { it / 10 }
+                )
+        ) {
+            SubScreenOverlay(
+                subScreen = renderedSubScreen,
+                appState = appState,
+                exemptionTargetId = exemptionTargetId,
+                onClose = {
+                    exemptionTargetId = null
+                    subScreen = SubScreen.None
+                }
             )
-        }
-    ) { innerPadding ->
-        Box(modifier = Modifier.fillMaxSize()) {
-            GridBackground(modifier = Modifier.fillMaxSize())
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) {
-                if (appState.lastError != null || appState.isShowingCachedData) {
-                    SyncStatusBanner(appState)
-                }
-                Box(modifier = Modifier.weight(1f)) {
-                    RootTabContent(
-                        tab = selectedTab,
-                        appState = appState,
-                        contentPadding = PaddingValues(0.dp),
-                        onOpenNotificationSheet = { showNotificationSheet = true },
-                        openExemption = { targetId ->
-                            exemptionTargetId = targetId
-                            subScreen = SubScreen.Exemption
-                        },
-                        openPrivacy = { subScreen = SubScreen.PrivacyPolicy }
-                    )
-                }
-            }
         }
     }
 
@@ -191,9 +222,46 @@ fun AppRootScreen(appState: StudentAppState) {
             onOpenExemption = { targetId ->
                 showNotificationSheet = false
                 exemptionTargetId = targetId
+                renderedSubScreen = SubScreen.Exemption
                 subScreen = SubScreen.Exemption
             }
         )
+    }
+}
+
+@Composable
+private fun SubScreenOverlay(
+    subScreen: SubScreen,
+    appState: StudentAppState,
+    exemptionTargetId: String?,
+    onClose: () -> Unit
+) {
+    val repo = appState.apiRepository
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding()
+            .padding(18.dp)
+    ) {
+        when (subScreen) {
+            SubScreen.EnduranceScoring -> if (repo != null) {
+                EnduranceScoringScreen(
+                    student = appState.workspace.student,
+                    repository = repo,
+                    onBack = onClose
+                )
+            }
+            SubScreen.Exemption -> if (repo != null) {
+                ExemptionScreen(
+                    repository = repo,
+                    initialApplicationId = exemptionTargetId,
+                    onBack = onClose
+                )
+            }
+            SubScreen.PrivacyPolicy -> PrivacyPolicyScreen(onBack = onClose)
+            SubScreen.None -> Unit
+        }
     }
 }
 
@@ -257,11 +325,40 @@ private fun StudentBottomBar(
         modifier = Modifier.fillMaxWidth()
     ) {
         AppTab.entries.forEach { tab ->
+            val isSelected = selectedTab == tab
+            val iconScale by animateFloatAsState(
+                targetValue = if (isSelected) 1.08f else 1f,
+                animationSpec = androidx.compose.animation.core.spring(
+                    dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+                ),
+                label = "bottomBarIconScale"
+            )
             NavigationBarItem(
-                selected = selectedTab == tab,
+                selected = isSelected,
                 onClick = { onTabSelected(tab) },
                 icon = {
-                    Icon(imageVector = tab.icon, contentDescription = tab.label)
+                    if (tab.icon == null) {
+                        Icon(
+                            painter = painterResource(R.drawable.bnbu_emblem),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(24.dp)
+                                .graphicsLayer {
+                                    scaleX = iconScale
+                                    scaleY = iconScale
+                                }
+                        )
+                    } else {
+                        Icon(
+                            imageVector = tab.icon,
+                            contentDescription = null,
+                            modifier = Modifier.graphicsLayer {
+                                scaleX = iconScale
+                                scaleY = iconScale
+                            }
+                        )
+                    }
                 },
                 label = {
                     Text(
@@ -290,22 +387,44 @@ private fun RootTabContent(
     openExemption: (String?) -> Unit = {},
     openPrivacy: () -> Unit = {}
 ) {
+    val tabStateHolder = rememberSaveableStateHolder()
     Box(
         modifier = Modifier
             .fillMaxSize()
             .padding(contentPadding)
             .padding(18.dp)
     ) {
-        when (tab) {
-            AppTab.Dashboard -> DashboardScreen(appState, onOpenNotificationSheet)
-            AppTab.Courses -> CoursesScreen(appState)
-            AppTab.CheckIn -> CheckInScreen(appState)
-            AppTab.Grades -> GradesScreen(appState)
-            AppTab.Profile -> ProfileScreen(
-                    appState = appState,
-                    onOpenExemption = openExemption,
-                    onOpenPrivacy = openPrivacy
+        AnimatedContent(
+            targetState = tab,
+            transitionSpec = {
+                val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                (fadeIn(tween(BNBUMotion.Standard, delayMillis = 40)) +
+                    slideInHorizontally(
+                        animationSpec = tween(BNBUMotion.Emphasized, easing = FastOutSlowInEasing),
+                        initialOffsetX = { direction * (it / 12) }
+                    )).togetherWith(
+                    fadeOut(tween(BNBUMotion.Quick)) +
+                        slideOutHorizontally(
+                            animationSpec = tween(BNBUMotion.Standard, easing = FastOutSlowInEasing),
+                            targetOffsetX = { -direction * (it / 14) }
+                        )
                 )
+            },
+            label = "rootTabTransition"
+        ) { animatedTab ->
+            tabStateHolder.SaveableStateProvider(animatedTab.name) {
+                when (animatedTab) {
+                    AppTab.Dashboard -> DashboardScreen(appState, onOpenNotificationSheet)
+                    AppTab.Courses -> CoursesScreen(appState)
+                    AppTab.CheckIn -> CheckInScreen(appState)
+                    AppTab.Grades -> GradesScreen(appState)
+                    AppTab.Profile -> ProfileScreen(
+                            appState = appState,
+                            onOpenExemption = openExemption,
+                            onOpenPrivacy = openPrivacy
+                        )
+                }
+            }
         }
     }
 }

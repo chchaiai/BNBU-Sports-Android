@@ -1,7 +1,13 @@
 package edu.bnbu.student.mvp.feature.dashboard
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,13 +20,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AddBox
 import androidx.compose.material.icons.filled.AssignmentTurnedIn
-import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
 import androidx.compose.material.icons.filled.Notifications
@@ -28,12 +29,12 @@ import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -42,11 +43,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import edu.bnbu.student.mvp.core.designsystem.BrandMark
+import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.HourProgressBar
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
 import edu.bnbu.student.mvp.core.designsystem.StatusBadge
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
+import edu.bnbu.student.mvp.core.designsystem.pressScale
 import edu.bnbu.student.mvp.core.model.CourseTask
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.NoticeCategory
@@ -61,11 +64,10 @@ fun DashboardScreen(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item { DashboardHeader(appState, onOpenNotificationSheet) }
         item { ProgressPanel(appState) }
-        item { MetricsGrid(appState) }
         item { RiskPanel(appState) }
         item { FocusPlan(appState) }
         item { NextTasks(appState) }
@@ -109,12 +111,15 @@ private fun DashboardHeader(appState: StudentAppState, onOpenNotificationSheet: 
 @Composable
 private fun NotificationBell(unreadCount: Int, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
+    val interactionSource = remember { MutableInteractionSource() }
     Box {
         IconButton(
             onClick = onClick,
+            interactionSource = interactionSource,
             modifier = Modifier
                 .size(44.dp)
                 .background(cs.surfaceVariant, MaterialTheme.shapes.small)
+                .pressScale(interactionSource = interactionSource, pressedScale = 0.94f)
         ) {
             Icon(
                 imageVector = if (unreadCount > 0) Icons.Filled.NotificationsActive else Icons.Filled.Notifications,
@@ -122,14 +127,24 @@ private fun NotificationBell(unreadCount: Int, onClick: () -> Unit) {
                 tint = cs.onSurface
             )
         }
-        if (unreadCount > 0) {
+        AnimatedVisibility(
+            visible = unreadCount > 0,
+            modifier = Modifier.align(Alignment.TopEnd),
+            enter = fadeIn(tween(BNBUMotion.Standard)) + scaleIn(
+                animationSpec = tween(BNBUMotion.Standard),
+                initialScale = 0.72f
+            ),
+            exit = fadeOut(tween(BNBUMotion.Quick)) + scaleOut(
+                animationSpec = tween(BNBUMotion.Quick),
+                targetScale = 0.72f
+            )
+        ) {
             Text(
                 text = if (unreadCount > 99) "99+" else unreadCount.toString(),
                 color = cs.onPrimary,
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
                     .background(cs.primary, RoundedCornerShape(8.dp))
                     .padding(horizontal = 4.dp, vertical = 1.dp)
             )
@@ -184,30 +199,6 @@ private fun ProgressPanel(appState: StudentAppState) {
                 total = appState.hourRule.generalRequired,
                 detail = if (appState.generalRemaining == 0.0) "已完成" else "还差 ${appState.generalRemaining.hourText()}"
             )
-        }
-    }
-}
-
-@Composable
-private fun MetricsGrid(appState: StudentAppState) {
-    val metrics = listOf(
-        Metric("Total", "20h", "本学期总要求"),
-        Metric("Course", "10h", "老师任务与课程相关"),
-        Metric("General", "10h", "自主运动 / 组织抵扣"),
-        Metric("Records", appState.workspace.records.count { it.creditType != CreditType.OrganizationOffset }.toString(), "本学期打卡记录")
-    )
-
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(252.dp),
-        userScrollEnabled = false,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        items(metrics) { metric ->
-            MetricCell(metric)
         }
     }
 }
@@ -301,80 +292,6 @@ private fun ProgressLine(
             StatusBadge(text = detail)
         }
         HourProgressBar(value = value, total = total)
-    }
-}
-
-@Composable
-private fun MetricCell(metric: Metric) {
-    val cs = MaterialTheme.colorScheme
-    SwissPanel {
-        Text(
-            text = metric.label.uppercase(),
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.labelSmall
-        )
-        Spacer(Modifier.height(10.dp))
-        Text(
-            text = metric.value,
-            color = cs.onSurface,
-            style = MaterialTheme.typography.headlineLarge
-        )
-        Spacer(Modifier.height(10.dp))
-        Text(
-            text = metric.footnote,
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.labelMedium
-        )
-    }
-}
-
-@Composable
-private fun ActionMiniMetric(label: String, value: String, modifier: Modifier = Modifier) {
-    val cs = MaterialTheme.colorScheme
-    Column(
-        modifier = modifier
-            .background(cs.surfaceVariant, MaterialTheme.shapes.small)
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp)
-    ) {
-        Text(
-            text = label,
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.labelSmall
-        )
-        Text(
-            text = value,
-            color = cs.onSurface,
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Medium
-        )
-    }
-}
-
-@Composable
-private fun DashboardShortcutButton(
-    title: String,
-    icon: ImageVector,
-    modifier: Modifier = Modifier,
-    action: () -> Unit
-) {
-    val cs = MaterialTheme.colorScheme
-    FilledTonalButton(
-        onClick = action,
-        modifier = modifier,
-        shape = MaterialTheme.shapes.large
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp)
-        )
-        Spacer(Modifier.width(5.dp))
-        Text(
-            text = title,
-            maxLines = 1,
-            style = MaterialTheme.typography.labelMedium
-        )
     }
 }
 
@@ -495,12 +412,6 @@ private fun NoticeRow(notice: StudentNotice) {
         }
     }
 }
-
-private data class Metric(
-    val label: String,
-    val value: String,
-    val footnote: String
-)
 
 private data class FocusPlanItem(
     val title: String,

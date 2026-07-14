@@ -1,8 +1,13 @@
 package edu.bnbu.student.mvp.feature.scoring
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,12 +17,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.Icon
@@ -40,10 +43,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import edu.bnbu.student.mvp.core.data.ApiStudentRepository
 import edu.bnbu.student.mvp.core.designsystem.ActionButton
+import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
 import edu.bnbu.student.mvp.core.designsystem.StatusBadge
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.designsystem.ValidationPanel
+import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.model.EnduranceConversionRequest
 import edu.bnbu.student.mvp.core.model.EnduranceScoreResult
 import edu.bnbu.student.mvp.core.model.StudentProfile
@@ -130,7 +135,7 @@ fun EnduranceScoringScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp)
-                .clickable(onClick = handleBack),
+                .bnbuClickable(onClick = handleBack),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
@@ -246,27 +251,41 @@ fun EnduranceScoringScreen(
         }
 
         // Error
-        errorMessage?.let { msg ->
-            Spacer(Modifier.height(12.dp))
-            ValidationPanel(message = msg)
+        AnimatedVisibility(
+            visible = errorMessage != null,
+            enter = expandVertically(tween(BNBUMotion.Standard)) + fadeIn(tween(BNBUMotion.Standard)),
+            exit = shrinkVertically(tween(BNBUMotion.Standard)) + fadeOut(tween(BNBUMotion.Quick))
+        ) {
+            errorMessage?.let { msg ->
+                Column {
+                    Spacer(Modifier.height(12.dp))
+                    ValidationPanel(message = msg)
+                }
+            }
         }
 
         // Result
-        result?.let { score ->
-            Spacer(Modifier.height(16.dp))
-            SectionTitle(eyebrow = "Result", title = "换算结果")
+        AnimatedVisibility(
+            visible = result != null,
+            enter = expandVertically(tween(BNBUMotion.Emphasized)) + fadeIn(tween(BNBUMotion.Standard)),
+            exit = shrinkVertically(tween(BNBUMotion.Standard)) + fadeOut(tween(BNBUMotion.Quick))
+        ) {
+            result?.let { score ->
+                Column {
+                    Spacer(Modifier.height(16.dp))
+                    SectionTitle(eyebrow = "Result", title = "换算结果")
 
-            Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(8.dp))
 
-            val scoreColor = when (score.tier) {
-                "excellent" -> cs.primary
-                "good" -> Color(0xFF4CAF50)
-                "pass" -> cs.secondary
-                "fail" -> cs.error
-                else -> cs.onSurfaceVariant
-            }
+                    val scoreColor = when (score.tier) {
+                        "excellent" -> cs.primary
+                        "good" -> Color(0xFF4CAF50)
+                        "pass" -> cs.secondary
+                        "fail" -> cs.error
+                        else -> cs.onSurfaceVariant
+                    }
 
-            SwissPanel {
+                    SwissPanel {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -320,6 +339,8 @@ fun EnduranceScoringScreen(
                         color = cs.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall
                     )
+                }
+                    }
                 }
             }
         }

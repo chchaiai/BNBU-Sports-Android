@@ -1,8 +1,19 @@
 package edu.bnbu.student.mvp.feature.exemption
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +25,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.Add
@@ -33,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import edu.bnbu.student.mvp.core.data.ApiStudentRepository
 import edu.bnbu.student.mvp.core.designsystem.ActionButton
+import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
 import edu.bnbu.student.mvp.core.designsystem.SegmentedControl
@@ -49,6 +64,7 @@ import edu.bnbu.student.mvp.core.designsystem.StatusBadge
 import edu.bnbu.student.mvp.core.designsystem.StatusMessagePanel
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.designsystem.ValidationPanel
+import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.model.Exemption
 import edu.bnbu.student.mvp.core.model.ExemptionApplication
 import edu.bnbu.student.mvp.core.model.ExemptionType
@@ -56,13 +72,11 @@ import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
 import android.content.Context
 import android.content.Intent
-import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Environment
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Photo
@@ -73,7 +87,9 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.core.content.FileProvider
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private enum class ExemptionTab(val label: String) {
     MyApplications("我的申请"),
@@ -86,13 +102,15 @@ fun ExemptionScreen(
     initialApplicationId: String? = null,
     onBack: () -> Unit
 ) {
-    var selectedTab by remember { mutableStateOf(ExemptionTab.MyApplications) }
+    var selectedTab by rememberSaveable { mutableStateOf(ExemptionTab.MyApplications) }
     var exemptions by remember { mutableStateOf<List<Exemption>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var successMessage by remember { mutableStateOf<String?>(null) }
-    var selectedExemptionId by remember { mutableStateOf(initialApplicationId) }
+    var selectedExemptionId by rememberSaveable { mutableStateOf(initialApplicationId) }
     var resubmittingExemption by remember { mutableStateOf<Exemption?>(null) }
+    val applicationsListState = rememberLazyListState()
+    val formListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val cs = MaterialTheme.colorScheme
@@ -144,30 +162,67 @@ fun ExemptionScreen(
         }
     }
 
-    val selectedExemption = selectedExemptionId?.let { id -> exemptions.firstOrNull { it.id == id } }
-    if (selectedExemption != null) {
-        ExemptionDetail(
-            exemption = selectedExemption,
-            onBack = { selectedExemptionId = null },
-            onSupplement = {
-                resubmittingExemption = selectedExemption
-                selectedExemptionId = null
-                selectedTab = ExemptionTab.NewApplication
-            }
-        )
-        return
-    }
-
-    LazyColumn(
+    AnimatedContent(
+        targetState = selectedExemptionId,
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
+        transitionSpec = {
+            if (targetState != null) {
+                (fadeIn(tween(BNBUMotion.Standard)) +
+                    slideInHorizontally(tween(BNBUMotion.Standard)) { it / 10 }) togetherWith
+                    (fadeOut(tween(BNBUMotion.Quick)) +
+                        slideOutHorizontally(tween(BNBUMotion.Quick)) { -it / 14 })
+            } else {
+                (fadeIn(tween(BNBUMotion.Standard)) +
+                    slideInHorizontally(tween(BNBUMotion.Standard)) { -it / 10 }) togetherWith
+                    (fadeOut(tween(BNBUMotion.Quick)) +
+                        slideOutHorizontally(tween(BNBUMotion.Quick)) { it / 14 })
+            }
+        },
+        label = "exemption-detail-transition"
+    ) { targetId ->
+        val selectedExemption = targetId?.let { id -> exemptions.firstOrNull { it.id == id } }
+        if (selectedExemption != null) {
+            ExemptionDetail(
+                exemption = selectedExemption,
+                onBack = { selectedExemptionId = null },
+                onSupplement = {
+                    resubmittingExemption = selectedExemption
+                    selectedExemptionId = null
+                    selectedTab = ExemptionTab.NewApplication
+                }
+            )
+        } else {
+            AnimatedContent(
+                targetState = selectedTab,
+                modifier = Modifier.fillMaxWidth(),
+                transitionSpec = {
+                    val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                    (fadeIn(tween(BNBUMotion.Standard)) +
+                        slideInHorizontally(tween(BNBUMotion.Standard)) {
+                            direction * (it / 14)
+                        }) togetherWith
+                        (fadeOut(tween(BNBUMotion.Quick)) +
+                            slideOutHorizontally(tween(BNBUMotion.Standard)) {
+                                -direction * (it / 16)
+                            })
+                },
+                label = "exemption-tab-transition"
+            ) { animatedTab ->
+                LazyColumn(
+                    state = if (animatedTab == ExemptionTab.MyApplications) {
+                        applicationsListState
+                    } else {
+                        formListState
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
         item {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
-                    .clickable(onClick = handleBack),
+                    .bnbuClickable(onClick = handleBack),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
@@ -193,7 +248,7 @@ fun ExemptionScreen(
         item {
             SegmentedControl(
                 values = ExemptionTab.entries,
-                selected = selectedTab,
+                selected = animatedTab,
                 label = { it.label },
                 onSelected = { selectedTab = it }
             )
@@ -216,7 +271,7 @@ fun ExemptionScreen(
             }
         }
 
-        when (selectedTab) {
+        when (animatedTab) {
             ExemptionTab.MyApplications -> {
                 if (exemptions.isEmpty()) {
                     item {
@@ -226,10 +281,8 @@ fun ExemptionScreen(
                         )
                     }
                 } else {
-                    exemptions.forEach { exemption ->
-                        item {
-                            ExemptionCard(exemption = exemption, onClick = { selectedExemptionId = exemption.id })
-                        }
+                    items(items = exemptions, key = { it.id }) { exemption ->
+                        ExemptionCard(exemption = exemption, onClick = { selectedExemptionId = exemption.id })
                     }
                 }
             }
@@ -250,6 +303,9 @@ fun ExemptionScreen(
                 }
             }
         }
+                }
+            }
+        }
     }
 }
 
@@ -262,7 +318,7 @@ private fun ExemptionCard(exemption: Exemption, onClick: () -> Unit) {
         else -> cs.secondary
     }
 
-    SwissPanel(modifier = Modifier.clickable(onClick = onClick)) {
+    SwissPanel(modifier = Modifier.bnbuClickable(onClick = onClick)) {
         Row(verticalAlignment = Alignment.Top) {
             Icon(
                 imageVector = Icons.Filled.FitnessCenter,
@@ -372,7 +428,7 @@ private fun ExemptionDetail(
     ) {
         item {
             Row(
-                modifier = Modifier.fillMaxWidth().height(48.dp).clickable(onClick = onBack),
+                modifier = Modifier.fillMaxWidth().height(48.dp).bnbuClickable(onClick = onBack),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null, tint = cs.onSurface)
@@ -449,21 +505,31 @@ private fun ExemptionTypeSelector(
         ) {
             options.forEach { option ->
                 val isSelected = selected == option
+                val backgroundColor by animateColorAsState(
+                    targetValue = if (isSelected) cs.primaryContainer else cs.surfaceVariant,
+                    animationSpec = BNBUMotion.colorSpec,
+                    label = "exemption-type-background"
+                )
+                val contentColor by animateColorAsState(
+                    targetValue = if (isSelected) cs.onPrimaryContainer else cs.onSurfaceVariant,
+                    animationSpec = BNBUMotion.colorSpec,
+                    label = "exemption-type-content"
+                )
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .height(56.dp)
                         .background(
-                            if (isSelected) cs.primaryContainer else cs.surfaceVariant,
+                            backgroundColor,
                             MaterialTheme.shapes.small
                         )
-                        .clickable { onSelected(option) }
+                        .bnbuClickable { onSelected(option) }
                         .padding(horizontal = 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = option.label,
-                        color = cs.onSurface,
+                        color = contentColor,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
                     )
@@ -519,17 +585,22 @@ private fun NewExemptionForm(
             return@rememberLauncherForActivityResult
         }
         val selectedUris = uris.take(remaining)
-        val newAttachments = selectedUris.mapIndexed { offset, uri ->
-            context.takePersistableReadPermissionIfPossible(uri)
-            uri.toProofAttachment(context = context, index = proofAttachments.size + offset)
-        }
-        if (newAttachments.isNotEmpty()) {
-            proofAttachments = proofAttachments + newAttachments
-        }
-        attachmentNotice = when {
-            uris.isEmpty() -> null
-            uris.size > remaining -> "已添加 $remaining 个凭证，已达到上限。"
-            else -> "已添加 ${newAttachments.size} 个凭证。"
+        val startIndex = proofAttachments.size
+        scope.launch {
+            val newAttachments = withContext(Dispatchers.IO) {
+                selectedUris.mapIndexed { offset, uri ->
+                    context.takePersistableReadPermissionIfPossible(uri)
+                    uri.toProofAttachment(context = context, index = startIndex + offset)
+                }
+            }
+            if (newAttachments.isNotEmpty()) {
+                proofAttachments = proofAttachments + newAttachments
+            }
+            attachmentNotice = when {
+                uris.isEmpty() -> null
+                uris.size > remaining -> "已添加 $remaining 个凭证，已达到上限。"
+                else -> "已添加 ${newAttachments.size} 个凭证。"
+            }
         }
     }
 
@@ -557,7 +628,11 @@ private fun NewExemptionForm(
                 }
             )
 
-            if (selectedType.isCheckInExemption) {
+            AnimatedVisibility(
+                visible = selectedType.isCheckInExemption,
+                enter = expandVertically(tween(BNBUMotion.Standard)) + fadeIn(tween(BNBUMotion.Standard)),
+                exit = shrinkVertically(tween(BNBUMotion.Standard)) + fadeOut(tween(BNBUMotion.Quick))
+            ) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
                         text = "组织名称",
@@ -653,27 +728,36 @@ private fun NewExemptionForm(
                     )
                 }
 
-                attachmentNotice?.let { notice ->
-                    Text(
-                        text = notice,
-                        color = cs.primary,
-                        style = MaterialTheme.typography.labelMedium
-                    )
+                AnimatedVisibility(
+                    visible = attachmentNotice != null,
+                    enter = expandVertically(tween(BNBUMotion.Standard)) + fadeIn(tween(BNBUMotion.Standard)),
+                    exit = shrinkVertically(tween(BNBUMotion.Standard)) + fadeOut(tween(BNBUMotion.Quick))
+                ) {
+                    attachmentNotice?.let { notice ->
+                        Text(
+                            text = notice,
+                            color = cs.primary,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
                 }
 
                 // Display current attachments
-                if (proofAttachments.isEmpty()) {
-                    Text(
-                        text = if (selectedType.isCheckInExemption) {
-                            "请上传能够证明校队或社团身份的材料。"
-                        } else {
-                            "证明材料为可选，可上传医院证明或诊断书。"
-                        },
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier.animateContentSize(tween(BNBUMotion.Standard)),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (proofAttachments.isEmpty()) {
+                        Text(
+                            text = if (selectedType.isCheckInExemption) {
+                                "请上传能够证明校队或社团身份的材料。"
+                            } else {
+                                "证明材料为可选，可上传医院证明或诊断书。"
+                            },
+                            color = cs.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    } else {
                         proofAttachments.forEach { attachment ->
                             ExemptionProofAttachmentRow(
                                 attachment = attachment,
@@ -682,9 +766,9 @@ private fun NewExemptionForm(
                                 }
                             )
                         }
+                        }
                     }
                 }
-            }
 
             ActionButton(
                 title = if (isSubmitting) "提交中..." else if (initialExemption != null) "提交补充材料" else "提交申请",
@@ -781,7 +865,7 @@ private fun ExemptionProofAttachmentRow(
         Box(
             modifier = Modifier
                 .size(32.dp)
-                .clickable(onClick = onRemove),
+                .bnbuClickable(onClick = onRemove),
             contentAlignment = Alignment.Center
         ) {
             Icon(

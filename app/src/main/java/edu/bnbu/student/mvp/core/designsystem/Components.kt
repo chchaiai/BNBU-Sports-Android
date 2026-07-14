@@ -1,9 +1,10 @@
 package edu.bnbu.student.mvp.core.designsystem
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,11 +12,14 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
@@ -30,17 +34,26 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import edu.bnbu.student.mvp.R
 
 // ═══════════════════════════════════════════════════════════════
 //  GridBackground — subtle dot-grid in M3 surfaceVariant tone
@@ -89,67 +102,85 @@ fun SwissPanel(
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
-        Column(modifier = Modifier.padding(18.dp), content = content)
+        Column(modifier = Modifier.padding(16.dp), content = content)
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  BrandMark — BNBU brand identity (softened for M3)
+//  BrandMark — official BNBU emblem
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
 fun BrandMark(modifier: Modifier = Modifier, compact: Boolean = false) {
     val size = if (compact) 44.dp else 64.dp
-    val barWidth = if (compact) 7.dp else 10.dp
-    val barHeight = if (compact) 20.dp else 28.dp
-    val labelSize = if (compact) 9.sp else 12.sp
     val cs = MaterialTheme.colorScheme
 
-    Box(
+    Surface(
         modifier = modifier
-            .size(size)
-            .background(cs.surface, RoundedCornerShape(8.dp))
-            .border(1.5.dp, cs.outline, RoundedCornerShape(8.dp)),
-        contentAlignment = Alignment.Center
+            .size(size),
+        shape = MaterialTheme.shapes.medium,
+        color = Color.White,
+        border = BorderStroke(1.dp, cs.outlineVariant.copy(alpha = 0.55f)),
+        shadowElevation = if (compact) 0.dp else 1.dp
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Box(Modifier.width(barWidth).height(barHeight).background(cs.onSurface))
-                Box(Modifier.width(barWidth).height(barHeight).background(cs.primary))
-                Box(Modifier.width(barWidth).height(barHeight).background(cs.onSurface))
-            }
-            Spacer(Modifier.height(if (compact) 3.dp else 6.dp))
+        Image(
+            painter = painterResource(R.drawable.bnbu_emblem),
+            contentDescription = "BNBU 校徽",
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(if (compact) 5.dp else 7.dp)
+        )
+    }
+}
+
+@Composable
+fun UniversityBrandLockup(modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        BrandMark(compact = true)
+        Spacer(Modifier.width(12.dp))
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
             Text(
-                text = "BNBU",
+                text = "北师香港浸会大学",
                 color = cs.onSurface,
-                fontSize = labelSize,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "BNBU · STUDENT SPORTS",
+                color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+                letterSpacing = 0.6.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  SectionTitle — M3-flavored two-line heading
+//  SectionTitle — concise, single-line section heading
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
-fun SectionTitle(eyebrow: String, title: String, modifier: Modifier = Modifier) {
+@Suppress("UNUSED_PARAMETER")
+fun SectionTitle(title: String, modifier: Modifier = Modifier, eyebrow: String = "") {
     val cs = MaterialTheme.colorScheme
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            text = eyebrow.uppercase(),
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1
-        )
-        Text(
-            text = title,
-            color = cs.onSurface,
-            style = MaterialTheme.typography.headlineSmall
-        )
-    }
+    // Keep the legacy eyebrow argument while call sites migrate, but avoid
+    // repeating English labels above an already descriptive Chinese title.
+    Text(
+        text = title,
+        modifier = modifier.fillMaxWidth(),
+        color = cs.onSurface,
+        style = MaterialTheme.typography.headlineSmall
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -162,8 +193,16 @@ fun SectionTitle(eyebrow: String, title: String, modifier: Modifier = Modifier) 
 @Composable
 fun StatusBadge(text: String, modifier: Modifier = Modifier, filled: Boolean = false) {
     val cs = MaterialTheme.colorScheme
-    val bg = if (filled) cs.primaryContainer else cs.surfaceVariant
-    val fg = if (filled) cs.onPrimaryContainer else cs.onSurfaceVariant
+    val bg by animateColorAsState(
+        targetValue = if (filled) cs.primaryContainer else cs.surfaceVariant,
+        animationSpec = BNBUMotion.colorSpec,
+        label = "statusBadgeBackground"
+    )
+    val fg by animateColorAsState(
+        targetValue = if (filled) cs.onPrimaryContainer else cs.onSurfaceVariant,
+        animationSpec = BNBUMotion.colorSpec,
+        label = "statusBadgeContent"
+    )
 
     Surface(
         modifier = modifier,
@@ -189,6 +228,11 @@ fun StatusBadge(text: String, modifier: Modifier = Modifier, filled: Boolean = f
 fun HourProgressBar(value: Double, total: Double, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     val progress = if (total <= 0.0) 0f else (value / total).toFloat().coerceIn(0f, 1f)
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress,
+        animationSpec = BNBUMotion.progressSpec,
+        label = "hourProgress"
+    )
 
     Box(
         modifier = modifier
@@ -198,9 +242,13 @@ fun HourProgressBar(value: Double, total: Double, modifier: Modifier = Modifier)
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth(progress.toFloat())
+                .fillMaxWidth()
                 .height(12.dp)
                 .background(cs.primary, MaterialTheme.shapes.small)
+                .graphicsLayer {
+                    transformOrigin = TransformOrigin(0f, 0.5f)
+                    scaleX = animatedProgress
+                }
         )
     }
 }
@@ -246,14 +294,37 @@ fun PrimaryActionButton(
     title: String,
     icon: ImageVector,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    loading: Boolean = false,
     onClick: () -> Unit
 ) {
+    val cs = MaterialTheme.colorScheme
+    val interactionSource = remember { MutableInteractionSource() }
     Button(
         onClick = onClick,
-        modifier = modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.extraLarge
+        modifier = modifier
+            .fillMaxWidth()
+            .pressScale(
+                interactionSource = interactionSource,
+                enabled = enabled && !loading
+            ),
+        enabled = enabled && !loading,
+        interactionSource = interactionSource,
+        shape = MaterialTheme.shapes.extraLarge,
+        colors = ButtonDefaults.buttonColors(
+            disabledContainerColor = if (loading) cs.primary.copy(alpha = 0.58f) else cs.surfaceVariant,
+            disabledContentColor = if (loading) cs.onPrimary else cs.onSurfaceVariant
+        )
     ) {
-        Icon(imageVector = icon, contentDescription = title, modifier = Modifier.size(20.dp))
+        if (loading) {
+            androidx.compose.material3.CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                color = cs.onPrimary,
+                strokeWidth = 2.dp
+            )
+        } else {
+            Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp))
+        }
         Spacer(Modifier.width(8.dp))
         Text(text = title)
     }
@@ -274,27 +345,55 @@ fun <T> SegmentedControl(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .selectableGroup()
             .background(cs.surfaceVariant, MaterialTheme.shapes.small)
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         values.forEach { value ->
             val isSelected = value == selected
+            val backgroundColor by animateColorAsState(
+                targetValue = if (isSelected) cs.primaryContainer else Color.Transparent,
+                animationSpec = BNBUMotion.colorSpec,
+                label = "segmentBackground"
+            )
+            val contentColor by animateColorAsState(
+                targetValue = if (isSelected) cs.onPrimaryContainer else cs.onSurfaceVariant,
+                animationSpec = BNBUMotion.colorSpec,
+                label = "segmentContent"
+            )
+            val scale by animateFloatAsState(
+                targetValue = if (isSelected) 1f else 0.97f,
+                animationSpec = androidx.compose.animation.core.spring(
+                    dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+                ),
+                label = "segmentScale"
+            )
             Box(
                 modifier = Modifier
                     .weight(1f)
+                    .heightIn(min = 48.dp)
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                    }
                     .background(
-                        if (isSelected) cs.surface else Color.Transparent,
+                        backgroundColor,
                         MaterialTheme.shapes.small
                     )
-                    .clickable { onSelected(value) }
-                    .padding(vertical = 10.dp),
+                    .selectable(
+                        selected = isSelected,
+                        role = Role.Tab,
+                        onClick = { onSelected(value) }
+                    )
+                    .padding(horizontal = 8.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = label(value),
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (isSelected) cs.onSurface else cs.onSurfaceVariant,
+                    color = contentColor,
                     maxLines = 1
                 )
             }
@@ -317,23 +416,29 @@ fun ActionButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val animatedModifier = modifier
+        .fillMaxWidth()
+        .pressScale(interactionSource = interactionSource)
     if (filled) {
         FilledTonalButton(
             onClick = onClick,
-            modifier = modifier.fillMaxWidth(),
+            modifier = animatedModifier,
+            interactionSource = interactionSource,
             shape = MaterialTheme.shapes.large
         ) {
-            Icon(imageVector = icon, contentDescription = title, modifier = Modifier.size(18.dp))
+            Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text(text = title, maxLines = 1)
         }
     } else {
         OutlinedButton(
             onClick = onClick,
-            modifier = modifier.fillMaxWidth(),
+            modifier = animatedModifier,
+            interactionSource = interactionSource,
             shape = MaterialTheme.shapes.large
         ) {
-            Icon(imageVector = icon, contentDescription = title, modifier = Modifier.size(18.dp))
+            Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text(text = title, maxLines = 1)
         }

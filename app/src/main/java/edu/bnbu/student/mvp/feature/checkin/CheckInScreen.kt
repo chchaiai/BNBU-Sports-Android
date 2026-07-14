@@ -10,9 +10,25 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,13 +70,24 @@ import androidx.compose.material.icons.filled.SportsTennis
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,6 +99,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -80,6 +108,7 @@ import coil3.compose.SubcomposeAsyncImage
 import coil3.request.ImageRequest
 import coil3.video.VideoFrameDecoder
 import edu.bnbu.student.mvp.core.designsystem.ActionButton
+import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
 import edu.bnbu.student.mvp.core.designsystem.SegmentedControl
@@ -87,6 +116,8 @@ import edu.bnbu.student.mvp.core.designsystem.StatusBadge
 import edu.bnbu.student.mvp.core.designsystem.StatusMessagePanel
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.designsystem.ValidationPanel
+import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
+import edu.bnbu.student.mvp.core.designsystem.pressScale
 import edu.bnbu.student.mvp.core.model.CheckInRecord
 import edu.bnbu.student.mvp.core.model.Course
 import edu.bnbu.student.mvp.core.model.CourseTask
@@ -98,7 +129,12 @@ import edu.bnbu.student.mvp.core.model.TaskStatus
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import java.io.File
+import java.time.LocalDate
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private enum class CheckInSegment(val label: String) {
     Submit("提交"),
@@ -132,38 +168,153 @@ fun CheckInScreen(appState: StudentAppState) {
             .components { add(VideoFrameDecoder.Factory()) }
             .build()
     }
-    val listState = rememberLazyListState()
-    var selectedSegment by remember { mutableStateOf(CheckInSegment.Submit) }
-    var selectedRecordId by remember { mutableStateOf<String?>(null) }
-    var hours by remember { mutableStateOf(1.0) }
-    var note by remember { mutableStateOf("") }
-    var selectedSportType by remember { mutableStateOf<String?>(null) }
-    var customSportType by remember { mutableStateOf("") }
-    var proofAttachments by remember { mutableStateOf<List<ProofAttachment>>(emptyList()) }
-    var statusMessage by remember { mutableStateOf<String?>(null) }
-
-    val selectedRecord = selectedRecordId?.let { id ->
-        appState.workspace.records.firstOrNull { it.id == id }
+    val submitListState = rememberLazyListState()
+    val recordsListState = rememberLazyListState()
+    val initialDraft = appState.draft?.takeIf { it.taskId == appState.selfCheckInTask.id }
+    var selectedSegment by rememberSaveable { mutableStateOf(CheckInSegment.Submit) }
+    var selectedRecordId by rememberSaveable { mutableStateOf<String?>(null) }
+    var hours by rememberSaveable { mutableDoubleStateOf(initialDraft?.hours ?: 1.0) }
+    var note by rememberSaveable { mutableStateOf(initialDraft?.note.orEmpty()) }
+    var selectedSportType by rememberSaveable { mutableStateOf(initialDraft?.sportType) }
+    var customSportType by rememberSaveable { mutableStateOf(initialDraft?.customSportType.orEmpty()) }
+    var proofAttachments by remember {
+        mutableStateOf(initialDraft?.proofAttachments.orEmpty())
     }
-    if (selectedRecord != null) {
-        BackHandler { selectedRecordId = null }
-        CheckInRecordDetail(
-            record = selectedRecord,
-            imageLoader = imageLoader,
-            onBack = { selectedRecordId = null }
-        )
-        return
-    }
+    var statusMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var submitRequestVersion by remember { mutableIntStateOf(0) }
+    var isSubmitting by remember { mutableStateOf(false) }
+    val submitInteractionSource = remember { MutableInteractionSource() }
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+    val selectedTask = appState.selfCheckInTask
+    val maxHours = appState.hourLimitFor(selectedTask)
+    val today = LocalDate.now()
+    val hasSubmittedToday = remember(appState.workspace.records, today) {
+        appState.hasSubmittedCheckInToday(today)
+    }
+    val validationMessage = remember(
+        selectedTask,
+        hasSubmittedToday,
+        hours,
+        maxHours,
+        proofAttachments,
+        selectedSportType,
+        customSportType
     ) {
+        submitValidationMessage(
+            selectedTask = selectedTask,
+            hasSubmittedToday = hasSubmittedToday,
+            hours = hours,
+            maxHours = maxHours,
+            existingProofs = emptyList(),
+            newProofs = proofAttachments,
+            totalProofCount = proofAttachments.size,
+            customSportTypeMissing = selectedSportType == OtherSportType && customSportType.isBlank()
+        )
+    }
+
+    val latestHours by rememberUpdatedState(hours)
+    val latestNote by rememberUpdatedState(note)
+    val latestSportType by rememberUpdatedState(selectedSportType)
+    val latestCustomSportType by rememberUpdatedState(customSportType)
+    val latestProofs by rememberUpdatedState(proofAttachments)
+    DisposableEffect(appState) {
+        onDispose {
+            val hasUserInput = latestHours != 1.0 || latestNote.isNotBlank() ||
+                latestSportType != null || latestCustomSportType.isNotBlank() || latestProofs.isNotEmpty()
+            if (hasUserInput) {
+                appState.saveDraft(
+                    taskId = selectedTask.id,
+                    hours = latestHours,
+                    note = latestNote,
+                    sportType = latestSportType,
+                    customSportType = latestCustomSportType,
+                    proofAttachments = latestProofs
+                )
+            }
+        }
+    }
+
+    val selectedRecord = remember(selectedRecordId, appState.workspace.records) {
+        selectedRecordId?.let { id ->
+            appState.workspace.records.firstOrNull { it.id == id }
+        }
+    }
+    AnimatedContent(
+        targetState = selectedRecord,
+        modifier = Modifier.fillMaxSize(),
+        contentKey = { record -> record?.id ?: "record-list" },
+        transitionSpec = {
+            val animationSpec = tween<IntOffset>(
+                durationMillis = BNBUMotion.Standard,
+                easing = FastOutSlowInEasing
+            )
+            if (targetState != null) {
+                (slideInHorizontally(animationSpec) { width -> width / 8 } +
+                    fadeIn(tween(BNBUMotion.Standard))) togetherWith
+                    (slideOutHorizontally(animationSpec) { width -> -width / 12 } +
+                        fadeOut(tween(BNBUMotion.Quick)))
+            } else {
+                (slideInHorizontally(animationSpec) { width -> -width / 8 } +
+                    fadeIn(tween(BNBUMotion.Standard))) togetherWith
+                    (slideOutHorizontally(animationSpec) { width -> width / 12 } +
+                        fadeOut(tween(BNBUMotion.Quick)))
+            }
+        },
+        label = "checkInRecordDetail"
+    ) { animatedRecord ->
+        if (animatedRecord != null) {
+            BackHandler { selectedRecordId = null }
+            CheckInRecordDetail(
+                record = animatedRecord,
+                imageLoader = imageLoader,
+                onBack = { selectedRecordId = null }
+            )
+        } else {
+            val bottomContentPadding by animateDpAsState(
+                targetValue = if (selectedSegment == CheckInSegment.Submit) 104.dp else 0.dp,
+                animationSpec = tween(
+                    durationMillis = BNBUMotion.Standard,
+                    easing = FastOutSlowInEasing
+                ),
+                label = "checkInBottomPadding"
+            )
+            Box(modifier = Modifier.fillMaxSize()) {
+                AnimatedContent(
+                    targetState = selectedSegment,
+                    modifier = Modifier.fillMaxSize(),
+                    transitionSpec = {
+                        val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                        (fadeIn(tween(BNBUMotion.Standard)) +
+                            slideInHorizontally(tween(BNBUMotion.Standard)) {
+                                direction * (it / 14)
+                            }) togetherWith
+                            (fadeOut(tween(BNBUMotion.Quick)) +
+                                slideOutHorizontally(tween(BNBUMotion.Standard)) {
+                                    -direction * (it / 16)
+                                })
+                    },
+                    label = "checkInSegment"
+                ) { animatedSegment ->
+                    LazyColumn(
+                        state = if (animatedSegment == CheckInSegment.Submit) {
+                            submitListState
+                        } else {
+                            recordsListState
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            bottom = if (animatedSegment == CheckInSegment.Submit) {
+                                bottomContentPadding
+                            } else {
+                                0.dp
+                            }
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
         item {
             SegmentedControl(
                 values = CheckInSegment.entries,
-                selected = selectedSegment,
+                selected = animatedSegment,
                 label = { it.label },
                 onSelected = { selectedSegment = it }
             )
@@ -178,7 +329,7 @@ fun CheckInScreen(appState: StudentAppState) {
             }
         }
 
-        when (selectedSegment) {
+        when (animatedSegment) {
             CheckInSegment.Submit -> {
                 item {
                     SubmitShell(
@@ -196,9 +347,15 @@ fun CheckInScreen(appState: StudentAppState) {
                         },
                         onCustomSportTypeChanged = { customSportType = it },
                         onProofAttachmentsChanged = { proofAttachments = it },
+                        validationMessage = validationMessage,
+                        submitRequestVersion = submitRequestVersion,
+                        onSubmitRequestHandled = { submitRequestVersion = 0 },
+                        isSubmitting = isSubmitting,
+                        onSubmittingChanged = { isSubmitting = it },
                         onSubmitComplete = { message ->
                             statusMessage = message
                             selectedSegment = CheckInSegment.Records
+                            hours = 1.0
                             note = ""
                             selectedSportType = null
                             customSportType = ""
@@ -232,6 +389,74 @@ fun CheckInScreen(appState: StudentAppState) {
                 }
             }
         }
+                    }
+                }
+
+        AnimatedVisibility(
+            visible = selectedSegment == CheckInSegment.Submit,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = slideInVertically(
+                animationSpec = tween(
+                    durationMillis = BNBUMotion.Standard,
+                    easing = FastOutSlowInEasing
+                ),
+                initialOffsetY = { height -> height / 2 }
+            ) + fadeIn(tween(BNBUMotion.Standard)),
+            exit = slideOutVertically(
+                animationSpec = tween(
+                    durationMillis = BNBUMotion.Standard,
+                    easing = FastOutSlowInEasing
+                ),
+                targetOffsetY = { height -> height / 2 }
+            ) + fadeOut(tween(BNBUMotion.Quick))
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 4.dp,
+                shadowElevation = 3.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = if (validationMessage == null) {
+                            "信息已完整，可以提交"
+                        } else {
+                            validationMessage
+                        },
+                        modifier = Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2
+                    )
+                    Button(
+                        onClick = { submitRequestVersion += 1 },
+                        enabled = validationMessage == null && !isSubmitting,
+                        interactionSource = submitInteractionSource,
+                        modifier = Modifier.pressScale(
+                            interactionSource = submitInteractionSource,
+                            enabled = validationMessage == null && !isSubmitting
+                        )
+                    ) {
+                        if (isSubmitting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(if (isSubmitting) "提交中" else "提交打卡")
+                    }
+                }
+            }
+        }
+            }
+        }
     }
 }
 
@@ -255,6 +480,11 @@ private fun SubmitShell(
     onSportTypeSelected: (String?) -> Unit,
     onCustomSportTypeChanged: (String) -> Unit,
     onProofAttachmentsChanged: (List<ProofAttachment>) -> Unit,
+    validationMessage: String?,
+    submitRequestVersion: Int,
+    onSubmitRequestHandled: () -> Unit,
+    isSubmitting: Boolean,
+    onSubmittingChanged: (Boolean) -> Unit,
     onSubmitComplete: (String) -> Unit
 ) {
     val selectedTask = appState.selfCheckInTask
@@ -265,19 +495,17 @@ private fun SubmitShell(
         OtherSportType -> customSportType.trim().takeIf { it.isNotEmpty() }
         else -> selectedSportType
     }
-    val validationMessage = submitValidationMessage(
-        selectedTask = selectedTask,
-        hasSubmittedToday = appState.hasSubmittedCheckInToday(),
-        hours = hours,
-        maxHours = maxHours,
-        existingProofs = existingProofs,
-        newProofs = proofAttachments,
-        totalProofCount = totalProofCount,
-        customSportTypeMissing = selectedSportType == OtherSportType && customSportType.isBlank()
-    )
     var showConfirm by remember { mutableStateOf(false) }
-    var isSubmitting by remember { mutableStateOf(false) }
     var submitError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(submitRequestVersion) {
+        if (submitRequestVersion > 0) {
+            if (validationMessage == null && !isSubmitting) {
+                showConfirm = true
+            }
+            onSubmitRequestHandled()
+        }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         SectionTitle(eyebrow = "Submit", title = "提交打卡")
@@ -319,9 +547,6 @@ private fun SubmitShell(
                 onProofAttachmentsChanged = onProofAttachmentsChanged
             )
 
-            validationMessage?.let {
-                ValidationPanel(message = it)
-            }
             submitError?.let {
                 ValidationPanel(message = it)
             }
@@ -334,7 +559,7 @@ private fun SubmitShell(
                     onCancel = { showConfirm = false },
                     onConfirm = {
                         showConfirm = false
-                        isSubmitting = true
+                        onSubmittingChanged(true)
                         submitError = null
                         appState.submitCheckIn(
                                 task = selectedTask,
@@ -343,7 +568,7 @@ private fun SubmitShell(
                                 sportType = resolvedSportType,
                                 proofAttachments = proofAttachments,
                                 onResult = { result ->
-                                    isSubmitting = false
+                                    onSubmittingChanged(false)
                                     result.fold(
                                         onSuccess = {
                                             onSubmitComplete("打卡已记录，可在打卡记录中查看。")
@@ -358,39 +583,21 @@ private fun SubmitShell(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ActionButton(
-                        title = "保存草稿",
-                        icon = Icons.Filled.Save,
-                        filled = false,
-                        modifier = Modifier.weight(1f),
-                        onClick = {
-                            appState.saveDraft(
-                                taskId = selectedTask.id,
-                                hours = hours,
-                                note = note,
-                                sportType = selectedSportType,
-                                customSportType = customSportType,
-                                proofAttachments = proofAttachments
-                            )
-                        }
+            ActionButton(
+                title = "保存草稿",
+                icon = Icons.Filled.Save,
+                filled = false,
+                onClick = {
+                    appState.saveDraft(
+                        taskId = selectedTask.id,
+                        hours = hours,
+                        note = note,
+                        sportType = selectedSportType,
+                        customSportType = customSportType,
+                        proofAttachments = proofAttachments
                     )
-                ActionButton(
-                    title = if (isSubmitting) {
-                        "提交中..."
-                    } else {
-                        "提交打卡"
-                    },
-                    icon = Icons.Filled.UploadFile,
-                    filled = validationMessage == null,
-                    modifier = Modifier.weight(1f),
-                    onClick = {
-                        if (validationMessage == null && !isSubmitting) {
-                            showConfirm = true
-                        }
-                    }
-                )
-            }
+                }
+            )
         }
     }
 }
@@ -570,6 +777,9 @@ private fun SportTypeSelector(
     onCustomValueChanged: (String) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
+    var showAll by rememberSaveable {
+        mutableStateOf(selectedValue in SportTypeOptions.drop(4).map { it.value })
+    }
     Text(
         text = "运动项目（可选）",
         color = cs.onSurface,
@@ -583,76 +793,151 @@ private fun SportTypeSelector(
     )
     Spacer(Modifier.height(10.dp))
 
-    SportTypeOptions.chunked(2).forEachIndexed { rowIndex, rowOptions ->
-        if (rowIndex > 0) Spacer(Modifier.height(10.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            rowOptions.forEach { option ->
-                val selected = selectedValue == option.value
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(58.dp)
-                        .background(
-                            color = if (selected) cs.primaryContainer else cs.surfaceVariant,
-                            shape = MaterialTheme.shapes.small
-                        )
-                        .clickable {
-                            onSelected(if (selected) null else option.value)
-                        }
-                        .padding(horizontal = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Icon(
-                        imageVector = option.icon,
-                        contentDescription = null,
-                        tint = if (selected) cs.primary else cs.onSurfaceVariant,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Text(
-                        text = option.label,
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
-                    )
-                }
-            }
-            if (rowOptions.size == 1) Spacer(Modifier.weight(1f))
+    val keepExpandedForSelection = selectedValue in SportTypeOptions.drop(4).map { it.value }
+    SportTypeOptionRows(
+        options = SportTypeOptions.take(4),
+        selectedValue = selectedValue,
+        onSelected = onSelected
+    )
+
+    AnimatedVisibility(
+        visible = showAll || keepExpandedForSelection,
+        enter = expandVertically(
+            animationSpec = tween(
+                durationMillis = BNBUMotion.Standard,
+                easing = FastOutSlowInEasing
+            )
+        ) + fadeIn(tween(BNBUMotion.Standard)),
+        exit = shrinkVertically(
+            animationSpec = tween(
+                durationMillis = BNBUMotion.Standard,
+                easing = FastOutSlowInEasing
+            )
+        ) + fadeOut(tween(BNBUMotion.Quick))
+    ) {
+        Column(modifier = Modifier.padding(top = 10.dp)) {
+            SportTypeOptionRows(
+                options = SportTypeOptions.drop(4),
+                selectedValue = selectedValue,
+                onSelected = onSelected
+            )
         }
     }
 
-    if (selectedValue == OtherSportType) {
-        Spacer(Modifier.height(10.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp)
-                .background(cs.surfaceVariant, MaterialTheme.shapes.small)
-                .padding(horizontal = 14.dp),
-            contentAlignment = Alignment.CenterStart
+    AnimatedVisibility(visible = !keepExpandedForSelection) {
+        TextButton(
+            onClick = { showAll = !showAll },
+            modifier = Modifier.fillMaxWidth()
         ) {
-            if (customValue.isBlank()) {
-                Text(
-                    text = "填写其他运动项目",
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium
+            Text(if (showAll) "收起运动项目" else "查看更多运动项目")
+        }
+    }
+
+    AnimatedVisibility(
+        visible = selectedValue == OtherSportType,
+        enter = expandVertically(
+            animationSpec = tween(
+                durationMillis = BNBUMotion.Standard,
+                easing = FastOutSlowInEasing
+            )
+        ) + fadeIn(tween(BNBUMotion.Standard)),
+        exit = shrinkVertically(
+            animationSpec = tween(
+                durationMillis = BNBUMotion.Standard,
+                easing = FastOutSlowInEasing
+            )
+        ) + fadeOut(tween(BNBUMotion.Quick))
+    ) {
+        Column {
+            Spacer(Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .background(cs.surfaceVariant, MaterialTheme.shapes.small)
+                    .padding(horizontal = 14.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                if (customValue.isBlank()) {
+                    Text(
+                        text = "填写其他运动项目",
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                BasicTextField(
+                    value = customValue,
+                    onValueChange = { onCustomValueChanged(it.take(32)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = cs.onSurface,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Normal
+                    ),
+                    cursorBrush = SolidColor(cs.primary)
                 )
             }
-            BasicTextField(
-                value = customValue,
-                onValueChange = { onCustomValueChanged(it.take(32)) },
+        }
+    }
+}
+
+@Composable
+private fun SportTypeOptionRows(
+    options: List<SportTypeOption>,
+    selectedValue: String?,
+    onSelected: (String?) -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        options.chunked(2).forEach { rowOptions ->
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                textStyle = TextStyle(
-                    color = cs.onSurface,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Normal
-                ),
-                cursorBrush = SolidColor(cs.primary)
-            )
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                rowOptions.forEach { option ->
+                    val selected = selectedValue == option.value
+                    val backgroundColor by animateColorAsState(
+                        targetValue = if (selected) cs.primaryContainer else cs.surfaceVariant,
+                        animationSpec = BNBUMotion.colorSpec,
+                        label = "sportTypeBackground"
+                    )
+                    val iconColor by animateColorAsState(
+                        targetValue = if (selected) cs.primary else cs.onSurfaceVariant,
+                        animationSpec = BNBUMotion.colorSpec,
+                        label = "sportTypeIcon"
+                    )
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(58.dp)
+                            .background(
+                                color = backgroundColor,
+                                shape = MaterialTheme.shapes.small
+                            )
+                            .bnbuClickable(onClickLabel = "选择${option.label}") {
+                                onSelected(if (selected) null else option.value)
+                            }
+                            .padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = option.icon,
+                            contentDescription = option.label,
+                            tint = iconColor,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = option.label,
+                            color = cs.onSurface,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                        )
+                    }
+                }
+                if (rowOptions.size == 1) Spacer(Modifier.weight(1f))
+            }
         }
     }
 }
@@ -673,6 +958,7 @@ private fun HoursControl(
     ) {
         SquareIconButton(
             icon = Icons.Filled.RemoveCircle,
+            contentDescription = "减少学时",
             enabled = value > 1.0,
             onClick = { onChange(value - 1.0) }
         )
@@ -681,12 +967,38 @@ private fun HoursControl(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text(
-                text = value.hourText(),
-                color = cs.onSurface,
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Medium
-            )
+            AnimatedContent(
+                targetState = value,
+                transitionSpec = {
+                    if (targetState > initialState) {
+                        (slideInVertically(
+                            animationSpec = tween(BNBUMotion.Standard),
+                            initialOffsetY = { height -> height / 2 }
+                        ) + fadeIn(tween(BNBUMotion.Standard))) togetherWith
+                            (slideOutVertically(
+                                animationSpec = tween(BNBUMotion.Quick),
+                                targetOffsetY = { height -> -height / 2 }
+                            ) + fadeOut(tween(BNBUMotion.Quick)))
+                    } else {
+                        (slideInVertically(
+                            animationSpec = tween(BNBUMotion.Standard),
+                            initialOffsetY = { height -> -height / 2 }
+                        ) + fadeIn(tween(BNBUMotion.Standard))) togetherWith
+                            (slideOutVertically(
+                                animationSpec = tween(BNBUMotion.Quick),
+                                targetOffsetY = { height -> height / 2 }
+                            ) + fadeOut(tween(BNBUMotion.Quick)))
+                    }
+                },
+                label = "checkInHours"
+            ) { animatedValue ->
+                Text(
+                    text = animatedValue.hourText(),
+                    color = cs.onSurface,
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
             Text(
                 text = "单次最多 ${maxHours.hourText()}",
                 color = cs.onSurfaceVariant,
@@ -695,6 +1007,7 @@ private fun HoursControl(
         }
         SquareIconButton(
             icon = Icons.Filled.AddCircle,
+            contentDescription = "增加学时",
             enabled = value < maxHours,
             onClick = { onChange(value + 1.0) }
         )
@@ -745,10 +1058,13 @@ private fun ProofAttachmentPanel(
     onProofAttachmentsChanged: (List<ProofAttachment>) -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val cs = MaterialTheme.colorScheme
     var attachmentNotice by remember { mutableStateOf<String?>(null) }
     var cameraTempUri by remember { mutableStateOf<Uri?>(null) }
     var cameraTempFile by remember { mutableStateOf<File?>(null) }
+    val latestProofAttachments by rememberUpdatedState(proofAttachments)
+    val latestExistingProofs by rememberUpdatedState(existingProofs)
     val currentProofs = existingProofs + proofAttachments
     val imageSlots = (ProofUploadRule.maxImageCount - currentProofs.count { it.type == ProofMediaType.Image })
         .coerceAtLeast(0)
@@ -788,19 +1104,36 @@ private fun ProofAttachmentPanel(
             return@rememberLauncherForActivityResult
         }
 
-        val pickedAttachments = uris.toPickedProofAttachments(
-            context = context,
-            startIndex = proofAttachments.size
-        )
-        val newAttachments = pickedAttachments.takeAllowedProofAttachments(currentProofs)
-        if (newAttachments.isNotEmpty()) {
-            onProofAttachmentsChanged(proofAttachments + newAttachments)
+        if (uris.isEmpty()) {
+            attachmentNotice = null
+            return@rememberLauncherForActivityResult
         }
-        attachmentNotice = when {
-            uris.isEmpty() -> null
-            newAttachments.isEmpty() -> "所选文件超过上传数量上限，未添加。"
-            newAttachments.size < pickedAttachments.size -> "已添加 ${newAttachments.size} 个凭证，超出数量上限的文件已跳过。"
-            else -> "已添加 ${newAttachments.size} 个本地凭证。"
+
+        attachmentNotice = "正在读取所选凭证…"
+        scope.launch {
+            val pickedAttachments = try {
+                withContext(Dispatchers.IO) {
+                    uris.toPickedProofAttachments(
+                        context = context,
+                        startIndex = proofAttachments.size
+                    )
+                }
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (_: Exception) {
+                attachmentNotice = "无法读取所选文件，请重新选择。"
+                return@launch
+            }
+            val proofsAtCompletion = latestExistingProofs + latestProofAttachments
+            val newAttachments = pickedAttachments.takeAllowedProofAttachments(proofsAtCompletion)
+            if (newAttachments.isNotEmpty()) {
+                onProofAttachmentsChanged(latestProofAttachments + newAttachments)
+            }
+            attachmentNotice = when {
+                newAttachments.isEmpty() -> "所选文件超过上传数量上限，未添加。"
+                newAttachments.size < pickedAttachments.size -> "已添加 ${newAttachments.size} 个凭证，超出数量上限的文件已跳过。"
+                else -> "已添加 ${newAttachments.size} 个本地凭证。"
+            }
         }
     }
 
@@ -949,7 +1282,12 @@ private fun ProofAttachmentRow(
                 style = MaterialTheme.typography.labelMedium
             )
         }
-        SquareIconButton(icon = Icons.Filled.Delete, enabled = true, onClick = onRemove)
+        SquareIconButton(
+            icon = Icons.Filled.Delete,
+            contentDescription = "删除凭证",
+            enabled = true,
+            onClick = onRemove
+        )
     }
 }
 
@@ -961,39 +1299,25 @@ private fun ConfirmSubmitPanel(
     onCancel: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    val cs = MaterialTheme.colorScheme
     val title = selectedTask?.title ?: "当前任务"
 
-    SwissPanel {
-        Text(
-            text = "确认提交",
-            color = cs.onSurface,
-            style = MaterialTheme.typography.titleMedium
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = "$title · ${hours.hourText()} · 新增 $proofCount 个凭证。确认后将提交并保存到打卡记录。",
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.bodySmall
-        )
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ActionButton(
-                title = "取消",
-                icon = Icons.Filled.Clear,
-                filled = false,
-                modifier = Modifier.weight(1f),
-                onClick = onCancel
-            )
-            ActionButton(
-                title = "确认提交",
-                icon = Icons.Filled.CheckCircle,
-                filled = true,
-                modifier = Modifier.weight(1f),
-                onClick = onConfirm
-            )
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("确认提交") },
+        text = {
+            Text("$title · ${hours.hourText()} · 新增 $proofCount 个凭证。确认后将提交并保存到打卡记录。")
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) {
+                Text("取消")
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("确认提交")
+            }
         }
-    }
+    )
 }
 
 @Composable
@@ -1063,7 +1387,7 @@ private fun TaskPickerRow(
                 if (selected) cs.primaryContainer else cs.surfaceVariant,
                 MaterialTheme.shapes.small
             )
-            .clickable(onClick = onClick)
+            .bnbuClickable(onClick = onClick)
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1170,7 +1494,7 @@ private fun RecordMediaGrid(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(96.dp)
-                    .clickable(onClick = onClick)
+                    .bnbuClickable(onClick = onClick)
             )
         }
         proofs.size == 1 -> {
@@ -1232,7 +1556,7 @@ private fun RecordMediaGrid(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .background(Color.Black.copy(alpha = 0.48f))
-                                    .clickable(onClick = onClick),
+                                    .bnbuClickable(onClick = onClick),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
@@ -1274,7 +1598,7 @@ private fun ProofThumbnail(
         modifier = modifier
             .clip(MaterialTheme.shapes.medium)
             .background(cs.surfaceVariant)
-            .clickable(onClick = onClick)
+            .bnbuClickable(onClick = onClick)
     ) {
         if (sourceAvailable) {
             SubcomposeAsyncImage(
@@ -1381,7 +1705,7 @@ private fun CheckInRecordDetail(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
-                    .clickable(onClick = onBack),
+                    .bnbuClickable(onClickLabel = "返回打卡记录", onClick = onBack),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
@@ -1482,23 +1806,24 @@ private fun Context.openProofInSystemApp(proof: ProofAttachment): String? {
 @Composable
 private fun SquareIconButton(
     icon: ImageVector,
+    contentDescription: String,
     enabled: Boolean,
     onClick: () -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
     Box(
         modifier = Modifier
-            .size(42.dp)
+            .size(48.dp)
             .background(
                 if (enabled) cs.primaryContainer else cs.surfaceVariant,
                 MaterialTheme.shapes.small
             )
-            .clickable(enabled = enabled, onClick = onClick),
+            .bnbuClickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = icon,
-            contentDescription = null,
+            contentDescription = contentDescription,
             tint = if (enabled) cs.onPrimaryContainer else cs.onSurfaceVariant,
             modifier = Modifier.size(20.dp)
         )
