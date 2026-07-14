@@ -66,11 +66,12 @@ class AndroidAppLocalStore(
                 encryptedPrefs.edit()
                     .putString(AuthTokenEncryptedKey, encrypted.value)
                     .putString(AuthTokenIvKey, encrypted.iv)
-                    .commit()
+                    .apply()
             } else {
                 // Fallback: plain SharedPreferences (cleared on logout)
-                preferences.edit().putString(AuthTokenKey, token).commit()
+                preferences.edit().putString(AuthTokenKey, token).apply()
             }
+            true
         } catch (_: RuntimeException) { false }
     }
 
@@ -91,7 +92,8 @@ class AndroidAppLocalStore(
 
     fun saveUserProfile(userProfileJson: String): Boolean {
         return try {
-            preferences.edit().putString(UserProfileKey, userProfileJson).commit()
+            preferences.edit().putString(UserProfileKey, userProfileJson).apply()
+            true
         } catch (_: RuntimeException) { false }
     }
 
@@ -101,7 +103,8 @@ class AndroidAppLocalStore(
 
     fun saveLastSyncTime(timestamp: String): Boolean {
         return try {
-            preferences.edit().putString(LastSyncKey, timestamp).commit()
+            preferences.edit().putString(LastSyncKey, timestamp).apply()
+            true
         } catch (_: RuntimeException) { false }
     }
 
@@ -115,7 +118,8 @@ class AndroidAppLocalStore(
 
     fun saveThemeMode(mode: AppThemeMode): Boolean {
         return try {
-            preferences.edit().putString(ThemeModeKey, mode.storageValue).commit()
+            preferences.edit().putString(ThemeModeKey, mode.storageValue).apply()
+            true
         } catch (_: RuntimeException) { false }
     }
 
@@ -258,7 +262,8 @@ class AndroidAppLocalStore(
 
     private fun save(key: String, value: Any): Boolean {
         return try {
-            preferences.edit().putString(key, gson.toJson(value)).commit()
+            preferences.edit().putString(key, gson.toJson(value)).apply()
+            true
         } catch (_: RuntimeException) {
             false
         }

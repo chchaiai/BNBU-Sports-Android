@@ -3,9 +3,12 @@ package edu.bnbu.student.mvp.feature.grades
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -13,9 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AssignmentTurnedIn
 import androidx.compose.material.icons.filled.BarChart
@@ -31,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -93,25 +94,42 @@ private fun TotalPanel(grades: GradeRow) {
 
 @Composable
 private fun ComponentGrid(components: List<GradeComponentSummary>) {
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(512.dp),
-        userScrollEnabled = false,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        items(components) { component ->
-            GradeComponentCard(component)
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val useSingleColumn = maxWidth < 320.dp || LocalDensity.current.fontScale >= 1.3f
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (useSingleColumn) {
+                components.forEach { component ->
+                    GradeComponentCard(component = component, modifier = Modifier.fillMaxWidth())
+                }
+            } else {
+                components.chunked(2).forEach { rowComponents ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(IntrinsicSize.Min),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        rowComponents.forEach { component ->
+                            GradeComponentCard(
+                                component = component,
+                                modifier = Modifier.weight(1f).fillMaxHeight()
+                            )
+                        }
+                        if (rowComponents.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun GradeComponentCard(component: GradeComponentSummary) {
+private fun GradeComponentCard(
+    component: GradeComponentSummary,
+    modifier: Modifier = Modifier
+) {
     val cs = MaterialTheme.colorScheme
-    SwissPanel {
+    SwissPanel(modifier = modifier) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(

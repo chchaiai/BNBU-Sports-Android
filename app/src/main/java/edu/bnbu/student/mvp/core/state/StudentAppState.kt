@@ -1,6 +1,7 @@
 package edu.bnbu.student.mvp.core.state
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import edu.bnbu.student.mvp.core.data.ApiStudentRepository
@@ -36,11 +37,16 @@ import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
-import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonParser
 
@@ -48,10 +54,38 @@ class StudentAppState(
     private val localStore: AndroidAppLocalStore? = null,
     var cacheDir: File? = null
 ) {
+    private data class InitialLocalState(
+        val workspace: StudentWorkspace? = null,
+        val draft: CheckInDraft? = null,
+        val lastSyncTimestamp: String? = null,
+        val authToken: String? = null,
+        val userProfileJson: String? = null
+    )
+
     private val gson = GsonBuilder().serializeNulls().create()
-    private val workspaceRead = localStore?.readWorkspace()
-    private val draftRead = localStore?.readDraft()
     private val job = kotlinx.coroutines.Job()
+    private val scope = CoroutineScope(Dispatchers.Main + job)
+    private val persistenceMutex = Mutex()
+    private var initialLocalStateApplied = false
+    private val initialLocalState = scope.async(Dispatchers.IO) {
+        persistenceMutex.withLock {
+            val store = localStore ?: return@withLock InitialLocalState()
+            try {
+                InitialLocalState(
+                    workspace = store.readWorkspace().value,
+                    draft = store.readDraft().value,
+                    lastSyncTimestamp = store.loadLastSyncTime(),
+                    authToken = store.loadAuthToken(),
+                    userProfileJson = store.loadUserProfileJson()
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                android.util.Log.w("StudentAppState", "load initial local state failed", error)
+                InitialLocalState()
+            }
+        }
+    }
 
     // ── State ─────────────────────────────────────────────────────
 
@@ -59,16 +93,14 @@ class StudentAppState(
         private set
 
     var workspace by mutableStateOf(
-        workspaceRead?.value ?: StudentWorkspace.empty()
+        StudentWorkspace.empty()
     )
         private set
 
     var isShowingCachedData by mutableStateOf(false)
         private set
 
-    var lastSyncTimestamp: String? by mutableStateOf(
-        localStore?.loadLastSyncTime()
-    )
+    var lastSyncTimestamp: String? by mutableStateOf(null)
         private set
 
     var draft by mutableStateOf<CheckInDraft?>(null)
@@ -89,7 +121,9 @@ class StudentAppState(
 
     fun updateThemeMode(mode: AppThemeMode) {
         themeMode = mode
-        localStore?.saveThemeMode(mode)
+        persist(event = "save theme mode") {
+            saveThemeMode(mode)
+        }
     }
 
     // ── API repository (set after successful login) ───────────────
@@ -97,22 +131,38 @@ class StudentAppState(
     var apiRepository: ApiStudentRepository? = null
         private set
 
-    private val scope = CoroutineScope(Dispatchers.Main + job)
-
     init {
-        if (workspace.syncOperations.isEmpty()) {
-            workspace = workspace.copy(syncOperations = listOf(localWorkspaceLoadedOperation()))
+        scope.launch {
+            ensureInitialLocalState()
         }
+    }
 
-        val savedDraft = draftRead?.value
+    private suspend fun ensureInitialLocalState(): InitialLocalState {
+        val loaded = initialLocalState.await()
+        if (initialLocalStateApplied) return loaded
+
+        initialLocalStateApplied = true
+        workspace = (loaded.workspace ?: StudentWorkspace.empty()).let { cachedWorkspace ->
+            if (cachedWorkspace.syncOperations.isEmpty()) {
+                cachedWorkspace.copy(syncOperations = listOf(localWorkspaceLoadedOperation()))
+            } else {
+                cachedWorkspace
+            }
+        }
+        lastSyncTimestamp = loaded.lastSyncTimestamp
+
+        val savedDraft = loaded.draft
         if (
             savedDraft != null &&
             (savedDraft.taskId == "self-general" || workspace.tasks.any { it.id == savedDraft.taskId && it.status == TaskStatus.Active })
         ) {
             draft = savedDraft
         } else if (savedDraft != null) {
-            localStore?.clearDraft()
+            persistUnit(event = "clear invalid saved draft") {
+                this.clearDraft()
+            }
         }
+        return loaded
     }
 
     // ── Computed properties ───────────────────────────────────────
@@ -138,27 +188,29 @@ class StudentAppState(
     val completionRatio: Double
         get() = if (hourRule.total <= 0.0) 0.0 else (totalCompleted / hourRule.total).coerceIn(0.0, 1.0)
 
-    val unreadNoticeCount: Int
-        get() = visibleNotices.count { it.isUnread }
+    val unreadNoticeCount by derivedStateOf {
+        visibleNotices.count { it.isUnread }
+    }
 
-    val visibleNotices: List<StudentNotice>
-        get() = workspace.notices.filter { it.isStudentVisible }
+    val visibleNotices by derivedStateOf {
+        workspace.notices.filter { it.isStudentVisible }
+    }
 
-    val activeTasks: List<CourseTask>
-        get() = workspace.tasks.filter { it.status == TaskStatus.Active }
+    val activeTasks by derivedStateOf {
+        workspace.tasks.filter { it.status == TaskStatus.Active }
+    }
 
-    val selfCheckInTask: CourseTask
-        get() = CourseTask(
-            id = "self-general",
-            courseId = "self-general",
-            creditType = CreditType.General,
-            title = "自主运动打卡",
-            hours = hourRule.dailyLimit,
-            deadline = "",
-            proof = ProofUploadRule.summaryText,
-            status = TaskStatus.Active,
-            updatedAt = ""
-        )
+    val selfCheckInTask = CourseTask(
+        id = "self-general",
+        courseId = "self-general",
+        creditType = CreditType.General,
+        title = "自主运动打卡",
+        hours = hourRule.dailyLimit,
+        deadline = "",
+        proof = ProofUploadRule.summaryText,
+        status = TaskStatus.Active,
+        updatedAt = ""
+    )
 
     // ── Auth (real API login only — no demo path) ─────────────────
 
@@ -180,6 +232,7 @@ class StudentAppState(
 
         scope.launch {
             try {
+                ensureInitialLocalState()
                 val repo = ApiStudentRepository()
                 val response = repo.login(StudentLoginRequest(account = account, password = password))
                 val client = StudentApiClient().withToken(response.token)
@@ -187,15 +240,21 @@ class StudentAppState(
                 apiRepository = apiRepo
 
                 // Persist token and user profile for session restore (AND-004)
-                localStore?.saveAuthToken(response.token)
-                localStore?.saveUserProfile(gson.toJson(response.user))
+                val authSaved = withLocalStoreOnIo(event = "save authenticated session") {
+                    val tokenSaved = saveAuthToken(response.token)
+                    val profileSaved = saveUserProfile(gson.toJson(response.user))
+                    tokenSaved && profileSaved
+                }
+                if (authSaved == false) {
+                    android.util.Log.w("StudentAppState", "save authenticated session failed")
+                }
 
                 // Fetch remote workspace
                 val remoteWorkspace = apiRepo.loadWorkspaceAsync()
                 workspace = remoteWorkspace
                 isAuthenticated = true
                 isShowingCachedData = false
-                saveWorkspace(event = "登录成功，工作台已同步")
+                saveWorkspaceNow(event = "登录成功，工作台已同步")
                 onResult(true)
             } catch (e: Exception) {
                 android.util.Log.e("StudentAppState", "Login failed", e)
@@ -218,14 +277,25 @@ class StudentAppState(
      * @return true if the session was restored successfully (fresh data from API).
      */
     fun tryRestoreSession(onResult: (Boolean) -> Unit = {}) {
-        val savedToken = localStore?.loadAuthToken() ?: run { onResult(false); return }
-        val savedUserJson = localStore?.loadUserProfileJson() ?: run { onResult(false); return }
+        if (localStore == null) {
+            onResult(false)
+            return
+        }
         if (isLoading) return
         isLoading = true
         lastError = null
         scope.launch {
             try {
-                val user = gson.fromJson(savedUserJson, UserDto::class.java)
+                val loaded = ensureInitialLocalState()
+                val savedToken = loaded.authToken
+                val savedUserJson = loaded.userProfileJson
+                if (savedToken == null || savedUserJson == null) {
+                    onResult(false)
+                    return@launch
+                }
+                val user = withContext(Dispatchers.IO) {
+                    gson.fromJson(savedUserJson, UserDto::class.java)
+                }
                 val client = StudentApiClient().withToken(savedToken)
                 val apiRepo = ApiStudentRepository(apiClient = client, userProfile = user)
                 apiRepository = apiRepo
@@ -233,14 +303,15 @@ class StudentAppState(
                 workspace = remoteWorkspace
                 isAuthenticated = true
                 isShowingCachedData = false
-                recordSyncTime()
-                saveWorkspace(event = "会话已恢复")
+                saveWorkspaceNow(event = "会话已恢复")
                 onResult(true)
             } catch (e: Exception) {
                 val msg = e.message.orEmpty()
                 if (msg.contains("401") || msg.contains("403")) {
                     // Token expired or revoked — clear auth, show login
-                    localStore?.clearAuth()
+                    withLocalStoreOnIo(event = "clear expired session") {
+                        this.clearAuth()
+                    }
                     lastError = null
                     onResult(false)
                 } else {
@@ -274,8 +345,7 @@ class StudentAppState(
             try {
                 workspace = apiRepo.loadWorkspaceAsync()
                 isShowingCachedData = false
-                recordSyncTime()
-                saveWorkspace(event = "工作台已刷新")
+                saveWorkspaceNow(event = "工作台已刷新")
             } catch (e: Exception) {
                 isShowingCachedData = workspace != StudentWorkspace.empty()
                 lastError = errorMessage(e)
@@ -300,7 +370,9 @@ class StudentAppState(
         isLoading = false
         workspace = StudentWorkspace.empty()
         draft = null
-        localStore?.clearAll()
+        persistUnit(event = "clear local data on logout") {
+            this.clearAll()
+        }
     }
 
     /**
@@ -651,19 +723,23 @@ class StudentAppState(
 
     fun clearDraft() {
         draft = null
-        localStore?.clearDraft()
+        persistUnit(event = "clear check-in draft") {
+            this.clearDraft()
+        }
     }
 
     // ── Private helpers ───────────────────────────────────────────
 
-    private fun errorMessage(e: Exception): String {
+    private suspend fun errorMessage(e: Exception): String {
         val msg = e.message.orEmpty()
-        val serverMessage = msg.indexOf('{').takeIf { it >= 0 }?.let { start ->
-            runCatching {
-                JsonParser.parseString(msg.substring(start)).asJsonObject
-                    .get("message")
-                    ?.asString
-            }.getOrNull()
+        val serverMessage = withContext(Dispatchers.IO) {
+            msg.indexOf('{').takeIf { it >= 0 }?.let { start ->
+                runCatching {
+                    JsonParser.parseString(msg.substring(start)).asJsonObject
+                        .get("message")
+                        ?.asString
+                }.getOrNull()
+            }
         }
         if (!serverMessage.isNullOrBlank()) return serverMessage
         return when {
@@ -735,22 +811,102 @@ class StudentAppState(
     }
 
     private fun saveWorkspace(event: String) {
-        localStore?.saveWorkspace(workspace)
-        recordSyncTime()
+        val workspaceSnapshot = workspace
+        val now = currentSyncTimestamp()
+        lastSyncTimestamp = now
+        persist(event = event) {
+            val workspaceSaved = saveWorkspace(workspaceSnapshot)
+            val syncTimeSaved = saveLastSyncTime(now)
+            workspaceSaved && syncTimeSaved
+        }
     }
 
-    private fun recordSyncTime() {
-        val now = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
-            .format(java.util.Date())
+    private suspend fun saveWorkspaceNow(event: String) {
+        val workspaceSnapshot = workspace
+        val now = currentSyncTimestamp()
         lastSyncTimestamp = now
-        localStore?.saveLastSyncTime(now)
+        val saved = withLocalStoreOnIo(event = event) {
+            val workspaceSaved = saveWorkspace(workspaceSnapshot)
+            val syncTimeSaved = saveLastSyncTime(now)
+            workspaceSaved && syncTimeSaved
+        }
+        if (saved == false) {
+            android.util.Log.w("StudentAppState", "$event failed")
+        }
+    }
+
+    private fun currentSyncTimestamp(): String {
+        return java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date())
     }
 
     private fun saveDraft(event: String) {
         val currentDraft = draft ?: return
-        val saved = localStore?.saveDraft(currentDraft) ?: false
-        if (!saved && localStore != null) {
-            android.util.Log.w("StudentAppState", "saveDraft failed: $event")
+        persist(event = event) {
+            saveDraft(currentDraft)
+        }
+    }
+
+    private fun persist(
+        event: String,
+        block: AndroidAppLocalStore.() -> Boolean
+    ) {
+        val store = localStore ?: return
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            persistenceMutex.withLock {
+                val saved = withContext(Dispatchers.IO) {
+                    try {
+                        store.block()
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        android.util.Log.w("StudentAppState", "$event failed", error)
+                        false
+                    }
+                }
+                if (!saved) {
+                    android.util.Log.w("StudentAppState", "$event failed")
+                }
+            }
+        }
+    }
+
+    private fun persistUnit(
+        event: String,
+        block: AndroidAppLocalStore.() -> Unit
+    ) {
+        val store = localStore ?: return
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            persistenceMutex.withLock {
+                withContext(Dispatchers.IO) {
+                    try {
+                        store.block()
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        android.util.Log.w("StudentAppState", "$event failed", error)
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun <T> withLocalStoreOnIo(
+        event: String,
+        block: AndroidAppLocalStore.() -> T
+    ): T? {
+        val store = localStore ?: return null
+        return persistenceMutex.withLock {
+            withContext(Dispatchers.IO) {
+                try {
+                    store.block()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    android.util.Log.w("StudentAppState", "$event failed", error)
+                    null
+                }
+            }
         }
     }
 

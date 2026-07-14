@@ -1,7 +1,18 @@
 package edu.bnbu.student.mvp.feature.courses
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,15 +24,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AssignmentTurnedIn
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
@@ -35,18 +42,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
+import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
 import edu.bnbu.student.mvp.core.designsystem.HourProgressBar
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
 import edu.bnbu.student.mvp.core.designsystem.StatusBadge
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
+import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.model.CheckInRecord
 import edu.bnbu.student.mvp.core.model.Course
 import edu.bnbu.student.mvp.core.model.CourseTask
@@ -57,20 +68,43 @@ import edu.bnbu.student.mvp.core.state.StudentAppState
 
 @Composable
 fun CoursesScreen(appState: StudentAppState) {
-    var selectedCourseId by remember { mutableStateOf<String?>(null) }
-    val selectedCourse = selectedCourseId?.let { id -> appState.workspace.courses.firstOrNull { it.id == id } }
+    var selectedCourseId by rememberSaveable { mutableStateOf<String?>(null) }
 
-    if (selectedCourse == null) {
-        CourseList(
-            appState = appState,
-            onCourseSelected = { selectedCourseId = it.id }
-        )
-    } else {
-        CourseDetail(
-            appState = appState,
-            course = selectedCourse,
-            onBack = { selectedCourseId = null }
-        )
+    AnimatedContent(
+        targetState = selectedCourseId,
+        modifier = Modifier.fillMaxSize(),
+        transitionSpec = {
+            val openingDetail = initialState == null && targetState != null
+            val direction = if (openingDetail) 1 else -1
+            (fadeIn(tween(BNBUMotion.Standard, delayMillis = 40)) +
+                slideInHorizontally(
+                    tween(BNBUMotion.Emphasized, easing = FastOutSlowInEasing),
+                    initialOffsetX = { direction * (it / 9) }
+                )).togetherWith(
+                fadeOut(tween(BNBUMotion.Quick)) +
+                    slideOutHorizontally(
+                        tween(BNBUMotion.Standard, easing = FastOutSlowInEasing),
+                        targetOffsetX = { -direction * (it / 12) }
+                    )
+            )
+        },
+        label = "courseListDetail"
+    ) { animatedCourseId ->
+        val selectedCourse = animatedCourseId?.let { id ->
+            appState.workspace.courses.firstOrNull { it.id == id }
+        }
+        if (selectedCourse == null) {
+            CourseList(
+                appState = appState,
+                onCourseSelected = { selectedCourseId = it.id }
+            )
+        } else {
+            CourseDetail(
+                appState = appState,
+                course = selectedCourse,
+                onBack = { selectedCourseId = null }
+            )
+        }
     }
 }
 
@@ -79,7 +113,7 @@ private fun CourseList(
     appState: StudentAppState,
     onCourseSelected: (Course) -> Unit
 ) {
-    var historyExpanded by remember { mutableStateOf(false) }
+    var historyExpanded by rememberSaveable { mutableStateOf(false) }
     val courses = appState.workspace.courses
     val historyCourses = courses.filter {
         it.semesterStatus == "archived" || it.enrollmentStatus in setOf("completed", "withdrawn")
@@ -124,17 +158,29 @@ private fun CourseList(
             }
 
             if (historyCourses.isNotEmpty()) {
-                item {
-                    HistoryCourseHeader(
-                        count = historyCourses.size,
-                        expanded = historyExpanded,
-                        onClick = { historyExpanded = !historyExpanded }
-                    )
-                }
-            }
-            if (historyExpanded) {
-                items(historyCourses, key = { "history-${it.id}" }) { course ->
-                    CourseCard(course = course, onClick = { onCourseSelected(course) })
+                item(key = "history-section") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        HistoryCourseHeader(
+                            count = historyCourses.size,
+                            expanded = historyExpanded,
+                            onClick = { historyExpanded = !historyExpanded }
+                        )
+                        AnimatedVisibility(
+                            visible = historyExpanded,
+                            enter = fadeIn(tween(BNBUMotion.Standard)) + expandVertically(
+                                animationSpec = tween(BNBUMotion.Emphasized, easing = FastOutSlowInEasing)
+                            ),
+                            exit = fadeOut(tween(BNBUMotion.Quick)) + shrinkVertically(
+                                animationSpec = tween(BNBUMotion.Standard, easing = FastOutSlowInEasing)
+                            )
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                historyCourses.forEach { course ->
+                                    CourseCard(course = course, onClick = { onCourseSelected(course) })
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -148,11 +194,16 @@ private fun HistoryCourseHeader(
     onClick: () -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(BNBUMotion.Standard, easing = FastOutSlowInEasing),
+        label = "historyArrow"
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(cs.surfaceVariant, MaterialTheme.shapes.small)
-            .clickable(onClick = onClick)
+            .bnbuClickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -170,9 +221,10 @@ private fun HistoryCourseHeader(
             modifier = Modifier.weight(1f)
         )
         Icon(
-            imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+            imageVector = Icons.Filled.ExpandMore,
             contentDescription = if (expanded) "收起历史课程" else "展开历史课程",
-            tint = cs.onSurfaceVariant
+            tint = cs.onSurfaceVariant,
+            modifier = Modifier.graphicsLayer { rotationZ = arrowRotation }
         )
     }
 }
@@ -184,7 +236,7 @@ private fun CourseCard(
 ) {
     val cs = MaterialTheme.colorScheme
     SwissPanel(
-        modifier = Modifier.clickable(onClick = onClick)
+        modifier = Modifier.bnbuClickable(onClick = onClick)
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(verticalAlignment = Alignment.Top) {
@@ -206,24 +258,23 @@ private fun CourseCard(
                 StatusBadge(text = course.semester.ifBlank { "学期待定" })
             }
 
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(118.dp),
-                userScrollEnabled = false,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(
-                    listOf(
-                        CourseFact("任课老师", course.teacher.ifBlank { "待公布" }),
-                        CourseFact("学年", course.academicYear.ifBlank { "待设置" }),
-                        CourseFact("学期", course.term.ifBlank { "待设置" }),
-                        CourseFact("选课状态", course.enrollmentStatus.enrollmentStatusLabel())
-                    )
-                ) { fact ->
-                    CourseFactCell(fact)
+            val facts = listOf(
+                CourseFact("任课老师", course.teacher.ifBlank { "待公布" }),
+                CourseFact("学年", course.academicYear.ifBlank { "待设置" }),
+                CourseFact("学期", course.term.ifBlank { "待设置" }),
+                CourseFact("选课状态", course.enrollmentStatus.enrollmentStatusLabel())
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                facts.chunked(2).forEach { rowFacts ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        rowFacts.forEach { fact ->
+                            CourseFactCell(fact = fact, modifier = Modifier.weight(1f))
+                        }
+                        if (rowFacts.size == 1) Spacer(Modifier.weight(1f))
+                    }
                 }
             }
 
@@ -265,7 +316,7 @@ private fun CourseDetail(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onBack),
+                    .bnbuClickable(onClick = onBack),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
@@ -351,10 +402,10 @@ private fun CourseDetail(
 }
 
 @Composable
-private fun CourseFactCell(fact: CourseFact) {
+private fun CourseFactCell(fact: CourseFact, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .background(cs.surfaceVariant, MaterialTheme.shapes.small)
             .padding(12.dp),

@@ -1,7 +1,6 @@
 package edu.bnbu.student.mvp.feature.profile
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -40,9 +39,12 @@ import edu.bnbu.student.mvp.core.designsystem.SectionTitle
 import edu.bnbu.student.mvp.core.designsystem.SegmentedControl
 import edu.bnbu.student.mvp.core.designsystem.StatusBadge
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
+import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.model.Membership
 import edu.bnbu.student.mvp.core.model.AppThemeMode
 import edu.bnbu.student.mvp.core.state.StudentAppState
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 @Composable
 private fun ApplicationPanel(onOpenExemption: (String?) -> Unit) {
@@ -50,7 +52,7 @@ private fun ApplicationPanel(onOpenExemption: (String?) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionTitle(eyebrow = "Applications", title = "申请与审核")
 
-        SwissPanel(modifier = Modifier.clickable { onOpenExemption(null) }) {
+        SwissPanel(modifier = Modifier.bnbuClickable { onOpenExemption(null) }) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -133,9 +135,14 @@ private fun ProfileHeader(appState: StudentAppState) {
                     color = cs.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                val studentTags = listOf(
+                    student.className,
+                    student.genderLabel,
+                    student.gradeLabel
+                ).filter { it.isNotBlank() }.joinToString(" · ")
+                if (studentTags.isNotBlank()) {
                     Text(
-                        text = "${student.className} · ${student.genderLabel} · ${student.gradeLabel}",
+                        text = studentTags,
                         color = cs.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium
                     )
@@ -173,7 +180,7 @@ private fun TeacherPanel(appState: StudentAppState) {
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            text = "教师ID: ${teacher.teacherId}",
+                            text = "任课教师",
                             color = cs.onSurfaceVariant,
                             style = MaterialTheme.typography.labelMedium
                         )
@@ -218,7 +225,7 @@ private fun MembershipCard(membership: Membership) {
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        text = "有效期至 ${membership.validUntil}",
+                        text = "有效至 ${membership.validUntil.toDisplayDate()}",
                         color = cs.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium
                     )
@@ -259,6 +266,15 @@ private fun MembershipCard(membership: Membership) {
             }
         }
     }
+}
+
+private val membershipDateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy年M月d日")
+
+private fun String.toDisplayDate(): String {
+    val rawDate = take(10)
+    return runCatching {
+        LocalDate.parse(rawDate).format(membershipDateFormatter)
+    }.getOrDefault(rawDate)
 }
 
 @Composable
@@ -367,7 +383,7 @@ private fun InlineAction(
     Row(
         modifier = Modifier
             .background(cs.surface, MaterialTheme.shapes.small)
-            .clickable(enabled = enabled, onClick = onClick)
+            .bnbuClickable(enabled = enabled, onClick = onClick)
             .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
