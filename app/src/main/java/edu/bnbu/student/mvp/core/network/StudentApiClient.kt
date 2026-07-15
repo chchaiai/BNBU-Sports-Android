@@ -1,31 +1,56 @@
 package edu.bnbu.student.mvp.core.network
 
 import android.content.Context
-import android.provider.OpenableColumns
-import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonDeserializationContext
 import com.google.gson.JsonDeserializer
 import com.google.gson.JsonElement
 import com.google.gson.JsonParseException
-import com.google.gson.reflect.TypeToken
+import edu.bnbu.student.mvp.BuildConfig
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.IOException
 import java.lang.reflect.Type
+import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 data class StudentApiClient(
     val baseUrl: String = DefaultBaseUrl,
     val bearerToken: String? = null,
     // Android app Context required for ContentResolver-based uploads
-    val appContext: Context? = null
+    val appContext: Context? = null,
+    val httpClient: OkHttpClient = SharedHttpClient.instance,
+    val idempotencyKeyProvider: () -> String = { UUID.randomUUID().toString() }
 ) {
+    init {
+        val parsedBaseUrl = baseUrl.toHttpUrlOrNull()
+        require(parsedBaseUrl != null) { "BNBU_API_BASE_URL must be a valid HTTP(S) URL" }
+        require(BuildConfig.DEBUG || parsedBaseUrl.isHttps) {
+            "Release builds require an HTTPS BNBU_API_BASE_URL"
+        }
+        require(parsedBaseUrl.username.isEmpty() && parsedBaseUrl.password.isEmpty()) {
+            "BNBU_API_BASE_URL must not contain credentials"
+        }
+        require(parsedBaseUrl.query == null && parsedBaseUrl.fragment == null) {
+            "BNBU_API_BASE_URL must not contain a query or fragment"
+        }
+        require(parsedBaseUrl.encodedPath.trimEnd('/').endsWith("/api")) {
+            "BNBU_API_BASE_URL must end with /api"
+        }
+    }
+
     fun withToken(token: String?): StudentApiClient = copy(bearerToken = token)
     fun withContext(context: Context): StudentApiClient = copy(appContext = context.applicationContext)
 
@@ -37,6 +62,11 @@ data class StudentApiClient(
             put("Accept", "application/json")
             if (endpoint.method != HttpMethod.GET) {
                 put("Content-Type", "application/json")
+            }
+            if (endpoint.method != HttpMethod.GET && endpoint != StudentEndpoint.Login) {
+                val idempotencyKey = idempotencyKeyProvider().trim()
+                require(idempotencyKey.isNotEmpty()) { "Idempotency-Key must not be blank" }
+                put("Idempotency-Key", idempotencyKey)
             }
             bearerToken
                 ?.takeIf { it.isNotBlank() }
@@ -60,34 +90,13 @@ data class StudentApiClient(
      */
     @Throws(IOException::class)
     fun execute(request: StudentApiRequest): String {
-        val builder = Request.Builder().url(request.url)
-        request.headers.forEach { (k, v) -> builder.addHeader(k, v) }
-
-        val bodyJson = if (request.body != null && request.body !is String) {
-            gson.toJson(request.body)
-        } else {
-            request.body as? String
+        return httpClient.newCall(buildHttpRequest(request)).execute().use { response ->
+            response.bodyOrThrow()
         }
+    }
 
-        when (request.method) {
-            HttpMethod.GET -> builder.get()
-            HttpMethod.POST -> builder.post(
-                (bodyJson ?: "").toRequestBody("application/json".toMediaType())
-            )
-            HttpMethod.PUT -> builder.put(
-                (bodyJson ?: "").toRequestBody("application/json".toMediaType())
-            )
-        }
-
-        val response = SharedHttpClient.instance.newCall(builder.build()).execute()
-        if (!response.isSuccessful) {
-            val errorBody = response.body?.string() ?: ""
-            response.close()
-            throw IOException("HTTP ${response.code}: $errorBody")
-        }
-        val result = response.body?.string() ?: throw IOException("Empty response body")
-        response.close()
-        return result
+    suspend fun executeCancellable(request: StudentApiRequest): String {
+        return httpClient.newCall(buildHttpRequest(request)).awaitBody()
     }
 
     /**
@@ -97,9 +106,38 @@ data class StudentApiClient(
      */
     fun <T> executeAndParse(request: StudentApiRequest, clazz: Class<T>): T {
         val json = execute(request)
+        return parse(json, clazz)
+    }
+
+    suspend fun <T> executeAndParseCancellable(request: StudentApiRequest, clazz: Class<T>): T {
+        val json = executeCancellable(request)
+        return parse(json, clazz)
+    }
+
+    private fun <T> parse(json: String, clazz: Class<T>): T {
         val result = gson.fromJson(json, clazz)
             ?: throw IOException("Gson returned null for response: ${json.take(200)}")
         return result
+    }
+
+    private fun buildHttpRequest(request: StudentApiRequest): Request {
+        val builder = Request.Builder().url(request.url)
+        request.headers.forEach { (key, value) -> builder.addHeader(key, value) }
+        val bodyJson = if (request.body != null && request.body !is String) {
+            gson.toJson(request.body)
+        } else {
+            request.body as? String
+        }
+        when (request.method) {
+            HttpMethod.GET -> builder.get()
+            HttpMethod.POST -> builder.post(
+                (bodyJson ?: "").toRequestBody("application/json".toMediaType())
+            )
+            HttpMethod.PUT -> builder.put(
+                (bodyJson ?: "").toRequestBody("application/json".toMediaType())
+            )
+        }
+        return builder.build()
     }
 
     /**
@@ -115,8 +153,19 @@ data class StudentApiClient(
      */
     @Throws(IOException::class)
     fun uploadProofFiles(files: List<File>): UploadProofResponse {
-        val uploadReq = request(StudentEndpoint.UploadProof)
+        val result = httpClient.newCall(buildUploadRequest(files)).execute().use { response ->
+            response.bodyOrThrow()
+        }
+        return parse(result, UploadProofResponse::class.java)
+    }
 
+    suspend fun uploadProofFilesCancellable(files: List<File>): UploadProofResponse {
+        val result = httpClient.newCall(buildUploadRequest(files)).awaitBody()
+        return parse(result, UploadProofResponse::class.java)
+    }
+
+    private fun buildUploadRequest(files: List<File>): Request {
+        val uploadReq = request(StudentEndpoint.UploadProof)
         val builder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
 
@@ -141,27 +190,23 @@ data class StudentApiClient(
             )
         }
 
-        val body = builder.build()
-        val httpRequest = Request.Builder()
+        return Request.Builder()
             .url(uploadReq.url)
             .apply {
                 // Skip Content-Type for upload requests — multipart sets its own
                 uploadReq.headers.filterKeys { it != "Content-Type" }
                     .forEach { (k, v) -> addHeader(k, v) }
             }
-            .post(body)
+            .post(builder.build())
             .build()
+    }
 
-        val response = SharedHttpClient.instance.newCall(httpRequest).execute()
-        if (!response.isSuccessful) {
-            val errorBody = response.body?.string() ?: ""
-            response.close()
-            throw IOException("Upload failed HTTP ${response.code}: $errorBody")
+    private fun Response.bodyOrThrow(): String {
+        if (!isSuccessful) {
+            val errorBody = body?.string() ?: ""
+            throw ApiHttpException(code, errorBody)
         }
-        val result = response.body?.string() ?: throw IOException("Empty upload response")
-        response.close()
-        return gson.fromJson(result, UploadProofResponse::class.java)
-            ?: throw IOException("Gson returned null for upload response: ${result.take(200)}")
+        return body?.string() ?: throw IOException("Empty response body")
     }
 
     private val gson = GsonBuilder()
@@ -174,11 +219,35 @@ data class StudentApiClient(
     }
 
     companion object {
-        // ⚠️ Use HTTP for the raw IP server — Android TLS cannot verify
-        // a certificate issued for a bare IP address. Switch to a domain
-        // with proper HTTPS (e.g., "https://bnbu.example.com/api") for production.
-        const val DefaultBaseUrl = "http://123.207.5.70:3334/api"
+        @JvmField
+        val DefaultBaseUrl: String = BuildConfig.BNBU_API_BASE_URL
     }
+}
+
+private suspend fun Call.awaitBody(): String = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, error: IOException) {
+            if (continuation.isActive) continuation.resumeWithException(error)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            val result = runCatching {
+                response.use {
+                    if (!it.isSuccessful) {
+                        val errorBody = it.body?.string() ?: ""
+                        throw ApiHttpException(it.code, errorBody)
+                    }
+                    it.body?.string() ?: throw IOException("Empty response body")
+                }
+            }
+            if (!continuation.isActive) return
+            result.fold(
+                onSuccess = { continuation.resume(it) },
+                onFailure = { continuation.resumeWithException(it) }
+            )
+        }
+    })
 }
 
 private object ProofFileResponseJsonDeserializer : JsonDeserializer<ProofFileResponse> {
@@ -236,34 +305,42 @@ object SharedHttpClient {
         .writeTimeout(15, TimeUnit.SECONDS)
         // Connection pool: reuse connections, avoid socket exhaustion
         .connectionPool(okhttp3.ConnectionPool(5, 5, TimeUnit.MINUTES))
-        // HTTP/1.1 only — HTTP/2 requires HTTPS (not available for raw IP).
-        .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+        // Disable OkHttp's transparent recovery so write requests are never
+        // replayed after the server may already have committed them.
+        .retryOnConnectionFailure(false)
         .addInterceptor { chain ->
-            // Simple retry interceptor — retries on IO errors only (not on 4xx).
-            // Uses exponential backoff WITHOUT blocking the dispatcher thread.
-            // Note: Thread.sleep() is acceptable here because OkHttp uses a
-            // dedicated thread pool for network calls, not the main thread.
+            val request = chain.request()
+            if (!isRetryableHttpMethod(request.method)) {
+                return@addInterceptor chain.proceed(request)
+            }
+
+            // Read-only requests may be replayed after transport failures.
             var attempt = 0
             val maxRetries = 2
             var lastException: IOException? = null
             while (attempt <= maxRetries) {
                 try {
-                    return@addInterceptor chain.proceed(chain.request())
+                    return@addInterceptor chain.proceed(request)
                 } catch (e: IOException) {
                     lastException = e
                     attempt++
                     if (attempt > maxRetries) throw e
-                    // Don't retry on 4xx client errors
-                    if (e.message?.contains("HTTP 4") == true) throw e
-                    // Avoid Thread.sleep on the OkHttp dispatcher; use a brief
-                    // wait to avoid tight retry loops (OkHttp's dispatcher
-                    // runs on a dedicated thread pool, so this is safe).
-                    try { Thread.sleep(500L * attempt) } catch (_: InterruptedException) { throw e }
+                    try {
+                        Thread.sleep(250L * attempt)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw e
+                    }
                 }
             }
             throw lastException ?: IOException("Retry exhausted")
         }
         .build()
+
+    internal fun isRetryableHttpMethod(method: String): Boolean {
+        return method.equals("GET", ignoreCase = true) ||
+            method.equals("HEAD", ignoreCase = true)
+    }
 }
 
 data class StudentApiRequest(
@@ -273,6 +350,11 @@ data class StudentApiRequest(
     val headers: Map<String, String>,
     val body: Any? = null
 )
+
+class ApiHttpException(
+    val statusCode: Int,
+    val responseBody: String
+) : IOException("HTTP $statusCode: $responseBody")
 
 /** Response from POST /api/upload/proof */
 data class UploadedProofFile(

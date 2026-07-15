@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -47,7 +48,10 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
 @Composable
-private fun ApplicationPanel(onOpenExemption: (String?) -> Unit) {
+private fun ApplicationPanel(
+    onOpenExemption: (String?) -> Unit,
+    onOpenEnduranceScoring: () -> Unit
+) {
     val cs = MaterialTheme.colorScheme
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionTitle(eyebrow = "Applications", title = "申请与审核")
@@ -85,6 +89,40 @@ private fun ApplicationPanel(onOpenExemption: (String?) -> Unit) {
                 )
             }
         }
+
+        SwissPanel(modifier = Modifier.bnbuClickable(onClick = onOpenEnduranceScoring)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Speed,
+                    contentDescription = null,
+                    tint = cs.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "耐力跑成绩换算",
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = "按服务器规则换算 800m / 1000m 成绩",
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = "进入耐力跑成绩换算",
+                    tint = cs.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 
@@ -92,6 +130,7 @@ private fun ApplicationPanel(onOpenExemption: (String?) -> Unit) {
 fun ProfileScreen(
     appState: StudentAppState,
     onOpenExemption: (String?) -> Unit = {},
+    onOpenEnduranceScoring: () -> Unit = {},
     onOpenPrivacy: () -> Unit = {}
 ) {
     LazyColumn(
@@ -100,7 +139,7 @@ fun ProfileScreen(
     ) {
         item { ProfileHeader(appState) }
 
-        item { ApplicationPanel(onOpenExemption) }
+        item { ApplicationPanel(onOpenExemption, onOpenEnduranceScoring) }
         item { TeacherPanel(appState) }
         item { IdentityPanel(appState) }
         item {

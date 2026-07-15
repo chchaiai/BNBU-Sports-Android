@@ -37,15 +37,18 @@ import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,9 +58,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import edu.bnbu.student.mvp.core.data.ApiStudentRepository
+import edu.bnbu.student.mvp.core.network.ApiHttpException
 import edu.bnbu.student.mvp.core.designsystem.ActionButton
 import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
+import edu.bnbu.student.mvp.core.designsystem.PrimaryActionButton
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
 import edu.bnbu.student.mvp.core.designsystem.SegmentedControl
 import edu.bnbu.student.mvp.core.designsystem.StatusBadge
@@ -70,6 +75,7 @@ import edu.bnbu.student.mvp.core.model.ExemptionApplication
 import edu.bnbu.student.mvp.core.model.ExemptionType
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
+import edu.bnbu.student.mvp.core.state.StudentAppState
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -88,6 +94,8 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -96,10 +104,14 @@ private enum class ExemptionTab(val label: String) {
     NewApplication("提交申请")
 }
 
+private const val MaxExemptionReasonLength = 2_000
+
 @Composable
 fun ExemptionScreen(
+    appState: StudentAppState,
     repository: ApiStudentRepository,
     initialApplicationId: String? = null,
+    onUnauthorized: () -> Unit,
     onBack: () -> Unit
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(ExemptionTab.MyApplications) }
@@ -109,21 +121,34 @@ fun ExemptionScreen(
     var successMessage by remember { mutableStateOf<String?>(null) }
     var selectedExemptionId by rememberSaveable { mutableStateOf(initialApplicationId) }
     var resubmittingExemption by remember { mutableStateOf<Exemption?>(null) }
+    var isFormSubmitting by remember { mutableStateOf(false) }
+    val loadJob = remember { mutableStateOf<Job?>(null) }
     val applicationsListState = rememberLazyListState()
     val formListState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val cs = MaterialTheme.colorScheme
     val handleBack = {
         focusManager.clearFocus(force = true)
-        if (selectedExemptionId != null) selectedExemptionId = null else onBack()
+        if (isFormSubmitting) {
+            errorMessage = "申请正在提交，请等待完成后再返回"
+        } else if (selectedExemptionId != null) {
+            selectedExemptionId = null
+        } else {
+            onBack()
+        }
     }
 
     BackHandler(onBack = handleBack)
 
+    DisposableEffect(Unit) {
+        onDispose { loadJob.value?.cancel() }
+    }
+
     fun loadExemptions() {
+        if (isLoading) return
         isLoading = true
-        scope.launch {
+        errorMessage = null
+        val request = appState.launchAuthenticatedRequest {
             try {
                 val response = repository.listExemptions()
                 exemptions = response.map { r ->
@@ -147,11 +172,22 @@ fun ExemptionScreen(
                 if (selectedExemptionId != null && exemptions.none { it.id == selectedExemptionId }) {
                     selectedExemptionId = null
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                if (e is ApiHttpException && e.statusCode == 401) {
+                    onUnauthorized()
+                    return@launchAuthenticatedRequest
+                }
                 errorMessage = "加载失败: ${e.message}"
             } finally {
                 isLoading = false
             }
+        }
+        loadJob.value = request
+        if (request == null) {
+            isLoading = false
+            onUnauthorized()
         }
     }
 
@@ -222,7 +258,7 @@ fun ExemptionScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
-                    .bnbuClickable(onClick = handleBack),
+                    .bnbuClickable(enabled = !isFormSubmitting, onClick = handleBack),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
@@ -250,24 +286,34 @@ fun ExemptionScreen(
                 values = ExemptionTab.entries,
                 selected = animatedTab,
                 label = { it.label },
-                onSelected = { selectedTab = it }
+                onSelected = { if (!isFormSubmitting) selectedTab = it }
             )
         }
 
-        if (successMessage != null) {
+        successMessage?.let { message ->
             item {
-                val msg = successMessage!!
                 StatusMessagePanel(
-                    message = msg,
+                    message = message,
                     onDismiss = { successMessage = null }
                 )
             }
         }
-
-        if (errorMessage != null) {
+        errorMessage?.let { message ->
             item {
-                val msg = errorMessage!!
-                ValidationPanel(message = msg)
+                ValidationPanel(message = message)
+            }
+        }
+
+        if (isLoading && exemptions.isEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
+                }
             }
         }
 
@@ -290,8 +336,12 @@ fun ExemptionScreen(
             ExemptionTab.NewApplication -> {
                 item {
                     NewExemptionForm(
+                        appState = appState,
                         repository = repository,
                         initialExemption = resubmittingExemption,
+                        isSubmitting = isFormSubmitting,
+                        onSubmittingChanged = { isFormSubmitting = it },
+                        onUnauthorized = onUnauthorized,
                         onSuccess = { msg ->
                             successMessage = msg
                             resubmittingExemption = null
@@ -494,6 +544,7 @@ private fun ExemptionDetail(
 @Composable
 private fun ExemptionTypeSelector(
     selected: ExemptionType,
+    enabled: Boolean,
     onSelected: (ExemptionType) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
@@ -523,7 +574,7 @@ private fun ExemptionTypeSelector(
                             backgroundColor,
                             MaterialTheme.shapes.small
                         )
-                        .bnbuClickable { onSelected(option) }
+                        .bnbuClickable(enabled = enabled) { onSelected(option) }
                         .padding(horizontal = 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -541,20 +592,39 @@ private fun ExemptionTypeSelector(
 
 @Composable
 private fun NewExemptionForm(
+    appState: StudentAppState,
     repository: ApiStudentRepository,
     initialExemption: Exemption? = null,
+    isSubmitting: Boolean,
+    onSubmittingChanged: (Boolean) -> Unit,
+    onUnauthorized: () -> Unit,
     onSuccess: (String) -> Unit,
     onError: (String) -> Unit
 ) {
     var selectedType by remember(initialExemption?.id) { mutableStateOf(initialExemption?.type.toExemptionType()) }
     var organization by remember(initialExemption?.id) { mutableStateOf(initialExemption?.organization.orEmpty()) }
-    var reason by remember(initialExemption?.id) { mutableStateOf(initialExemption?.reason.orEmpty()) }
+    var reason by remember(initialExemption?.id) { mutableStateOf("") }
     var proofAttachments by remember { mutableStateOf<List<ProofAttachment>>(emptyList()) }
-    var isSubmitting by remember { mutableStateOf(false) }
     var attachmentNotice by remember { mutableStateOf<String?>(null) }
     var cameraTempUri by remember { mutableStateOf<Uri?>(null) }
+    var cameraTempFile by remember { mutableStateOf<File?>(null) }
+    val submissionJob = remember { mutableStateOf<Job?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val latestProofAttachments by rememberUpdatedState(proofAttachments)
+    val latestCameraTempFile by rememberUpdatedState(cameraTempFile)
+    val latestIsSubmitting by rememberUpdatedState(isSubmitting)
+
+    DisposableEffect(Unit) {
+        onDispose {
+            submissionJob.value?.cancel()
+            latestProofAttachments.forEach {
+                it.deleteOwnedCameraFile(context, "exemption_")
+                it.releasePersistableReadPermissionIfPossible(context)
+            }
+            latestCameraTempFile?.delete()
+        }
+    }
 
     val maxAttachments = 5
 
@@ -563,22 +633,33 @@ private fun NewExemptionForm(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
         val uri = cameraTempUri
-        if (success && uri != null) {
-            val attachment = uri.toProofAttachmentFromCamera(context, proofAttachments.size)
+        val file = cameraTempFile
+        if (latestIsSubmitting) {
+            file?.delete()
+        } else if (success && uri != null && file != null) {
+            val attachment = file.toProofAttachmentFromCamera(uri)
             if (attachment != null && attachment.isValidForUpload) {
                 proofAttachments = proofAttachments + attachment
                 attachmentNotice = "已拍摄 1 张凭证照片。"
             } else {
+                file.delete()
                 attachmentNotice = "拍摄失败，请重试或从相册选择。"
             }
+        } else {
+            file?.delete()
         }
         cameraTempUri = null
+        cameraTempFile = null
     }
 
     // Gallery picker launcher
     val mediaPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
+        if (isSubmitting) {
+            attachmentNotice = "正在提交，暂时不能修改证明材料。"
+            return@rememberLauncherForActivityResult
+        }
         val remaining = maxAttachments - proofAttachments.size
         if (remaining <= 0) {
             attachmentNotice = "已达到 $maxAttachments 个凭证上限。"
@@ -587,18 +668,35 @@ private fun NewExemptionForm(
         val selectedUris = uris.take(remaining)
         val startIndex = proofAttachments.size
         scope.launch {
-            val newAttachments = withContext(Dispatchers.IO) {
-                selectedUris.mapIndexed { offset, uri ->
-                    context.takePersistableReadPermissionIfPossible(uri)
-                    uri.toProofAttachment(context = context, index = startIndex + offset)
+            val pickedAttachments = try {
+                withContext(Dispatchers.IO) {
+                    selectedUris.mapIndexed { offset, uri ->
+                        uri.toProofAttachment(context = context, index = startIndex + offset)
+                    }
                 }
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (_: Exception) {
+                attachmentNotice = "无法读取所选文件，请重新选择。"
+                return@launch
             }
+            if (latestIsSubmitting) return@launch
+            val existingSources = latestProofAttachments.mapTo(mutableSetOf()) { it.source }
+            val newAttachments = pickedAttachments
+                .distinctBy { it.source }
+                .filterNot { it.source in existingSources }
+                .filter { attachment ->
+                    val uri = runCatching { Uri.parse(attachment.source) }.getOrNull()
+                    uri != null && context.takePersistableReadPermissionIfPossible(uri)
+                }
             if (newAttachments.isNotEmpty()) {
-                proofAttachments = proofAttachments + newAttachments
+                proofAttachments = latestProofAttachments + newAttachments
             }
             attachmentNotice = when {
                 uris.isEmpty() -> null
-                uris.size > remaining -> "已添加 $remaining 个凭证，已达到上限。"
+                newAttachments.isEmpty() -> "未添加文件：请避免重复选择，并使用支持长期授权的相册文件。"
+                newAttachments.size < uris.size ->
+                    "已添加 ${newAttachments.size} 个凭证；重复、超限或无法长期授权的文件已跳过。"
                 else -> "已添加 ${newAttachments.size} 个凭证。"
             }
         }
@@ -615,18 +713,21 @@ private fun NewExemptionForm(
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
-            Text(
-                text = "选择申请类型",
-                color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.labelMedium
-            )
-            ExemptionTypeSelector(
-                selected = selectedType,
-                onSelected = {
-                    selectedType = it
-                    if (!it.isCheckInExemption) organization = ""
-                }
-            )
+            if (initialExemption == null) {
+                Text(
+                    text = "选择申请类型",
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium
+                )
+                ExemptionTypeSelector(
+                    selected = selectedType,
+                    enabled = !isSubmitting,
+                    onSelected = {
+                        selectedType = it
+                        if (!it.isCheckInExemption) organization = ""
+                    }
+                )
+            }
 
             AnimatedVisibility(
                 visible = selectedType.isCheckInExemption,
@@ -642,6 +743,7 @@ private fun NewExemptionForm(
                     OutlinedTextField(
                         value = organization,
                         onValueChange = { organization = it.take(128) },
+                        enabled = !isSubmitting,
                         placeholder = { Text("填写校队或社团名称") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
@@ -651,16 +753,18 @@ private fun NewExemptionForm(
 
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    text = "申请理由",
+                    text = if (initialExemption == null) "申请理由" else "补充说明",
                     color = cs.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium
                 )
                 OutlinedTextField(
                     value = reason,
-                    onValueChange = { reason = it },
+                    onValueChange = { reason = it.take(MaxExemptionReasonLength) },
+                    enabled = !isSubmitting,
                     placeholder = {
                         Text(
-                            if (selectedType.isCheckInExemption) "请说明组织身份及申请原因..."
+                            if (initialExemption != null) "请说明本次补充材料的内容..."
+                            else if (selectedType.isCheckInExemption) "请说明组织身份及申请原因..."
                             else "请说明申请免测的原因..."
                         )
                     },
@@ -693,23 +797,36 @@ private fun NewExemptionForm(
                         icon = Icons.Filled.CameraAlt,
                         filled = proofAttachments.size < maxAttachments,
                         modifier = Modifier.weight(1f),
+                        enabled = !isSubmitting && proofAttachments.size < maxAttachments,
                         onClick = {
+                            if (isSubmitting) return@ActionButton
                             if (proofAttachments.size >= maxAttachments) {
                                 attachmentNotice = "已达到 $maxAttachments 个凭证上限。"
                                 return@ActionButton
                             }
-                            val photoFile = File(
-                                context.getExternalFilesDir(Environment.DIRECTORY_PICTURES),
-                                "exemption_${System.currentTimeMillis()}.jpg"
-                            )
-                            photoFile.parentFile?.mkdirs()
-                            val uri = FileProvider.getUriForFile(
-                                context,
-                                "${context.packageName}.fileprovider",
-                                photoFile
-                            )
-                            cameraTempUri = uri
-                            cameraLauncher.launch(uri)
+                            var photoFile: File? = null
+                            try {
+                                val picturesDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+                                    ?: context.cacheDir
+                                photoFile = File(
+                                    picturesDir,
+                                    "exemption_${System.currentTimeMillis()}.jpg"
+                                )
+                                photoFile.parentFile?.mkdirs()
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    photoFile
+                                )
+                                cameraTempUri = uri
+                                cameraTempFile = photoFile
+                                cameraLauncher.launch(uri)
+                            } catch (_: Exception) {
+                                photoFile?.delete()
+                                cameraTempUri = null
+                                cameraTempFile = null
+                                attachmentNotice = "相机不可用，请从相册选择证明材料。"
+                            }
                         }
                     )
 
@@ -718,6 +835,7 @@ private fun NewExemptionForm(
                         icon = Icons.Filled.UploadFile,
                         filled = proofAttachments.size < maxAttachments,
                         modifier = Modifier.weight(1f),
+                        enabled = !isSubmitting && proofAttachments.size < maxAttachments,
                         onClick = {
                             if (proofAttachments.size < maxAttachments) {
                                 mediaPicker.launch(arrayOf("image/*"))
@@ -752,7 +870,7 @@ private fun NewExemptionForm(
                             text = if (selectedType.isCheckInExemption) {
                                 "请上传能够证明校队或社团身份的材料。"
                             } else {
-                                "证明材料为可选，可上传医院证明或诊断书。"
+                                "请至少上传 1 份医院证明或诊断材料。"
                             },
                             color = cs.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall
@@ -761,8 +879,16 @@ private fun NewExemptionForm(
                         proofAttachments.forEach { attachment ->
                             ExemptionProofAttachmentRow(
                                 attachment = attachment,
+                                enabled = !isSubmitting,
                                 onRemove = {
-                                    proofAttachments = proofAttachments.filterNot { it.id == attachment.id }
+                                    val remainingAttachments = proofAttachments.filterNot {
+                                        it.id == attachment.id
+                                    }
+                                    attachment.deleteOwnedCameraFile(context, "exemption_")
+                                    if (remainingAttachments.none { it.source == attachment.source }) {
+                                        attachment.releasePersistableReadPermissionIfPossible(context)
+                                    }
+                                    proofAttachments = remainingAttachments
                                 }
                             )
                         }
@@ -770,54 +896,80 @@ private fun NewExemptionForm(
                     }
                 }
 
-            ActionButton(
+            PrimaryActionButton(
                 title = if (isSubmitting) "提交中..." else if (initialExemption != null) "提交补充材料" else "提交申请",
                 icon = Icons.Filled.Add,
-                filled = true,
+                enabled = !isSubmitting && submissionJob.value?.isActive != true,
+                loading = isSubmitting,
                 onClick = {
-                    if (reason.isBlank()) {
-                        onError("请填写申请理由")
-                        return@ActionButton
+                    if (isSubmitting || submissionJob.value?.isActive == true) return@PrimaryActionButton
+                    val normalizedReason = reason.trim()
+                    if (normalizedReason.length < 2) {
+                        onError("申请理由或补充说明至少需要 2 个字符")
+                        return@PrimaryActionButton
                     }
                     if (selectedType.isCheckInExemption && organization.isBlank()) {
                         onError("请填写校队或社团名称")
-                        return@ActionButton
+                        return@PrimaryActionButton
                     }
                     if (proofAttachments.isEmpty()) {
                         onError("请至少上传 1 个申请证明")
-                        return@ActionButton
+                        return@PrimaryActionButton
                     }
-                    isSubmitting = true
-                    scope.launch {
+                    val selectedTypeSnapshot = selectedType
+                    val organizationSnapshot = organization.trim().takeIf {
+                        selectedTypeSnapshot.isCheckInExemption && it.isNotBlank()
+                    }
+                    val proofSnapshot = proofAttachments.toList()
+                    onSubmittingChanged(true)
+                    val request = appState.launchAuthenticatedRequest {
                         try {
                             // Upload proof files first (if any)
                             var uploadedCosKeys: List<String> = emptyList()
-                            if (proofAttachments.isNotEmpty()) {
+                            if (proofSnapshot.isNotEmpty()) {
                                 val cacheDir = context.cacheDir
                                 val uploadResult = repository.uploadProofFiles(
-                                    proofAttachments = proofAttachments,
+                                    proofAttachments = proofSnapshot,
                                     cacheDir = cacheDir
                                 )
                                 uploadedCosKeys = uploadResult.getOrThrow().map { it.cosKey }
                             }
 
-                            val response = repository.submitExemption(
-                                ExemptionApplication(
-                                    type = selectedType.apiValue,
-                                    reason = reason,
-                                    proofFiles = uploadedCosKeys,
-                                    organization = organization.takeIf { it.isNotBlank() }
-                                )
+                            val application = ExemptionApplication(
+                                type = selectedTypeSnapshot.apiValue,
+                                reason = normalizedReason,
+                                proofFiles = uploadedCosKeys,
+                                organization = organizationSnapshot
                             )
+                            val response = initialExemption?.let {
+                                repository.supplementExemption(it, application)
+                            } ?: repository.submitExemption(application)
+                            proofSnapshot.forEach {
+                                it.deleteOwnedCameraFile(context, "exemption_")
+                                it.releasePersistableReadPermissionIfPossible(context)
+                            }
+                            val submittedIds = proofSnapshot.mapTo(mutableSetOf()) { it.id }
+                            proofAttachments = proofAttachments.filterNot { it.id in submittedIds }
                             onSuccess(
                                 if (initialExemption != null) "补充材料已提交 (${response.id})"
                                 else "申请已提交 (${response.id})"
                             )
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
+                            if (e is ApiHttpException && e.statusCode == 401) {
+                                onUnauthorized()
+                                return@launchAuthenticatedRequest
+                            }
                             onError("提交失败: ${e.message}")
                         } finally {
-                            isSubmitting = false
+                            onSubmittingChanged(false)
                         }
+                    }
+                    submissionJob.value = request
+                    if (request == null) {
+                        onSubmittingChanged(false)
+                        onUnauthorized()
                     }
                 }
             )
@@ -828,6 +980,7 @@ private fun NewExemptionForm(
 @Composable
 private fun ExemptionProofAttachmentRow(
     attachment: ProofAttachment,
+    enabled: Boolean,
     onRemove: () -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
@@ -865,7 +1018,7 @@ private fun ExemptionProofAttachmentRow(
         Box(
             modifier = Modifier
                 .size(32.dp)
-                .bnbuClickable(onClick = onRemove),
+                .bnbuClickable(enabled = enabled, onClick = onRemove),
             contentAlignment = Alignment.Center
         ) {
             Icon(
@@ -908,17 +1061,30 @@ private fun String?.toExemptionType(): ExemptionType = when (this) {
     else -> ExemptionType.Run800
 }
 
-private fun Uri.toProofAttachmentFromCamera(context: Context, index: Int): ProofAttachment? {
-    val fileName = "camera_${System.currentTimeMillis()}.jpg"
-    val file = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), fileName)
-    val byteCount = if (file.exists()) file.length() else null
+private fun File.toProofAttachmentFromCamera(sourceUri: Uri): ProofAttachment? {
+    if (!exists() || length() <= 0L) return null
     return ProofAttachment(
         id = UUID.randomUUID().toString(),
         type = ProofMediaType.Image,
-        fileName = fileName,
-        byteCount = byteCount,
-        source = toString()
+        fileName = name,
+        byteCount = length(),
+        source = sourceUri.toString()
     )
+}
+
+private fun ProofAttachment.deleteOwnedCameraFile(context: Context, requiredPrefix: String) {
+    if (!fileName.startsWith(requiredPrefix) || !fileName.endsWith(".jpg", ignoreCase = true)) return
+    val ownedDirectories = listOfNotNull(
+        context.getExternalFilesDir(Environment.DIRECTORY_PICTURES),
+        context.cacheDir
+    )
+    ownedDirectories.forEach { directory ->
+        runCatching {
+            val candidate = File(directory, fileName).canonicalFile
+            val parent = directory.canonicalFile
+            if (candidate.parentFile == parent && candidate.isFile) candidate.delete()
+        }
+    }
 }
 
 private fun Context.displayNameFor(uri: Uri, index: Int): String {
@@ -939,8 +1105,20 @@ private fun Context.byteCountFor(uri: Uri): Long? {
     }
 }
 
-private fun Context.takePersistableReadPermissionIfPossible(uri: Uri) {
-    runCatching {
+private fun Context.takePersistableReadPermissionIfPossible(uri: Uri): Boolean {
+    return runCatching {
         contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        true
+    }.getOrDefault(false)
+}
+
+private fun Context.releasePersistableReadPermissionIfPossible(uri: Uri) {
+    runCatching {
+        contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
+}
+
+private fun ProofAttachment.releasePersistableReadPermissionIfPossible(context: Context) {
+    val uri = runCatching { Uri.parse(source) }.getOrNull() ?: return
+    if (uri.scheme == "content") context.releasePersistableReadPermissionIfPossible(uri)
 }

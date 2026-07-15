@@ -1,5 +1,6 @@
 package edu.bnbu.student.mvp.core.local
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
@@ -16,6 +17,10 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
+// Sensitive writes and destructive auth cleanup must be durable before the
+// operation reports success. Callers perform normal writes on Dispatchers.IO;
+// logout intentionally commits its small preference deletion synchronously.
+@SuppressLint("ApplySharedPref")
 class AndroidAppLocalStore(
     context: Context,
     private val gson: Gson = GsonBuilder().disableHtmlEscaping().create()
@@ -25,10 +30,10 @@ class AndroidAppLocalStore(
         Context.MODE_PRIVATE
     )
 
-    // ── Encrypted token store (AND-005) ─────────────────────────
-    // Tokens are encrypted at rest using Android Keystore-backed AES/GCM.
-    // Fallback: if encryption fails, store in SharedPreferences only as
-    // a transient session-cache (cleared on logout).
+    // ── Encrypted private-data store ─────────────────────────────
+    // Authentication, profile, workspace and draft data are encrypted at rest
+    // using an Android Keystore-backed AES/GCM key. Sensitive values are never
+    // written in plaintext when the Keystore is unavailable.
     private val encryptedPrefs: SharedPreferences =
         context.applicationContext.getSharedPreferences(
             "bnbu.student.secure.v1",
@@ -60,18 +65,13 @@ class AndroidAppLocalStore(
 
     fun saveAuthToken(token: String): Boolean {
         return try {
-            val encrypted = encrypt(token)
-            if (encrypted != null) {
-                // Store encrypted token + IV
-                encryptedPrefs.edit()
-                    .putString(AuthTokenEncryptedKey, encrypted.value)
-                    .putString(AuthTokenIvKey, encrypted.iv)
-                    .apply()
-            } else {
-                // Fallback: plain SharedPreferences (cleared on logout)
-                preferences.edit().putString(AuthTokenKey, token).apply()
-            }
-            true
+            val encrypted = encrypt(token) ?: return false
+            val committed = encryptedPrefs.edit()
+                .putString(AuthTokenEncryptedKey, encrypted.value)
+                .putString(AuthTokenIvKey, encrypted.iv)
+                .commit()
+            if (committed) preferences.edit().remove(AuthTokenKey).commit()
+            committed
         } catch (_: RuntimeException) { false }
     }
 
@@ -80,10 +80,17 @@ class AndroidAppLocalStore(
             val encryptedValue = encryptedPrefs.getString(AuthTokenEncryptedKey, null)
             val iv = encryptedPrefs.getString(AuthTokenIvKey, null)
             if (encryptedValue != null && iv != null) {
-                decrypt(encryptedValue, iv)
+                decrypt(encryptedValue, iv).also { decrypted ->
+                    if (decrypted == null) clearEncryptedAuthToken()
+                }
             } else {
-                // Fallback to plain storage for legacy data
-                preferences.getString(AuthTokenKey, null)
+                // One-time migration from legacy plaintext storage. If secure
+                // migration is impossible, discard the token rather than expose it.
+                val legacyToken = preferences.getString(AuthTokenKey, null)
+                if (legacyToken != null && saveAuthToken(legacyToken)) legacyToken else {
+                    preferences.edit().remove(AuthTokenKey).commit()
+                    null
+                }
             }
         } catch (_: RuntimeException) {
             null
@@ -91,14 +98,11 @@ class AndroidAppLocalStore(
     }
 
     fun saveUserProfile(userProfileJson: String): Boolean {
-        return try {
-            preferences.edit().putString(UserProfileKey, userProfileJson).apply()
-            true
-        } catch (_: RuntimeException) { false }
+        return saveSensitiveString(UserProfileKey, userProfileJson)
     }
 
     fun loadUserProfileJson(): String? {
-        return preferences.getString(UserProfileKey, null)
+        return readSensitiveString(UserProfileKey)
     }
 
     fun saveLastSyncTime(timestamp: String): Boolean {
@@ -127,15 +131,18 @@ class AndroidAppLocalStore(
         preferences.edit()
             .remove(AuthTokenKey)
             .remove(UserProfileKey)
-            .apply()
+            .commit()
         encryptedPrefs.edit()
             .remove(AuthTokenEncryptedKey)
             .remove(AuthTokenIvKey)
-            .apply()
+            .remove(encryptedValueKey(UserProfileKey))
+            .remove(encryptedIvKey(UserProfileKey))
+            .commit()
     }
 
     fun clearDraft() {
         preferences.edit().remove(DraftStorageKey).apply()
+        clearEncryptedValue(DraftStorageKey)
     }
 
     fun clearAll() {
@@ -145,11 +152,8 @@ class AndroidAppLocalStore(
             .remove(AuthTokenKey)
             .remove(UserProfileKey)
             .remove(LastSyncKey)
-            .apply()
-        encryptedPrefs.edit()
-            .remove(AuthTokenEncryptedKey)
-            .remove(AuthTokenIvKey)
-            .apply()
+            .commit()
+        encryptedPrefs.edit().clear().commit()
     }
 
     // ── AES/GCM encryption backed by Android Keystore ─────────────
@@ -161,8 +165,8 @@ class AndroidAppLocalStore(
             val iv = cipher.iv  // 12-byte random IV
             val encrypted = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
             EncryptedValue(
-                value = android.util.Base64.encodeToString(encrypted, android.util.Base64.DEFAULT),
-                iv = android.util.Base64.encodeToString(iv, android.util.Base64.DEFAULT)
+                value = android.util.Base64.encodeToString(encrypted, android.util.Base64.NO_WRAP),
+                iv = android.util.Base64.encodeToString(iv, android.util.Base64.NO_WRAP)
             )
         } catch (_: Exception) {
             null
@@ -245,7 +249,7 @@ class AndroidAppLocalStore(
     }
 
     private fun <T> read(key: String, clazz: Class<T>): LocalStoreReadResult<T> {
-        val json = preferences.getString(key, null)
+        val json = readSensitiveString(key)
             ?: return LocalStoreReadResult(value = null, status = LocalStoreReadStatus.Missing)
 
         return try {
@@ -261,13 +265,62 @@ class AndroidAppLocalStore(
     }
 
     private fun save(key: String, value: Any): Boolean {
+        return saveSensitiveString(key, gson.toJson(value))
+    }
+
+    private fun saveSensitiveString(key: String, value: String): Boolean {
         return try {
-            preferences.edit().putString(key, gson.toJson(value)).apply()
-            true
+            val encrypted = encrypt(value) ?: return false
+            val committed = encryptedPrefs.edit()
+                .putString(encryptedValueKey(key), encrypted.value)
+                .putString(encryptedIvKey(key), encrypted.iv)
+                .commit()
+            if (committed) preferences.edit().remove(key).commit()
+            committed
         } catch (_: RuntimeException) {
             false
         }
     }
+
+    private fun readSensitiveString(key: String): String? {
+        return try {
+            val encryptedValue = encryptedPrefs.getString(encryptedValueKey(key), null)
+            val iv = encryptedPrefs.getString(encryptedIvKey(key), null)
+            if (encryptedValue != null && iv != null) {
+                decrypt(encryptedValue, iv).also { decrypted ->
+                    if (decrypted == null) clearEncryptedValue(key)
+                }
+            } else {
+                // Migrate older plaintext app data once. Never continue using a
+                // plaintext value if it cannot be protected by the Keystore.
+                val legacyValue = preferences.getString(key, null) ?: return null
+                if (saveSensitiveString(key, legacyValue)) legacyValue else {
+                    preferences.edit().remove(key).commit()
+                    null
+                }
+            }
+        } catch (_: RuntimeException) {
+            null
+        }
+    }
+
+    private fun clearEncryptedAuthToken() {
+        encryptedPrefs.edit()
+            .remove(AuthTokenEncryptedKey)
+            .remove(AuthTokenIvKey)
+            .commit()
+    }
+
+    private fun clearEncryptedValue(key: String) {
+        encryptedPrefs.edit()
+            .remove(encryptedValueKey(key))
+            .remove(encryptedIvKey(key))
+            .commit()
+    }
+
+    private fun encryptedValueKey(key: String): String = "$key.encrypted"
+
+    private fun encryptedIvKey(key: String): String = "$key.iv"
 
     private data class EncryptedValue(val value: String, val iv: String)
 

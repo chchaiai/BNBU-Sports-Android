@@ -35,3 +35,9 @@ data class EnduranceConversionRequest(
     val gender: String,
     val gradeLevel: String
 )
+
+data class ExemptionSupplementRequest(
+    val reason: String,
+    val proofFiles: List<String>,
+    val organization: String? = null
+)

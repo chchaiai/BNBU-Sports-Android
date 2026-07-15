@@ -1,0 +1,790 @@
+openapi: 3.1.0
+info:
+  title: BNBU Sports Student API
+  version: 1.0.0
+  description: Android student client contract. Successful responses are not wrapped in a data envelope.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: /api
+    description: Same-origin API prefix; deployment supplies the HTTPS host.
+tags:
+  - name: Health
+    description: Service dependency health.
+  - name: Auth
+    description: Student authentication.
+  - name: Sport
+    description: Sport hours, records, tasks, and identities.
+  - name: Student
+    description: Student profile, courses, grades, and scoring.
+  - name: Notifications
+    description: Student notifications and read state.
+  - name: Exemptions
+    description: Physical-test and check-in exemption workflows.
+  - name: Upload
+    description: Proof file upload and registration.
+paths:
+  /health:
+    get:
+      tags: [Health]
+      security: []
+      summary: Check service dependencies
+      operationId: health
+      responses:
+        "200":
+          description: Database and object storage are healthy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Log in a student
+      operationId: studentLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /sport/summary:
+    get:
+      tags: [Sport]
+      summary: Get sport-hour progress
+      operationId: sportSummary
+      responses:
+        "200":
+          description: Student sport progress
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SportSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /sport/records:
+    get:
+      tags: [Sport]
+      summary: List sport records
+      operationId: listSportRecords
+      parameters:
+        - { in: query, name: status, schema: { type: string } }
+        - { in: query, name: courseId, schema: { type: string } }
+        - { $ref: "#/components/parameters/PageLimit" }
+        - { $ref: "#/components/parameters/PageOffset" }
+      responses:
+        "200":
+          description: Records owned by the authenticated student
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SportRecord" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Sport]
+      summary: Submit a sport record
+      operationId: createSportRecord
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSportRecord" }
+      responses:
+        "201":
+          description: Record submitted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MutationResult" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /sport/records/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ResourceId" }
+    get:
+      tags: [Sport]
+      summary: Get a sport record
+      operationId: getSportRecord
+      responses:
+        "200":
+          description: Record detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SportRecord" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /sport/records/{id}/supplements:
+    parameters:
+      - { $ref: "#/components/parameters/ResourceId" }
+      - { $ref: "#/components/parameters/IdempotencyKey" }
+    post:
+      tags: [Sport]
+      summary: Supplement a sport record
+      operationId: supplementSportRecord
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SupplementSportRecord" }
+      responses:
+        "201":
+          description: Supplement accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SupplementResult" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /sport/identity:
+    get:
+      tags: [Sport]
+      summary: List sport identities
+      operationId: sportIdentity
+      responses:
+        "200":
+          description: Team and club memberships
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Membership" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /common/notifications:
+    get:
+      tags: [Notifications]
+      summary: List notifications
+      operationId: listNotifications
+      responses:
+        "200":
+          description: Notifications
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Notification" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /common/notifications/{id}/read:
+    parameters:
+      - { $ref: "#/components/parameters/ResourceId" }
+    put:
+      tags: [Notifications]
+      summary: Mark a notification read
+      operationId: markNotificationRead
+      responses:
+        "200":
+          description: Read state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, read]
+                properties:
+                  id: { type: string }
+                  read: { type: boolean, const: true }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /student/profile:
+    get:
+      tags: [Student]
+      summary: Get the student profile
+      operationId: getStudentProfile
+      responses:
+        "200":
+          description: Profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StudentProfile" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [Student]
+      summary: Update the student profile
+      operationId: updateStudentProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [gender]
+              properties:
+                gender: { type: [string, "null"], enum: [male, female, null] }
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StudentProfile" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /student/courses:
+    get:
+      tags: [Student]
+      summary: List enrolled courses
+      operationId: listStudentCourses
+      parameters:
+        - in: query
+          name: scope
+          schema: { type: string, enum: [all, current, history], default: all }
+        - { in: query, name: semesterId, schema: { type: string } }
+      responses:
+        "200":
+          description: Enrolled courses
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CourseList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /student/tasks:
+    get:
+      tags: [Student]
+      summary: List sport tasks
+      operationId: listStudentTasks
+      responses:
+        "200":
+          description: Pending and completed tasks
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /student/grades:
+    get:
+      tags: [Student]
+      summary: Get student grades
+      operationId: getStudentGrades
+      responses:
+        "200":
+          description: Grade rows and summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Grades" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /student/exemptions:
+    get:
+      tags: [Exemptions]
+      summary: List legacy physical-test exemptions
+      operationId: listLegacyPhysicalExemptions
+      deprecated: true
+      parameters:
+        - { $ref: "#/components/parameters/PageLimit" }
+        - { $ref: "#/components/parameters/PageOffset" }
+      responses:
+        "200": { $ref: "#/components/responses/ExemptionList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Exemptions]
+      summary: Submit a legacy physical-test exemption
+      operationId: createLegacyPhysicalExemption
+      deprecated: true
+      description: Physical-test exemption. organization must be omitted or null.
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { $ref: "#/components/requestBodies/PhysicalExemption" }
+      responses:
+        "201": { $ref: "#/components/responses/ExemptionCreated" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /student/physical-test-exemptions:
+    get:
+      tags: [Exemptions]
+      summary: List physical-test exemptions
+      operationId: listPhysicalTestExemptions
+      parameters:
+        - { $ref: "#/components/parameters/PageLimit" }
+        - { $ref: "#/components/parameters/PageOffset" }
+      responses:
+        "200": { $ref: "#/components/responses/ExemptionList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Exemptions]
+      summary: Submit a physical-test exemption
+      operationId: createPhysicalTestExemption
+      description: type must be 800m or 1000m; organization must be omitted or null.
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { $ref: "#/components/requestBodies/PhysicalExemption" }
+      responses:
+        "201": { $ref: "#/components/responses/ExemptionCreated" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /student/physical-test-exemptions/{id}/supplements:
+    parameters:
+      - { $ref: "#/components/parameters/ResourceId" }
+      - { $ref: "#/components/parameters/IdempotencyKey" }
+    post:
+      tags: [Exemptions]
+      summary: Supplement a physical-test exemption
+      operationId: supplementPhysicalTestExemption
+      description: organization must be omitted or null.
+      requestBody: { $ref: "#/components/requestBodies/PhysicalExemptionSupplement" }
+      responses:
+        "201": { $ref: "#/components/responses/ExemptionCreated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /student/checkin-exemptions:
+    get:
+      tags: [Exemptions]
+      summary: List check-in exemptions
+      operationId: listCheckinExemptions
+      parameters:
+        - { $ref: "#/components/parameters/PageLimit" }
+        - { $ref: "#/components/parameters/PageOffset" }
+      responses:
+        "200": { $ref: "#/components/responses/ExemptionList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Exemptions]
+      summary: Submit a check-in exemption
+      operationId: createCheckinExemption
+      description: type must be team or club; organization is required.
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { $ref: "#/components/requestBodies/CheckinExemption" }
+      responses:
+        "201": { $ref: "#/components/responses/ExemptionCreated" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /student/checkin-exemptions/{id}/supplements:
+    parameters:
+      - { $ref: "#/components/parameters/ResourceId" }
+      - { $ref: "#/components/parameters/IdempotencyKey" }
+    post:
+      tags: [Exemptions]
+      summary: Supplement a check-in exemption
+      operationId: supplementCheckinExemption
+      description: organization is required.
+      requestBody: { $ref: "#/components/requestBodies/CheckinExemptionSupplement" }
+      responses:
+        "201": { $ref: "#/components/responses/ExemptionCreated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /scoring/convert-endurance:
+    post:
+      tags: [Student]
+      summary: Convert an endurance time to a score
+      operationId: convertEndurance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnduranceRequest" }
+      responses:
+        "200":
+          description: Authoritative server score
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnduranceResult" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /upload/proof:
+    post:
+      tags: [Upload]
+      summary: Upload proof files
+      operationId: uploadProof
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: array
+                  minItems: 1
+                  maxItems: 7
+                  items: { type: string, format: binary }
+      responses:
+        "201":
+          description: Uploaded files
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [files, count]
+                properties:
+                  files:
+                    type: array
+                    items: { $ref: "#/components/schemas/ProofFile" }
+                  count: { type: integer }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "415": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    ResourceId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 128 }
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: false
+      description: Reuse this key only for the same logical request after validation and normalization. Reusing it with a different normalized request body returns 409 IDEMPOTENCY_KEY_REUSED.
+      schema: { type: string, pattern: "^[A-Za-z0-9._:-]{8,128}$" }
+    PageLimit:
+      in: query
+      name: limit
+      required: false
+      description: Number of newest rows to return; defaults to 500.
+      schema: { type: integer, minimum: 1, maximum: 500, default: 500 }
+    PageOffset:
+      in: query
+      name: offset
+      required: false
+      description: Number of newest rows to skip.
+      schema: { type: integer, minimum: 0, maximum: 1000000, default: 0 }
+  requestBodies:
+    PhysicalExemption:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/PhysicalExemptionRequest" }
+    PhysicalExemptionSupplement:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/PhysicalExemptionSupplementRequest" }
+    CheckinExemption:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/CheckinExemptionRequest" }
+    CheckinExemptionSupplement:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/CheckinExemptionSupplementRequest" }
+  responses:
+    Unauthorized:
+      description: Authentication required or token invalid
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    ValidationError:
+      description: Invalid request
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    PayloadTooLarge:
+      description: JSON or multipart request body exceeds the configured limit
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    RateLimited:
+      description: Too many requests
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: Resource does not exist or is not owned by the student
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Conflict:
+      description: Business-state conflict, including an idempotency key reused with a different request body
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    ServiceUnavailable:
+      description: Dependency unhealthy
+      content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } }
+    ExemptionList:
+      description: Student applications
+      content:
+        application/json:
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/Exemption" }
+    ExemptionCreated:
+      description: Application or supplement accepted
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/MutationResult" }
+  schemas:
+    Error:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        requestId: { type: string }
+        details: {}
+    Health:
+      type: object
+      required: [ok, service, db, cos, time]
+      properties:
+        ok: { type: boolean }
+        service: { type: string, const: BNBU Sports API }
+        db: { type: boolean }
+        cos: { type: boolean }
+        time: { type: string, format: date-time }
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [account, password]
+      properties:
+        account: { type: string }
+        password: { type: string, format: password }
+        role: { type: string, const: student, default: student }
+        clientType: { type: string, const: mobile, default: mobile }
+    LoginResponse:
+      type: object
+      required: [token, user, defaultRoute]
+      properties:
+        token: { type: string }
+        defaultRoute: { type: string }
+        user: { $ref: "#/components/schemas/User" }
+    User:
+      type: object
+      required: [id, name, email, role, college, scope, status, className]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        email: { type: string }
+        role: { type: string, const: student }
+        college: { type: string }
+        scope: { type: string }
+        status: { type: string }
+        gender: { type: [string, "null"], enum: [male, female, null] }
+        gradeLevel: { type: [string, "null"], enum: [freshman, sophomore, junior, senior, null] }
+        className: { type: string }
+    SportSummary:
+      type: object
+      required: [courseHours, generalHours, totalCompleted, totalRequired, totalRemaining, courseRemaining, generalRemaining, completed, pendingCount, rule, teachers, courses]
+      properties:
+        courseHours: { type: number }
+        generalHours: { type: number }
+        totalCompleted: { type: number }
+        totalRequired: { type: number }
+        totalRemaining: { type: number }
+        courseRemaining: { type: number }
+        generalRemaining: { type: number }
+        completed: { type: boolean }
+        pendingCount: { type: integer }
+        rule:
+          type: object
+          properties:
+            total: { type: number }
+            courseRequired: { type: number }
+            generalRequired: { type: number }
+            dailyLimit: { type: number }
+        teachers: { type: array, items: { type: object, additionalProperties: true } }
+        courses: { type: array, items: { type: object, additionalProperties: true } }
+    ProofFile:
+      type: object
+      required: [url, cosKey, mediaType, mimeType, size]
+      properties:
+        url: { type: string }
+        cosKey: { type: string }
+        mediaType: { type: string, enum: [image, video] }
+        mimeType: { type: string }
+        size: { type: integer, minimum: 0 }
+    ProofReference:
+      type: object
+      additionalProperties: false
+      required: [cosKey, mediaType, mimeType, size]
+      properties:
+        cosKey: { type: string }
+        mediaType: { type: string, enum: [image, video] }
+        mimeType: { type: string }
+        size: { type: integer, minimum: 0 }
+    CreateSportRecord:
+      type: object
+      additionalProperties: false
+      required: [creditType, hours, description, proofFiles]
+      properties:
+        creditType: { type: string, enum: [课程相关, 其他运动] }
+        courseId: { type: [string, "null"] }
+        taskId: { type: [string, "null"] }
+        hours: { type: number, enum: [1, 2] }
+        description: { type: string, maxLength: 2000 }
+        proofFiles: { type: array, minItems: 1, maxItems: 7, items: { $ref: "#/components/schemas/ProofReference" } }
+        sportType: { type: [string, "null"] }
+    SupplementSportRecord:
+      type: object
+      additionalProperties: false
+      required: [hours, description, proofFiles]
+      properties:
+        hours: { type: number, enum: [1, 2] }
+        description: { type: string }
+        proofFiles: { type: array, minItems: 1, maxItems: 7, items: { $ref: "#/components/schemas/ProofReference" } }
+    SportRecord:
+      type: object
+      required: [id, creditType, hours, approvedHours, proofFiles, aiRiskCodes, status]
+      properties:
+        id: { type: string }
+        courseId: { type: [string, "null"] }
+        taskId: { type: [string, "null"] }
+        creditType: { type: string, enum: [课程相关, 其他运动, 系统抵扣] }
+        hours: { type: number }
+        approvedHours: { type: number }
+        description: { type: [string, "null"] }
+        proofFiles: { type: array, items: { $ref: "#/components/schemas/ProofFile" } }
+        sportType: { type: [string, "null"] }
+        aiReviewStatus: { type: [string, "null"], enum: [pending, normal, abnormal, manual_review, null] }
+        aiRiskLevel: { type: [string, "null"], enum: [low, medium, high, null] }
+        aiRiskCodes: { type: array, items: { type: string } }
+        aiReviewMessage: { type: [string, "null"] }
+        aiConfidence: { type: [number, "null"] }
+        aiReviewedAt: { type: [string, "null"], format: date-time }
+        status: { type: string, enum: [待审核, 已通过, 已驳回, 补材料, 系统抵扣] }
+        reviewComment: { type: [string, "null"] }
+        submittedAt: { type: [string, "null"], format: date-time }
+        reviewedAt: { type: [string, "null"], format: date-time }
+    MutationResult:
+      type: object
+      required: [id, status]
+      properties:
+        id: { type: string }
+        status: { type: string }
+        submittedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    SupplementResult:
+      type: object
+      required: [id, status, message]
+      properties:
+        id: { type: string }
+        status: { type: string }
+        message: { type: string }
+    Membership:
+      type: object
+      required: [id, type, organization, studentId, studentName, status, offset]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [team, club] }
+        organization: { type: string }
+        studentId: { type: string }
+        studentName: { type: string }
+        status: { type: string }
+        validUntil: { type: [string, "null"] }
+        offset: { type: string }
+        comment: { type: [string, "null"] }
+        updatedBy: { type: [string, "null"] }
+        updatedAt: { type: [string, "null"] }
+    Notification:
+      type: object
+      required: [id, title, message, time, category, isUnread]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        message: { type: string }
+        time: { type: string }
+        category: { type: string }
+        isUnread: { type: boolean }
+        targetType: { type: [string, "null"] }
+        targetId: { type: [string, "null"] }
+    StudentProfile:
+      type: object
+      required: [id, name, email, role, college, status, enrolledCourses]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        email: { type: string }
+        role: { type: string }
+        college: { type: string }
+        gender: { type: [string, "null"] }
+        gradeLevel: { type: [string, "null"] }
+        admissionYear: { type: [integer, "null"] }
+        currentGradeLevel: { type: string }
+        currentAcademicYear: { type: string }
+        gradeCalculatedAt: { type: string }
+        status: { type: string }
+        enrolledCourses: { type: integer }
+    CourseList:
+      type: object
+      required: [courses, scope]
+      properties:
+        courses: { type: array, items: { type: object, additionalProperties: true } }
+        scope: { type: string, enum: [all, current, history] }
+    TaskList:
+      type: object
+      required: [pending, completed]
+      properties:
+        pending: { type: array, items: { type: object, additionalProperties: true } }
+        completed: { type: array, items: { type: object, additionalProperties: true } }
+    Grades:
+      type: object
+      required: [grades, summary]
+      properties:
+        grades: { type: array, items: { type: object, additionalProperties: true } }
+        summary: { type: object, additionalProperties: true }
+    PhysicalExemptionRequest:
+      type: object
+      additionalProperties: false
+      required: [type, reason, proofFiles]
+      properties:
+        type: { type: string, enum: [800m, 1000m] }
+        reason: { type: string, minLength: 2, maxLength: 2000 }
+        proofFiles: { type: array, minItems: 1, maxItems: 5, items: { type: string, minLength: 1, maxLength: 1024 } }
+        organization: { type: "null" }
+    PhysicalExemptionSupplementRequest:
+      type: object
+      additionalProperties: false
+      required: [reason, proofFiles]
+      properties:
+        reason: { type: string, minLength: 2, maxLength: 2000 }
+        proofFiles: { type: array, minItems: 1, maxItems: 5, items: { type: string, minLength: 1, maxLength: 1024 } }
+        organization: { type: "null" }
+    CheckinExemptionRequest:
+      type: object
+      additionalProperties: false
+      required: [type, reason, proofFiles, organization]
+      properties:
+        type: { type: string, enum: [team, club] }
+        reason: { type: string, minLength: 2, maxLength: 2000 }
+        proofFiles: { type: array, minItems: 1, maxItems: 5, items: { type: string, minLength: 1, maxLength: 1024 } }
+        organization: { type: string, minLength: 1, maxLength: 128 }
+    CheckinExemptionSupplementRequest:
+      type: object
+      additionalProperties: false
+      required: [reason, proofFiles, organization]
+      properties:
+        reason: { type: string, minLength: 2, maxLength: 2000 }
+        proofFiles: { type: array, minItems: 1, maxItems: 5, items: { type: string, minLength: 1, maxLength: 1024 } }
+        organization: { type: string, minLength: 1, maxLength: 128 }
+    Exemption:
+      type: object
+      required: [id, studentId, type, category, status, proofFiles, createdAt]
+      properties:
+        id: { type: string }
+        studentId: { type: string }
+        studentName: { type: [string, "null"] }
+        type: { type: string }
+        category: { type: string, enum: [physical_test, checkin] }
+        organization: { type: [string, "null"] }
+        reason: { type: [string, "null"] }
+        status: { type: string, enum: [pending, reviewing, supplement_required, approved, rejected, expired] }
+        proofFiles: { type: array, items: { $ref: "#/components/schemas/ProofFile" } }
+        reviewComment: { type: [string, "null"] }
+        reviewerId: { type: [string, "null"] }
+        reviewerName: { type: [string, "null"] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: [string, "null"], format: date-time }
+    EnduranceRequest:
+      type: object
+      additionalProperties: false
+      required: [timeSeconds, gender, gradeLevel]
+      properties:
+        timeSeconds: { type: integer, minimum: 1, maximum: 3600 }
+        gender: { type: string, enum: [male, female] }
+        gradeLevel: { type: string, enum: [freshman, sophomore, junior, senior] }
+    EnduranceResult:
+      type: object
+      required: [score, tier, timeSeconds, gender, gradeLevel, gradeGroup]
+      properties:
+        score: { type: integer, minimum: 0, maximum: 100 }
+        tier: { type: string, enum: [excellent, good, pass, fail] }
+        timeSeconds: { type: integer }
+        gender: { type: string }
+        gradeLevel: { type: string }
+        gradeGroup: { type: string }
+        range:
+          type: [object, "null"]
+          properties:
+            min: { type: integer }
+            max: { type: integer }
+        note: { type: [string, "null"] }
+security:
+  - bearerAuth: []

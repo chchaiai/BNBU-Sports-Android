@@ -85,13 +85,28 @@ enum class SubScreen {
     PrivacyPolicy
 }
 
+private enum class AuthUiState {
+    Restoring,
+    Authenticated,
+    Login
+}
+
 @Composable
-fun AppRootScreen(appState: StudentAppState) {
+fun AppRootScreen(
+    appState: StudentAppState,
+    isRestoringSession: Boolean = false
+) {
+    var showLoginPrivacy by rememberSaveable { mutableStateOf(false) }
+    val authUiState = when {
+        isRestoringSession -> AuthUiState.Restoring
+        appState.isAuthenticated -> AuthUiState.Authenticated
+        else -> AuthUiState.Login
+    }
     AnimatedContent(
-        targetState = appState.isAuthenticated,
+        targetState = authUiState,
         modifier = Modifier.fillMaxSize(),
         transitionSpec = {
-            val direction = if (targetState) 1 else -1
+            val direction = if (targetState == AuthUiState.Authenticated) 1 else -1
             (fadeIn(tween(BNBUMotion.Standard, delayMillis = 40)) +
                 slideInHorizontally(
                     animationSpec = tween(BNBUMotion.Emphasized, easing = FastOutSlowInEasing),
@@ -104,16 +119,60 @@ fun AppRootScreen(appState: StudentAppState) {
                     ))
         },
         label = "authentication-transition"
-    ) { isAuthenticated ->
-        if (isAuthenticated) {
-            AuthenticatedAppContent(appState)
-        } else {
-            LoginScreen(
-                onLogin = { account, password -> appState.login(account, password) },
-                isLoading = appState.isLoading,
-                errorMessage = appState.lastError
+    ) { state ->
+        when (state) {
+            AuthUiState.Restoring -> SessionRestoreScreen()
+            AuthUiState.Authenticated -> AuthenticatedAppContent(appState)
+            AuthUiState.Login -> {
+                if (showLoginPrivacy) {
+                    PreLoginPrivacyScreen(onBack = { showLoginPrivacy = false })
+                } else {
+                    LoginScreen(
+                        onLogin = { account, password -> appState.login(account, password) },
+                        onOpenPrivacy = { showLoginPrivacy = true },
+                        isLoading = appState.isLoading,
+                        errorMessage = appState.lastError
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionRestoreScreen() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(32.dp),
+                strokeWidth = 3.dp
+            )
+            Text(
+                text = "正在恢复登录状态…",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
             )
         }
+    }
+}
+
+@Composable
+private fun PreLoginPrivacyScreen(onBack: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding()
+    ) {
+        PrivacyPolicyScreen(onBack = onBack)
     }
 }
 
@@ -176,6 +235,10 @@ private fun AuthenticatedAppContent(appState: StudentAppState) {
                                 exemptionTargetId = targetId
                                 renderedSubScreen = SubScreen.Exemption
                                 subScreen = SubScreen.Exemption
+                            },
+                            openEnduranceScoring = {
+                                renderedSubScreen = SubScreen.EnduranceScoring
+                                subScreen = SubScreen.EnduranceScoring
                             },
                             openPrivacy = {
                                 renderedSubScreen = SubScreen.PrivacyPolicy
@@ -247,15 +310,19 @@ private fun SubScreenOverlay(
         when (subScreen) {
             SubScreen.EnduranceScoring -> if (repo != null) {
                 EnduranceScoringScreen(
+                    appState = appState,
                     student = appState.workspace.student,
                     repository = repo,
+                    onUnauthorized = appState::handleUnauthorized,
                     onBack = onClose
                 )
             }
             SubScreen.Exemption -> if (repo != null) {
                 ExemptionScreen(
+                    appState = appState,
                     repository = repo,
                     initialApplicationId = exemptionTargetId,
+                    onUnauthorized = appState::handleUnauthorized,
                     onBack = onClose
                 )
             }
@@ -385,6 +452,7 @@ private fun RootTabContent(
     contentPadding: PaddingValues,
     onOpenNotificationSheet: () -> Unit,
     openExemption: (String?) -> Unit = {},
+    openEnduranceScoring: () -> Unit = {},
     openPrivacy: () -> Unit = {}
 ) {
     val tabStateHolder = rememberSaveableStateHolder()
@@ -418,9 +486,10 @@ private fun RootTabContent(
                     AppTab.Courses -> CoursesScreen(appState)
                     AppTab.CheckIn -> CheckInScreen(appState)
                     AppTab.Grades -> GradesScreen(appState)
-                    AppTab.Profile -> ProfileScreen(
+                        AppTab.Profile -> ProfileScreen(
                             appState = appState,
                             onOpenExemption = openExemption,
+                            onOpenEnduranceScoring = openEnduranceScoring,
                             onOpenPrivacy = openPrivacy
                         )
                 }

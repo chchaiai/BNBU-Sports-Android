@@ -125,6 +125,7 @@ import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
 import edu.bnbu.student.mvp.core.model.ProofUploadRule
+import edu.bnbu.student.mvp.core.model.ReviewStatus
 import edu.bnbu.student.mvp.core.model.TaskStatus
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.state.StudentAppState
@@ -148,6 +149,7 @@ private data class SportTypeOption(
 )
 
 private const val OtherSportType = "other"
+private const val MaxCheckInNoteLength = 2_000
 
 private val SportTypeOptions = listOf(
     SportTypeOption("running", "跑步", Icons.AutoMirrored.Filled.DirectionsRun),
@@ -174,7 +176,9 @@ fun CheckInScreen(appState: StudentAppState) {
     var selectedSegment by rememberSaveable { mutableStateOf(CheckInSegment.Submit) }
     var selectedRecordId by rememberSaveable { mutableStateOf<String?>(null) }
     var hours by rememberSaveable { mutableDoubleStateOf(initialDraft?.hours ?: 1.0) }
-    var note by rememberSaveable { mutableStateOf(initialDraft?.note.orEmpty()) }
+    var note by rememberSaveable {
+        mutableStateOf(initialDraft?.note.orEmpty().take(MaxCheckInNoteLength))
+    }
     var selectedSportType by rememberSaveable { mutableStateOf(initialDraft?.sportType) }
     var customSportType by rememberSaveable { mutableStateOf(initialDraft?.customSportType.orEmpty()) }
     var proofAttachments by remember {
@@ -221,7 +225,7 @@ fun CheckInScreen(appState: StudentAppState) {
         onDispose {
             val hasUserInput = latestHours != 1.0 || latestNote.isNotBlank() ||
                 latestSportType != null || latestCustomSportType.isNotBlank() || latestProofs.isNotEmpty()
-            if (hasUserInput) {
+            if (appState.isAuthenticated && hasUserInput) {
                 appState.saveDraft(
                     taskId = selectedTask.id,
                     hours = latestHours,
@@ -230,6 +234,11 @@ fun CheckInScreen(appState: StudentAppState) {
                     customSportType = latestCustomSportType,
                     proofAttachments = latestProofs
                 )
+            } else if (!appState.isAuthenticated) {
+                latestProofs.forEach {
+                    it.deleteOwnedCameraFile(context, "proof_")
+                    it.releasePersistableReadPermissionIfPossible(context)
+                }
             }
         }
     }
@@ -263,8 +272,8 @@ fun CheckInScreen(appState: StudentAppState) {
         label = "checkInRecordDetail"
     ) { animatedRecord ->
         if (animatedRecord != null) {
-            BackHandler { selectedRecordId = null }
             CheckInRecordDetail(
+                appState = appState,
                 record = animatedRecord,
                 imageLoader = imageLoader,
                 onBack = { selectedRecordId = null }
@@ -339,26 +348,38 @@ fun CheckInScreen(appState: StudentAppState) {
                         selectedSportType = selectedSportType,
                         customSportType = customSportType,
                         proofAttachments = proofAttachments,
-                        onHoursChanged = { hours = it },
-                        onNoteChanged = { note = it },
-                        onSportTypeSelected = {
-                            selectedSportType = it
-                            if (it != OtherSportType) customSportType = ""
+                        onHoursChanged = { if (!isSubmitting) hours = it },
+                        onNoteChanged = {
+                            if (!isSubmitting) note = it.take(MaxCheckInNoteLength)
                         },
-                        onCustomSportTypeChanged = { customSportType = it },
-                        onProofAttachmentsChanged = { proofAttachments = it },
+                        onSportTypeSelected = {
+                            if (!isSubmitting) {
+                                selectedSportType = it
+                                if (it != OtherSportType) customSportType = ""
+                            }
+                        },
+                        onCustomSportTypeChanged = {
+                            if (!isSubmitting) customSportType = it
+                        },
+                        onProofAttachmentsChanged = {
+                            if (!isSubmitting) proofAttachments = it
+                        },
                         validationMessage = validationMessage,
                         submitRequestVersion = submitRequestVersion,
                         onSubmitRequestHandled = { submitRequestVersion = 0 },
                         isSubmitting = isSubmitting,
                         onSubmittingChanged = { isSubmitting = it },
-                        onSubmitComplete = { message ->
+                        onSubmitComplete = { message, submittedProofs ->
                             statusMessage = message
                             selectedSegment = CheckInSegment.Records
                             hours = 1.0
                             note = ""
                             selectedSportType = null
                             customSportType = ""
+                            submittedProofs.forEach {
+                                it.deleteOwnedCameraFile(context, "proof_")
+                                it.releasePersistableReadPermissionIfPossible(context)
+                            }
                             proofAttachments = emptyList()
                         }
                     )
@@ -485,7 +506,7 @@ private fun SubmitShell(
     onSubmitRequestHandled: () -> Unit,
     isSubmitting: Boolean,
     onSubmittingChanged: (Boolean) -> Unit,
-    onSubmitComplete: (String) -> Unit
+    onSubmitComplete: (String, List<ProofAttachment>) -> Unit
 ) {
     val selectedTask = appState.selfCheckInTask
     val maxHours = appState.hourLimitFor(selectedTask)
@@ -544,7 +565,8 @@ private fun SubmitShell(
                 onNoteChanged = onNoteChanged,
                 onSportTypeSelected = onSportTypeSelected,
                 onCustomSportTypeChanged = onCustomSportTypeChanged,
-                onProofAttachmentsChanged = onProofAttachmentsChanged
+                onProofAttachmentsChanged = onProofAttachmentsChanged,
+                enabled = !isSubmitting
             )
 
             submitError?.let {
@@ -571,7 +593,10 @@ private fun SubmitShell(
                                     onSubmittingChanged(false)
                                     result.fold(
                                         onSuccess = {
-                                            onSubmitComplete("打卡已记录，可在打卡记录中查看。")
+                                            onSubmitComplete(
+                                                "打卡已记录，可在打卡记录中查看。",
+                                                proofAttachments
+                                            )
                                         },
                                         onFailure = {
                                             submitError = it.message ?: "打卡提交失败，请重试"
@@ -587,6 +612,7 @@ private fun SubmitShell(
                 title = "保存草稿",
                 icon = Icons.Filled.Save,
                 filled = false,
+                enabled = !isSubmitting,
                 onClick = {
                     appState.saveDraft(
                         taskId = selectedTask.id,
@@ -715,7 +741,8 @@ private fun SubmitDetailPanel(
     onNoteChanged: (String) -> Unit,
     onSportTypeSelected: (String?) -> Unit,
     onCustomSportTypeChanged: (String) -> Unit,
-    onProofAttachmentsChanged: (List<ProofAttachment>) -> Unit
+    onProofAttachmentsChanged: (List<ProofAttachment>) -> Unit,
+    enabled: Boolean
 ) {
     val cs = MaterialTheme.colorScheme
     SwissPanel {
@@ -728,6 +755,7 @@ private fun SubmitDetailPanel(
         HoursControl(
             value = hours,
             maxHours = maxHours,
+            enabled = enabled,
             onChange = { value ->
                 val normalized = if (selectedTask != null) {
                     appState.normalizedHours(value, selectedTask)
@@ -742,6 +770,7 @@ private fun SubmitDetailPanel(
         SportTypeSelector(
             selectedValue = selectedSportType,
             customValue = customSportType,
+            enabled = enabled,
             onSelected = onSportTypeSelected,
             onCustomValueChanged = onCustomSportTypeChanged
         )
@@ -756,6 +785,7 @@ private fun SubmitDetailPanel(
         NoteEditor(
             value = note,
             placeholder = "例如：今天在南区操场完成 5km 慢跑，上传运动轨迹截图和现场照片。",
+            enabled = enabled,
             onValueChange = onNoteChanged
         )
 
@@ -764,6 +794,7 @@ private fun SubmitDetailPanel(
             proofAttachments = proofAttachments,
             existingProofs = existingProofs,
             totalProofCount = totalProofCount,
+            enabled = enabled,
             onProofAttachmentsChanged = onProofAttachmentsChanged
         )
     }
@@ -773,6 +804,7 @@ private fun SubmitDetailPanel(
 private fun SportTypeSelector(
     selectedValue: String?,
     customValue: String,
+    enabled: Boolean,
     onSelected: (String?) -> Unit,
     onCustomValueChanged: (String) -> Unit
 ) {
@@ -797,6 +829,7 @@ private fun SportTypeSelector(
     SportTypeOptionRows(
         options = SportTypeOptions.take(4),
         selectedValue = selectedValue,
+        enabled = enabled,
         onSelected = onSelected
     )
 
@@ -819,6 +852,7 @@ private fun SportTypeSelector(
             SportTypeOptionRows(
                 options = SportTypeOptions.drop(4),
                 selectedValue = selectedValue,
+                enabled = enabled,
                 onSelected = onSelected
             )
         }
@@ -827,6 +861,7 @@ private fun SportTypeSelector(
     AnimatedVisibility(visible = !keepExpandedForSelection) {
         TextButton(
             onClick = { showAll = !showAll },
+            enabled = enabled,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(if (showAll) "收起运动项目" else "查看更多运动项目")
@@ -868,6 +903,7 @@ private fun SportTypeSelector(
                 BasicTextField(
                     value = customValue,
                     onValueChange = { onCustomValueChanged(it.take(32)) },
+                    enabled = enabled,
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     textStyle = TextStyle(
@@ -886,6 +922,7 @@ private fun SportTypeSelector(
 private fun SportTypeOptionRows(
     options: List<SportTypeOption>,
     selectedValue: String?,
+    enabled: Boolean,
     onSelected: (String?) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
@@ -915,7 +952,10 @@ private fun SportTypeOptionRows(
                                 color = backgroundColor,
                                 shape = MaterialTheme.shapes.small
                             )
-                            .bnbuClickable(onClickLabel = "选择${option.label}") {
+                            .bnbuClickable(
+                                enabled = enabled,
+                                onClickLabel = "选择${option.label}"
+                            ) {
                                 onSelected(if (selected) null else option.value)
                             }
                             .padding(horizontal = 14.dp),
@@ -946,6 +986,7 @@ private fun SportTypeOptionRows(
 private fun HoursControl(
     value: Double,
     maxHours: Double,
+    enabled: Boolean,
     onChange: (Double) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
@@ -959,7 +1000,7 @@ private fun HoursControl(
         SquareIconButton(
             icon = Icons.Filled.RemoveCircle,
             contentDescription = "减少学时",
-            enabled = value > 1.0,
+            enabled = enabled && value > 1.0,
             onClick = { onChange(value - 1.0) }
         )
         Column(
@@ -1008,7 +1049,7 @@ private fun HoursControl(
         SquareIconButton(
             icon = Icons.Filled.AddCircle,
             contentDescription = "增加学时",
-            enabled = value < maxHours,
+            enabled = enabled && value < maxHours,
             onClick = { onChange(value + 1.0) }
         )
     }
@@ -1018,6 +1059,7 @@ private fun HoursControl(
 private fun NoteEditor(
     value: String,
     placeholder: String,
+    enabled: Boolean,
     onValueChange: (String) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
@@ -1038,6 +1080,7 @@ private fun NoteEditor(
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
+            enabled = enabled,
             modifier = Modifier.fillMaxSize(),
             textStyle = TextStyle(
                 color = cs.onSurface,
@@ -1055,6 +1098,7 @@ private fun ProofAttachmentPanel(
     proofAttachments: List<ProofAttachment>,
     existingProofs: List<ProofAttachment>,
     totalProofCount: Int,
+    enabled: Boolean,
     onProofAttachmentsChanged: (List<ProofAttachment>) -> Unit
 ) {
     val context = LocalContext.current
@@ -1063,6 +1107,8 @@ private fun ProofAttachmentPanel(
     var attachmentNotice by remember { mutableStateOf<String?>(null) }
     var cameraTempUri by remember { mutableStateOf<Uri?>(null) }
     var cameraTempFile by remember { mutableStateOf<File?>(null) }
+    val latestCameraTempFile by rememberUpdatedState(cameraTempFile)
+    val latestEnabled by rememberUpdatedState(enabled)
     val latestProofAttachments by rememberUpdatedState(proofAttachments)
     val latestExistingProofs by rememberUpdatedState(existingProofs)
     val currentProofs = existingProofs + proofAttachments
@@ -1072,13 +1118,19 @@ private fun ProofAttachmentPanel(
         .coerceAtLeast(0)
     val hasAvailableProofSlot = imageSlots > 0 || videoSlots > 0
 
+    DisposableEffect(Unit) {
+        onDispose { latestCameraTempFile?.delete() }
+    }
+
     // Camera launcher (AND-003)
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
         val uri = cameraTempUri
         val file = cameraTempFile
-        if (success && uri != null && file != null) {
+        if (!latestEnabled) {
+            file?.delete()
+        } else if (success && uri != null && file != null) {
             val attachment = file.toProofAttachmentFromCamera(uri)
             if (
                 attachment != null &&
@@ -1088,8 +1140,11 @@ private fun ProofAttachmentPanel(
                 onProofAttachmentsChanged(proofAttachments + attachment)
                 attachmentNotice = "已拍摄 1 张现场凭证。"
             } else {
+                file?.delete()
                 attachmentNotice = "拍摄失败或已达到 ${ProofUploadRule.maxImageCount} 张照片上限。"
             }
+        } else {
+            file?.delete()
         }
         cameraTempUri = null
         cameraTempFile = null
@@ -1099,6 +1154,10 @@ private fun ProofAttachmentPanel(
     val mediaPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
+        if (!enabled) {
+            attachmentNotice = "正在提交，暂时不能修改凭证。"
+            return@rememberLauncherForActivityResult
+        }
         if (!hasAvailableProofSlot) {
             attachmentNotice = "已达到上传上限：最多 ${ProofUploadRule.maxImageCount} 张照片和 ${ProofUploadRule.maxVideoCount} 个视频。"
             return@rememberLauncherForActivityResult
@@ -1125,13 +1184,25 @@ private fun ProofAttachmentPanel(
                 return@launch
             }
             val proofsAtCompletion = latestExistingProofs + latestProofAttachments
-            val newAttachments = pickedAttachments.takeAllowedProofAttachments(proofsAtCompletion)
+            if (!latestEnabled) {
+                return@launch
+            }
+            val existingSources = proofsAtCompletion.mapTo(mutableSetOf()) { it.source }
+            val allowedAttachments = pickedAttachments
+                .distinctBy { it.source }
+                .filterNot { it.source in existingSources }
+                .takeAllowedProofAttachments(proofsAtCompletion)
+            val newAttachments = allowedAttachments.filter { attachment ->
+                val uri = runCatching { Uri.parse(attachment.source) }.getOrNull()
+                uri != null && context.takePersistableReadPermissionIfPossible(uri)
+            }
             if (newAttachments.isNotEmpty()) {
                 onProofAttachmentsChanged(latestProofAttachments + newAttachments)
             }
             attachmentNotice = when {
-                newAttachments.isEmpty() -> "所选文件超过上传数量上限，未添加。"
-                newAttachments.size < pickedAttachments.size -> "已添加 ${newAttachments.size} 个凭证，超出数量上限的文件已跳过。"
+                newAttachments.isEmpty() -> "未添加文件：请避免重复选择，并使用支持长期授权的相册文件。"
+                newAttachments.size < pickedAttachments.size ->
+                    "已添加 ${newAttachments.size} 个凭证；重复、超限或无法长期授权的文件已跳过。"
                 else -> "已添加 ${newAttachments.size} 个本地凭证。"
             }
         }
@@ -1156,16 +1227,18 @@ private fun ProofAttachmentPanel(
             icon = Icons.Filled.CameraAlt,
             filled = imageSlots > 0,
             modifier = Modifier.weight(1f),
+            enabled = enabled && imageSlots > 0,
             onClick = {
+                if (!enabled) return@ActionButton
                 if (imageSlots <= 0) {
                     attachmentNotice = "已达到 ${ProofUploadRule.maxImageCount} 张照片上限。"
                     return@ActionButton
                 }
-                val photoFile = File(
-                    context.getExternalFilesDir(Environment.DIRECTORY_PICTURES),
-                    "proof_${System.currentTimeMillis()}.jpg"
-                )
+                var photoFile: File? = null
                 try {
+                    val picturesDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+                        ?: context.cacheDir
+                    photoFile = File(picturesDir, "proof_${System.currentTimeMillis()}.jpg")
                     photoFile.parentFile?.mkdirs()
                     val uri = FileProvider.getUriForFile(
                         context,
@@ -1176,6 +1249,7 @@ private fun ProofAttachmentPanel(
                     cameraTempFile = photoFile
                     cameraLauncher.launch(uri)
                 } catch (_: Exception) {
+                    photoFile?.delete()
                     cameraTempUri = null
                     cameraTempFile = null
                     attachmentNotice = "Camera is unavailable on this emulator. Please use photo/video picker."
@@ -1188,6 +1262,7 @@ private fun ProofAttachmentPanel(
             icon = Icons.Filled.UploadFile,
             filled = hasAvailableProofSlot,
             modifier = Modifier.weight(1f),
+            enabled = enabled && hasAvailableProofSlot,
             onClick = {
                 if (hasAvailableProofSlot) {
                     mediaPicker.launch(arrayOf("image/*", "video/*"))
@@ -1206,7 +1281,12 @@ private fun ProofAttachmentPanel(
             icon = Icons.Filled.Delete,
             filled = false,
             modifier = Modifier.weight(1f),
+            enabled = enabled && proofAttachments.isNotEmpty(),
             onClick = {
+                proofAttachments.forEach {
+                    it.deleteOwnedCameraFile(context, "proof_")
+                    it.releasePersistableReadPermissionIfPossible(context)
+                }
                 onProofAttachmentsChanged(emptyList())
                 attachmentNotice = "凭证已清空。"
             }
@@ -1235,8 +1315,16 @@ private fun ProofAttachmentPanel(
             proofAttachments.forEach { attachment ->
                 ProofAttachmentRow(
                     attachment = attachment,
+                    enabled = enabled,
                     onRemove = {
-                        onProofAttachmentsChanged(proofAttachments.filterNot { it.id == attachment.id })
+                        val remainingAttachments = proofAttachments.filterNot {
+                            it.id == attachment.id
+                        }
+                        attachment.deleteOwnedCameraFile(context, "proof_")
+                        if (remainingAttachments.none { it.source == attachment.source }) {
+                            attachment.releasePersistableReadPermissionIfPossible(context)
+                        }
+                        onProofAttachmentsChanged(remainingAttachments)
                     }
                 )
             }
@@ -1247,6 +1335,7 @@ private fun ProofAttachmentPanel(
 @Composable
 private fun ProofAttachmentRow(
     attachment: ProofAttachment,
+    enabled: Boolean,
     onRemove: () -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
@@ -1285,7 +1374,7 @@ private fun ProofAttachmentRow(
         SquareIconButton(
             icon = Icons.Filled.Delete,
             contentDescription = "删除凭证",
-            enabled = true,
+            enabled = enabled,
             onClick = onRemove
         )
     }
@@ -1688,6 +1777,7 @@ private fun MediaPlaceholder(
 
 @Composable
 private fun CheckInRecordDetail(
+    appState: StudentAppState,
     record: CheckInRecord,
     imageLoader: ImageLoader,
     onBack: () -> Unit
@@ -1695,6 +1785,34 @@ private fun CheckInRecordDetail(
     val context = LocalContext.current
     val cs = MaterialTheme.colorScheme
     var openError by remember { mutableStateOf<String?>(null) }
+    var supplementHours by remember(record.id) {
+        mutableDoubleStateOf(if (record.hours >= 2.0) 2.0 else 1.0)
+    }
+    var supplementNote by remember(record.id) { mutableStateOf("") }
+    var supplementProofs by remember(record.id) {
+        mutableStateOf<List<ProofAttachment>>(emptyList())
+    }
+    var isSupplementSubmitting by remember(record.id) { mutableStateOf(false) }
+    val latestSupplementProofs by rememberUpdatedState(supplementProofs)
+    val canSupplement = record.status == ReviewStatus.Supplement ||
+        record.status == ReviewStatus.Rejected
+
+    DisposableEffect(record.id) {
+        onDispose {
+            latestSupplementProofs.forEach {
+                it.deleteOwnedCameraFile(context, "proof_")
+                it.releasePersistableReadPermissionIfPossible(context)
+            }
+        }
+    }
+
+    BackHandler {
+        if (isSupplementSubmitting) {
+            openError = "补充材料正在提交，请等待完成后再返回"
+        } else {
+            onBack()
+        }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1705,7 +1823,11 @@ private fun CheckInRecordDetail(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
-                    .bnbuClickable(onClickLabel = "返回打卡记录", onClick = onBack),
+                    .bnbuClickable(
+                        enabled = !isSupplementSubmitting,
+                        onClickLabel = "返回打卡记录",
+                        onClick = onBack
+                    ),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
@@ -1724,6 +1846,8 @@ private fun CheckInRecordDetail(
                 Spacer(Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     StatusBadge(text = record.creditType.label)
+                    Spacer(Modifier.width(8.dp))
+                    StatusBadge(text = record.status.label, filled = canSupplement)
                     Spacer(Modifier.width(8.dp))
                     Text(record.hours.hourText(), color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
                 }
@@ -1771,6 +1895,103 @@ private fun CheckInRecordDetail(
                         }.joinToString(" · "),
                         color = cs.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+        }
+        if (canSupplement) {
+            item {
+                SectionTitle(eyebrow = "Supplement", title = "补交打卡材料")
+            }
+            item {
+                SwissPanel {
+                    record.teacherFeedback.takeIf { it.isNotBlank() }?.let { feedback ->
+                        Text(
+                            text = "审核反馈：$feedback",
+                            color = cs.primary,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(Modifier.height(16.dp))
+                    }
+                    Text(
+                        text = "补交学时",
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    HoursControl(
+                        value = supplementHours,
+                        maxHours = minOf(record.hours, appState.hourRule.dailyLimit),
+                        enabled = !isSupplementSubmitting,
+                        onChange = {
+                            if (!isSupplementSubmitting) supplementHours = it
+                        }
+                    )
+                    Spacer(Modifier.height(18.dp))
+                    Text(
+                        text = "补充说明",
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    NoteEditor(
+                        value = supplementNote,
+                        placeholder = "请说明本次新增材料以及对审核反馈的补充。",
+                        enabled = !isSupplementSubmitting,
+                        onValueChange = {
+                            if (!isSupplementSubmitting) {
+                                supplementNote = it.take(MaxCheckInNoteLength)
+                            }
+                        }
+                    )
+                    Spacer(Modifier.height(18.dp))
+                    ProofAttachmentPanel(
+                        proofAttachments = supplementProofs,
+                        existingProofs = record.proofFiles,
+                        totalProofCount = record.proofFiles.size + supplementProofs.size,
+                        enabled = !isSupplementSubmitting,
+                        onProofAttachmentsChanged = {
+                            if (!isSupplementSubmitting) supplementProofs = it
+                        }
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    ActionButton(
+                        title = if (isSupplementSubmitting) "提交中..." else "提交补充材料",
+                        icon = Icons.Filled.UploadFile,
+                        filled = true,
+                        enabled = !isSupplementSubmitting && supplementProofs.isNotEmpty(),
+                        onClick = {
+                            if (isSupplementSubmitting) return@ActionButton
+                            val proofSnapshot = supplementProofs.toList()
+                            if (proofSnapshot.isEmpty()) {
+                                openError = "请至少添加 1 个新的图片或视频凭证"
+                                return@ActionButton
+                            }
+                            isSupplementSubmitting = true
+                            openError = null
+                            appState.submitSupplement(
+                                record = record,
+                                hours = supplementHours,
+                                note = supplementNote.trim(),
+                                proofAttachments = proofSnapshot,
+                                onResult = { result ->
+                                    result.fold(
+                                        onSuccess = {
+                                            proofSnapshot.forEach {
+                                                it.deleteOwnedCameraFile(context, "proof_")
+                                                it.releasePersistableReadPermissionIfPossible(context)
+                                            }
+                                            supplementProofs = emptyList()
+                                            supplementNote = ""
+                                        },
+                                        onFailure = {
+                                            openError = it.message ?: "补充材料提交失败，请重试"
+                                        }
+                                    )
+                                    isSupplementSubmitting = false
+                                }
+                            )
+                        }
                     )
                 }
             }
@@ -1871,7 +2092,6 @@ private fun List<Uri>.toPickedProofAttachments(
     startIndex: Int
 ): List<ProofAttachment> {
     return mapIndexed { offset, uri ->
-        context.takePersistableReadPermissionIfPossible(uri)
         uri.toProofAttachment(context = context, index = startIndex + offset)
     }
 }
@@ -1969,10 +2189,22 @@ private fun Context.videoDurationSecondsFor(uri: Uri): Double? {
     }
 }
 
-private fun Context.takePersistableReadPermissionIfPossible(uri: Uri) {
-    runCatching {
+private fun Context.takePersistableReadPermissionIfPossible(uri: Uri): Boolean {
+    return runCatching {
         contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        true
+    }.getOrDefault(false)
+}
+
+private fun Context.releasePersistableReadPermissionIfPossible(uri: Uri) {
+    runCatching {
+        contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
+}
+
+private fun ProofAttachment.releasePersistableReadPermissionIfPossible(context: Context) {
+    val uri = runCatching { Uri.parse(source) }.getOrNull() ?: return
+    if (uri.scheme == "content") context.releasePersistableReadPermissionIfPossible(uri)
 }
 
 private val CreditType.checkInIcon: ImageVector
@@ -1995,4 +2227,19 @@ private fun File.toProofAttachmentFromCamera(sourceUri: Uri): ProofAttachment? {
         durationSeconds = null,
         source = sourceUri.toString()
     )
+}
+
+private fun ProofAttachment.deleteOwnedCameraFile(context: Context, requiredPrefix: String) {
+    if (!fileName.startsWith(requiredPrefix) || !fileName.endsWith(".jpg", ignoreCase = true)) return
+    val ownedDirectories = listOfNotNull(
+        context.getExternalFilesDir(Environment.DIRECTORY_PICTURES),
+        context.cacheDir
+    )
+    ownedDirectories.forEach { directory ->
+        runCatching {
+            val candidate = File(directory, fileName).canonicalFile
+            val parent = directory.canonicalFile
+            if (candidate.parentFile == parent && candidate.isFile) candidate.delete()
+        }
+    }
 }

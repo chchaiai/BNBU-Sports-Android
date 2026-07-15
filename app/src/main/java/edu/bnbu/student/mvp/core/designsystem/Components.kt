@@ -414,17 +414,19 @@ fun ActionButton(
     icon: ImageVector,
     filled: Boolean,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val animatedModifier = modifier
         .fillMaxWidth()
-        .pressScale(interactionSource = interactionSource)
+        .pressScale(interactionSource = interactionSource, enabled = enabled)
     if (filled) {
         FilledTonalButton(
             onClick = onClick,
             modifier = animatedModifier,
             interactionSource = interactionSource,
+            enabled = enabled,
             shape = MaterialTheme.shapes.large
         ) {
             Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -436,6 +438,7 @@ fun ActionButton(
             onClick = onClick,
             modifier = animatedModifier,
             interactionSource = interactionSource,
+            enabled = enabled,
             shape = MaterialTheme.shapes.large
         ) {
             Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp))

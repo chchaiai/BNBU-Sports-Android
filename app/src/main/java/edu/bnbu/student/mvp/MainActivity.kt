@@ -1,40 +1,56 @@
 package edu.bnbu.student.mvp
 
+import android.app.Application
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.AndroidViewModel
+import edu.bnbu.student.mvp.core.data.ApiStudentRepository
 import edu.bnbu.student.mvp.core.designsystem.BNBUStudentTheme
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.shell.AppRootScreen
 
 class MainActivity : ComponentActivity() {
-    private lateinit var appState: StudentAppState
+    private val appStateViewModel: StudentAppStateViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        appState = StudentAppState(
-            localStore = AndroidAppLocalStore(applicationContext),
-            cacheDir = cacheDir
-        )
-
-        // Initialize API context for uploads
-        edu.bnbu.student.mvp.core.data.ApiStudentRepository.initContext(applicationContext)
-
-        // Attempt session restore before showing login (AND-004)
-        appState.tryRestoreSession()
+        val appState = appStateViewModel.appState
 
         setContent {
             BNBUStudentTheme(themeMode = appState.themeMode) {
-                AppRootScreen(appState = appState)
+                AppRootScreen(
+                    appState = appState,
+                    isRestoringSession = appStateViewModel.isRestoringSession
+                )
             }
         }
     }
+}
 
-    override fun onDestroy() {
-        super.onDestroy()
-        if (::appState.isInitialized) {
-            appState.destroy()
+class StudentAppStateViewModel(application: Application) : AndroidViewModel(application) {
+    val appState = StudentAppState(
+        localStore = AndroidAppLocalStore(application),
+        cacheDir = application.cacheDir
+    )
+
+    var isRestoringSession by mutableStateOf(true)
+        private set
+
+    init {
+        ApiStudentRepository.initContext(application)
+        appState.tryRestoreSession {
+            isRestoringSession = false
         }
+    }
+
+    override fun onCleared() {
+        appState.destroy()
+        super.onCleared()
     }
 }
