@@ -1,45 +1,35 @@
-#!/bin/bash
-# CI check script for BNBU Student Android app (AND-012)
-# Runs lint, unit tests, and assembleDebug — suitable for CI pipelines.
-# Exit code: 0 on success, non-zero on failure.
-set -euo pipefail
+#!/usr/bin/env bash
+# Reproducible repository check for CI. Any failed command stops the script.
+set -Eeuo pipefail
 
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APK_PATH="$ROOT_DIR/app/build/outputs/apk/debug/app-debug.apk"
 
-cd "$PROJECT_DIR"
-
-echo "=== BNBU Student Android CI Check ==="
-echo "Project: $PROJECT_DIR"
-echo ""
-
-# 1. Kotlin lint check
-echo "--- Running lint (compile check) ---"
-# We run compileDebugKotlin as a fast lint proxy — catches syntax errors,
-# type mismatches, missing imports, etc.
-./gradlew :app:compileDebugKotlin --console=plain --no-daemon --quiet
-echo "✓ Kotlin compilation passed"
-
-# 2. Unit tests
-echo ""
-echo "--- Running unit tests ---"
-./gradlew :app:testDebugUnitTest --console=plain --no-daemon
-echo "✓ Unit tests passed"
-
-# 3. Assemble debug APK (catches resource/Manifest issues)
-echo ""
-echo "--- Assembling debug APK ---"
-./gradlew :app:assembleDebug --console=plain --no-daemon --quiet
-APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
-if [ -f "$APK_PATH" ]; then
-  APK_SIZE=$(stat -c%s "$APK_PATH" 2>/dev/null || stat -f%z "$APK_PATH" 2>/dev/null || wc -c < "$APK_PATH")
-  echo "✓ Debug APK assembled ($APK_SIZE bytes)"
-else
-  echo "✗ Debug APK not found at $APK_PATH"
+fail() {
+  printf 'ERROR: %s\n' "$1" >&2
   exit 1
-fi
+}
 
-echo ""
-echo "=== All CI checks passed ==="
+command -v java >/dev/null 2>&1 || fail "JDK 17 is required."
+command -v npm >/dev/null 2>&1 || fail "Node.js 20+ and npm are required."
+[[ -f "$ROOT_DIR/gradlew" ]] || fail "Gradle wrapper was not found."
+[[ -f "$ROOT_DIR/backend/package-lock.json" ]] || fail "backend/package-lock.json was not found."
 
-# Optional: try release build (may need signing config)
-# ./gradlew :app:assembleRelease --console=plain --no-daemon
+printf '%s\n' '[1/2] Android: unit tests, lint, and debug APK'
+bash "$ROOT_DIR/gradlew" \
+  :app:testDebugUnitTest \
+  :app:lintDebug \
+  :app:assembleDebug \
+  --console=plain \
+  --no-daemon
+
+[[ -s "$APK_PATH" ]] || fail "Debug APK was not created at $APK_PATH."
+
+printf '%s\n' '[2/2] Backend: clean lockfile install, typecheck, tests, and build'
+(
+  cd "$ROOT_DIR/backend"
+  npm ci
+  npm run check
+)
+
+printf '%s\n' 'All Android and backend checks passed.'

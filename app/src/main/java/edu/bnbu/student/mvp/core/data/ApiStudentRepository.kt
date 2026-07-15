@@ -15,6 +15,7 @@ import edu.bnbu.student.mvp.core.model.Membership
 import edu.bnbu.student.mvp.core.model.NoticeCategory
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
+import edu.bnbu.student.mvp.core.model.ProofUploadRule
 import edu.bnbu.student.mvp.core.model.ReviewStatus
 import edu.bnbu.student.mvp.core.model.StudentNotice
 import edu.bnbu.student.mvp.core.model.StudentProgress
@@ -31,6 +32,7 @@ import edu.bnbu.student.mvp.core.network.NotificationResponse
 import edu.bnbu.student.mvp.core.network.SportRecordResponse
 import edu.bnbu.student.mvp.core.network.SportSummaryResponse
 import edu.bnbu.student.mvp.core.network.StudentApiClient
+import edu.bnbu.student.mvp.core.network.ApiHttpException
 import edu.bnbu.student.mvp.core.network.StudentApiRequest
 import edu.bnbu.student.mvp.core.network.StudentEndpoint
 import edu.bnbu.student.mvp.core.network.StudentLoginRequest
@@ -44,6 +46,7 @@ import edu.bnbu.student.mvp.core.network.UserDto
 import edu.bnbu.student.mvp.core.network.EnduranceScoreResponse
 import edu.bnbu.student.mvp.core.network.ExemptionResponse
 import edu.bnbu.student.mvp.core.network.ExemptionSubmitResponse
+import edu.bnbu.student.mvp.core.network.ExemptionSupplementRequest
 import edu.bnbu.student.mvp.core.network.StudentProfileResponse
 import edu.bnbu.student.mvp.core.network.StudentProfileUpdateRequest
 import edu.bnbu.student.mvp.core.network.StudentTaskListResponse
@@ -52,8 +55,16 @@ import edu.bnbu.student.mvp.core.network.StudentCourseDetailResponse
 import edu.bnbu.student.mvp.core.network.StudentCoursesResponse
 import edu.bnbu.student.mvp.core.network.StudentGradesResponse
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileInputStream
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.URI
 
 class ApiStudentRepository(
     private var apiClient: StudentApiClient = StudentApiClient(),
@@ -78,7 +89,7 @@ class ApiStudentRepository(
     override suspend fun login(payload: StudentLoginRequest): LoginResponse {
         val request = loginRequest(payload)
         return withContext(Dispatchers.IO) {
-            apiClient.executeAndParse(request, LoginResponse::class.java)
+            apiClient.executeAndParseCancellable(request, LoginResponse::class.java)
         }
     }
 
@@ -99,21 +110,24 @@ class ApiStudentRepository(
      */
     override suspend fun loadWorkspaceAsync(): StudentWorkspace = withContext(Dispatchers.IO) {
         try {
-            val summary: SportSummaryResponse = apiClient.executeAndParse(
+            val summary: SportSummaryResponse = apiClient.executeAndParseCancellable(
                 sportSummaryRequest(), SportSummaryResponse::class.java
             )
-            val records: List<SportRecordResponse> = apiClient.executeAndParse(
+            val records: List<SportRecordResponse> = apiClient.executeAndParseCancellable(
                 recordsListRequest(), Array<SportRecordResponse>::class.java
             ).toList()
-            val memberships: List<MembershipResponse> = apiClient.executeAndParse(
+            val memberships: List<MembershipResponse> = apiClient.executeAndParseCancellable(
                 sportIdentityRequest(), Array<MembershipResponse>::class.java
             ).toList()
-            val notices: List<NotificationResponse> = apiClient.executeAndParse(
+            val notices: List<NotificationResponse> = apiClient.executeAndParseCancellable(
                 notificationsRequest(), Array<NotificationResponse>::class.java
             ).toList()
             val profileResult: Result<StudentProfileResponse> = try {
                 Result.success(fetchProfile())
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                if (e.isUnauthorizedResponse()) throw e
                 Result.failure(e)
             }
             // Also fetch tasks from the backend — they are a separate API call.
@@ -121,40 +135,48 @@ class ApiStudentRepository(
             // returning an empty list (which would show "暂无近期任务" misleadingly).
             val tasksResult: Result<StudentTaskListResponse> = try {
                 Result.success(
-                    apiClient.executeAndParse(
+                    apiClient.executeAndParseCancellable(
                         apiClient.request(StudentEndpoint.StudentTasks),
                         StudentTaskListResponse::class.java
                     )
                 )
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                if (e.isUnauthorizedResponse()) throw e
                 Result.failure(e)
             }
             val tasksResponse = tasksResult.getOrElse {
                 StudentTaskListResponse(emptyList(), emptyList())
             }
             val allTasks = tasksResponse.pending + tasksResponse.completed
-            val tasksLoadError = if (tasksResult.isFailure) tasksResult.exceptionOrNull()?.message else null
             // Week2 course contract is optional during the transition from the
             // shared port 96 API. A 404 falls back to summary.courses below.
             val coursesResult: Result<StudentCoursesResponse> = try {
                 Result.success(
-                    apiClient.executeAndParse(
+                    apiClient.executeAndParseCancellable(
                         apiClient.request(StudentEndpoint.StudentCourses(scope = "all")),
                         StudentCoursesResponse::class.java
                     )
                 )
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                if (e.isUnauthorizedResponse()) throw e
                 Result.failure(e)
             }
             val courseItems = coursesResult.getOrNull()?.courses.orEmpty()
             val gradesResult: Result<StudentGradesResponse> = try {
                 Result.success(
-                    apiClient.executeAndParse(
+                    apiClient.executeAndParseCancellable(
                         apiClient.request(StudentEndpoint.StudentGrades),
                         StudentGradesResponse::class.java
                     )
                 )
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                if (e.isUnauthorizedResponse()) throw e
                 Result.failure(e)
             }
             val gradesResponse = gradesResult.getOrNull()
@@ -167,12 +189,13 @@ class ApiStudentRepository(
                 notices = notices,
                 courseItems = courseItems,
                 taskItems = allTasks,
-                tasksLoadError = tasksLoadError,
                 gradesResponse = gradesResponse,
                 gradesLoadError = gradesLoadError,
                 remoteProfile = profileResult.getOrNull()
             )
             workspace
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             android.util.Log.w("ApiStudentRepository", "Workspace refresh failed: ${e.message}")
             throw e
@@ -189,7 +212,7 @@ class ApiStudentRepository(
      */
     suspend fun fetchStudentGrades(): StudentGradesResponse {
         return withContext(Dispatchers.IO) {
-            apiClient.executeAndParse(
+            apiClient.executeAndParseCancellable(
                 apiClient.request(StudentEndpoint.StudentGrades),
                 StudentGradesResponse::class.java
             )
@@ -199,11 +222,17 @@ class ApiStudentRepository(
     // ── Mutations ───────────────────────────────────────────────
 
     override suspend fun submitRecord(payload: SubmitSportRecordRequest): Result<SubmitRecordResponse> {
-        return try {
-            val request = submitSportRecordRequest(payload)
-            Result.success(apiClient.executeAndParse(request, SubmitRecordResponse::class.java))
-        } catch (e: Exception) {
-            Result.failure(e)
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = submitSportRecordRequest(payload)
+                Result.success(
+                    apiClient.executeAndParseCancellable(request, SubmitRecordResponse::class.java)
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
         }
     }
 
@@ -211,20 +240,32 @@ class ApiStudentRepository(
         recordId: String,
         payload: SupplementSportRecordRequest
     ): Result<SupplementResponse> {
-        return try {
-            val request = supplementSportRecordRequest(recordId, payload)
-            Result.success(apiClient.executeAndParse(request, SupplementResponse::class.java))
-        } catch (e: Exception) {
-            Result.failure(e)
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = supplementSportRecordRequest(recordId, payload)
+                Result.success(
+                    apiClient.executeAndParseCancellable(request, SupplementResponse::class.java)
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
         }
     }
 
     override suspend fun markNotificationRead(id: String): Result<MarkReadResponse> {
-        return try {
-            val request = markNotificationReadRequest(id)
-            Result.success(apiClient.executeAndParse(request, MarkReadResponse::class.java))
-        } catch (e: Exception) {
-            Result.failure(e)
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = markNotificationReadRequest(id)
+                Result.success(
+                    apiClient.executeAndParseCancellable(request, MarkReadResponse::class.java)
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
         }
     }
 
@@ -237,7 +278,6 @@ class ApiStudentRepository(
         notices: List<NotificationResponse>,
         courseItems: List<StudentCourseDetailResponse> = emptyList(),
         taskItems: List<StudentTaskItemResponse> = emptyList(),
-        tasksLoadError: String? = null,
         gradesResponse: StudentGradesResponse? = null,
         gradesLoadError: String? = null,
         remoteProfile: StudentProfileResponse? = null
@@ -246,12 +286,16 @@ class ApiStudentRepository(
         // fallback defaults when not available (e.g. synchronous loadWorkspace).
         val profile = userProfile
         val student = StudentProfile(
-            id = profile?.id ?: "",
-            name = profile?.name ?: "学生",
-            email = profile?.email ?: "",
-            college = profile?.college ?: "",
-            className = profile?.className ?: "",
-            status = if (summary.completed) "已完成" else "进行中",
+            id = remoteProfile?.id?.takeIf { it.isNotBlank() } ?: profile?.id.orEmpty(),
+            name = remoteProfile?.name?.takeIf { it.isNotBlank() }
+                ?: profile?.name?.takeIf { it.isNotBlank() }
+                ?: "学生",
+            email = remoteProfile?.email?.takeIf { it.isNotBlank() } ?: profile?.email.orEmpty(),
+            college = remoteProfile?.college?.takeIf { it.isNotBlank() } ?: profile?.college.orEmpty(),
+            className = remoteProfile?.className?.takeIf { it.isNotBlank() } ?: profile?.className.orEmpty(),
+            status = remoteProfile?.status?.takeIf { it.isNotBlank() }
+                ?: profile?.status?.takeIf { it.isNotBlank() }
+                ?: if (summary.completed) "已完成" else "进行中",
             gender = remoteProfile?.gender ?: profile?.gender ?: "",
             gradeLevel = remoteProfile?.currentGradeLevel
                 ?: remoteProfile?.gradeLevel
@@ -404,8 +448,8 @@ class ApiStudentRepository(
             attendance = 0,
             physical = 0,
             total = 0,
-            sourceTrace = if (tasksLoadError != null) {
-                "API: grade data not yet available — $tasksLoadError"
+            sourceTrace = if (gradesLoadError != null) {
+                "API: grade data not yet available — $gradesLoadError"
             } else {
                 "API: grade data not yet available from summary endpoint"
             },
@@ -459,7 +503,7 @@ class ApiStudentRepository(
         return CheckInRecord(
             id = r.id,
             courseId = r.courseId,
-            taskTitle = r.taskId ?: "自主打卡",
+            taskTitle = r.taskTitle ?: r.taskId ?: "自主打卡",
             creditType = creditType,
             hours = r.hours,
             submittedAt = r.submittedAt ?: "",
@@ -575,7 +619,7 @@ class ApiStudentRepository(
 
     suspend fun convertEndurance(request: EnduranceConversionRequest): EnduranceScoreResponse {
         return withContext(Dispatchers.IO) {
-            apiClient.executeAndParse(
+            apiClient.executeAndParseCancellable(
                 apiClient.request(StudentEndpoint.ConvertEndurance, request),
                 EnduranceScoreResponse::class.java
             )
@@ -586,24 +630,31 @@ class ApiStudentRepository(
 
     suspend fun listExemptions(): List<ExemptionResponse> {
         return withContext(Dispatchers.IO) {
-            val physical = runCatching {
-                apiClient.executeAndParse(
+            val physical = try {
+                apiClient.executeAndParseCancellable(
                     apiClient.request(StudentEndpoint.PhysicalTestExemptions),
                     Array<ExemptionResponse>::class.java
                 ).toList()
-            }.getOrElse {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (e !is ApiHttpException || e.statusCode != 404) throw e
                 // Shared port 96 still exposes the legacy physical-test path.
-                apiClient.executeAndParse(
+                apiClient.executeAndParseCancellable(
                     apiClient.request(StudentEndpoint.StudentExemptions),
                     Array<ExemptionResponse>::class.java
                 ).toList()
             }
-            val checkIn = runCatching {
-                apiClient.executeAndParse(
+            val checkIn = try {
+                apiClient.executeAndParseCancellable(
                     apiClient.request(StudentEndpoint.CheckInExemptions),
                     Array<ExemptionResponse>::class.java
                 ).toList()
-            }.getOrDefault(emptyList())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (e is ApiHttpException && e.statusCode == 404) emptyList() else throw e
+            }
             (physical + checkIn).sortedByDescending { it.createdAt }
         }
     }
@@ -615,7 +666,7 @@ class ApiStudentRepository(
             } else {
                 StudentEndpoint.SubmitPhysicalTestExemption
             }
-            apiClient.executeAndParse(
+            apiClient.executeAndParseCancellable(
                 apiClient.request(endpoint, payload),
                 ExemptionSubmitResponse::class.java
             )
@@ -626,7 +677,7 @@ class ApiStudentRepository(
 
     suspend fun listTasks(): StudentTaskListResponse {
         return withContext(Dispatchers.IO) {
-            apiClient.executeAndParse(
+            apiClient.executeAndParseCancellable(
                 apiClient.request(StudentEndpoint.StudentTasks),
                 StudentTaskListResponse::class.java
             )
@@ -653,44 +704,68 @@ class ApiStudentRepository(
     ): Result<List<UploadedProofFile>> {
         return withContext(Dispatchers.IO) {
             val tempFiles = mutableListOf<File>()
+            var preparedBytes = 0L
             try {
-                for (attachment in proofAttachments) {
-                    if (!attachment.isValidForUpload) continue
-                    val uri = try {
-                        android.net.Uri.parse(attachment.source)
-                    } catch (_: Exception) {
-                        continue
-                    }
-                    if (uri.scheme == null) continue
-
-                    // Copy from content:// or file:// URI to a temp file
-                    val ext = attachment.fileName.substringAfterLast('.', "jpg").take(5)
-                    val tempFile = File.createTempFile("proof_", ".$ext", cacheDir)
-                    try {
-                        val inputStream = when {
-                            uri.scheme == "file" -> java.io.FileInputStream(java.io.File(uri.path ?: continue))
-                            else -> androidAppContext()?.contentResolver?.openInputStream(uri)
-                                ?: continue
-                        }
-                        inputStream.use { input ->
-                            tempFile.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
-                        }
-                        tempFiles.add(tempFile)
-                    } catch (_: Exception) {
-                        tempFile.delete()
-                        continue
-                    }
-                }
-
-                if (tempFiles.isEmpty()) {
+                if (proofAttachments.isEmpty()) {
                     return@withContext Result.success(emptyList())
                 }
 
-                val response = apiClient.uploadProofFiles(tempFiles)
+                for (attachment in proofAttachments) {
+                    if (!attachment.isValidForUpload) {
+                        throw IOException(
+                            "Upload file is invalid: ${attachment.fileName} " +
+                                "(${attachment.validationMessage ?: "validation failed"})"
+                        )
+                    }
+
+                    val ext = attachment.fileName
+                        .substringAfterLast('.', "")
+                        .lowercase()
+                        .filter { it.isLetterOrDigit() }
+                        .take(5)
+                        .ifBlank {
+                            if (attachment.type == ProofMediaType.Video) "mp4" else "jpg"
+                        }
+                    val tempFile = File.createTempFile("proof_", ".$ext", cacheDir)
+                    tempFiles.add(tempFile)
+                    openAttachmentStream(attachment).use { input ->
+                        tempFile.outputStream().use { output ->
+                            val maximumBytes = if (attachment.type == ProofMediaType.Video) {
+                                ProofUploadRule.maxVideoBytes.toLong()
+                            } else {
+                                ProofUploadRule.maxImageBytes.toLong()
+                            }
+                            val copied = copyWithLimit(input, output, maximumBytes)
+                            if (copied == 0L) {
+                                throw IOException("Upload file is empty: ${attachment.fileName}")
+                            }
+                            preparedBytes += copied
+                            if (preparedBytes > ProofUploadRule.maxRequestBytes.toLong()) {
+                                throw IOException("Upload request exceeds 120MB")
+                            }
+                        }
+                    }
+                }
+
+                if (tempFiles.size != proofAttachments.size) {
+                    throw IOException(
+                        "Prepared ${tempFiles.size} of ${proofAttachments.size} upload files"
+                    )
+                }
+
+                val response = apiClient.uploadProofFilesCancellable(tempFiles)
+                if (response.files.size != proofAttachments.size) {
+                    throw IOException(
+                        "Server accepted ${response.files.size} of ${proofAttachments.size} upload files"
+                    )
+                }
+                if (response.files.any { it.cosKey.isBlank() }) {
+                    throw IOException("Server upload response is missing a COS key")
+                }
 
                 Result.success(response.files)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Result.failure(e)
             } finally {
@@ -699,11 +774,96 @@ class ApiStudentRepository(
         }
     }
 
+    suspend fun supplementExemption(
+        exemption: Exemption,
+        payload: ExemptionApplication
+    ): ExemptionSubmitResponse {
+        return withContext(Dispatchers.IO) {
+            val isCheckIn = exemption.category == "checkin" ||
+                exemption.type == "team" || exemption.type == "club"
+            val endpoint = if (isCheckIn) {
+                StudentEndpoint.SupplementCheckInExemption(exemption.id)
+            } else {
+                StudentEndpoint.SupplementPhysicalTestExemption(exemption.id)
+            }
+            val supplement = ExemptionSupplementRequest(
+                reason = payload.reason,
+                proofFiles = payload.proofFiles,
+                organization = payload.organization
+            )
+            apiClient.executeAndParseCancellable(
+                apiClient.request(endpoint, supplement),
+                ExemptionSubmitResponse::class.java
+            )
+        }
+    }
+
+    @Throws(IOException::class)
+    private fun openAttachmentStream(attachment: ProofAttachment): InputStream {
+        val source = attachment.source.trim()
+        if (source.isEmpty()) {
+            throw IOException("Upload source is empty: ${attachment.fileName}")
+        }
+
+        val sourceUri = try {
+            URI(source)
+        } catch (e: Exception) {
+            throw IOException("Upload source is invalid: ${attachment.fileName}", e)
+        }
+
+        return when (sourceUri.scheme?.lowercase()) {
+            "file" -> {
+                val sourceFile = try {
+                    File(sourceUri)
+                } catch (e: Exception) {
+                    throw IOException("Upload file path is invalid: ${attachment.fileName}", e)
+                }
+                if (!sourceFile.isFile || !sourceFile.canRead()) {
+                    throw IOException("Upload file is not readable: ${attachment.fileName}")
+                }
+                FileInputStream(sourceFile)
+            }
+
+            "content" -> {
+                val context = androidAppContext()
+                    ?: throw IOException("Upload context is unavailable: ${attachment.fileName}")
+                val androidUri = android.net.Uri.parse(source)
+                context.contentResolver.openInputStream(androidUri)
+                    ?: throw IOException("Upload content is not readable: ${attachment.fileName}")
+            }
+
+            else -> throw IOException(
+                "Unsupported upload source scheme for ${attachment.fileName}: ${sourceUri.scheme ?: "none"}"
+            )
+        }
+    }
+
+    @Throws(IOException::class)
+    private suspend fun copyWithLimit(
+        input: InputStream,
+        output: OutputStream,
+        maximumBytes: Long
+    ): Long {
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var copied = 0L
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            val count = input.read(buffer)
+            if (count < 0) break
+            if (copied > maximumBytes - count) {
+                throw IOException("Upload file exceeds ${maximumBytes / 1_000_000}MB")
+            }
+            output.write(buffer, 0, count)
+            copied += count
+        }
+        return copied
+    }
+
     // ── New: Profile ──────────────────────────────────────────────
 
     suspend fun fetchProfile(): StudentProfileResponse {
         return withContext(Dispatchers.IO) {
-            apiClient.executeAndParse(
+            apiClient.executeAndParseCancellable(
                 apiClient.request(StudentEndpoint.StudentProfile),
                 StudentProfileResponse::class.java
             )
@@ -712,7 +872,7 @@ class ApiStudentRepository(
 
     suspend fun updateProfile(payload: StudentProfileUpdateRequest): StudentProfileResponse {
         return withContext(Dispatchers.IO) {
-            apiClient.executeAndParse(
+            apiClient.executeAndParseCancellable(
                 apiClient.request(StudentEndpoint.UpdateStudentProfile, payload),
                 StudentProfileResponse::class.java
             )
@@ -733,4 +893,8 @@ class ApiStudentRepository(
         @JvmStatic
         fun androidAppContext(): android.content.Context? = _appContext
     }
+}
+
+private fun Throwable.isUnauthorizedResponse(): Boolean {
+    return this is ApiHttpException && statusCode == 401
 }

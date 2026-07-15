@@ -25,8 +25,10 @@ sealed class StudentEndpoint(val method: HttpMethod) {
     data object SubmitExemption : StudentEndpoint(HttpMethod.POST)
     data object PhysicalTestExemptions : StudentEndpoint(HttpMethod.GET)
     data object SubmitPhysicalTestExemption : StudentEndpoint(HttpMethod.POST)
+    data class SupplementPhysicalTestExemption(val id: String) : StudentEndpoint(HttpMethod.POST)
     data object CheckInExemptions : StudentEndpoint(HttpMethod.GET)
     data object SubmitCheckInExemption : StudentEndpoint(HttpMethod.POST)
+    data class SupplementCheckInExemption(val id: String) : StudentEndpoint(HttpMethod.POST)
     data object StudentTasks : StudentEndpoint(HttpMethod.GET)
     data class StudentCourses(
         val scope: String = "all",
@@ -53,8 +55,12 @@ sealed class StudentEndpoint(val method: HttpMethod) {
             SubmitExemption -> "/student/exemptions"
             PhysicalTestExemptions -> "/student/physical-test-exemptions"
             SubmitPhysicalTestExemption -> "/student/physical-test-exemptions"
+            is SupplementPhysicalTestExemption ->
+                "/student/physical-test-exemptions/${id.pathSegment()}/supplements"
             CheckInExemptions -> "/student/checkin-exemptions"
             SubmitCheckInExemption -> "/student/checkin-exemptions"
+            is SupplementCheckInExemption ->
+                "/student/checkin-exemptions/${id.pathSegment()}/supplements"
             StudentTasks -> "/student/tasks"
             is StudentCourses -> buildString {
                 append("/student/courses?scope=")

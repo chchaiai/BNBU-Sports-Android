@@ -28,6 +28,7 @@ import edu.bnbu.student.mvp.core.model.SyncOperationType
 import edu.bnbu.student.mvp.core.model.TaskStatus
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.network.StudentApiClient
+import edu.bnbu.student.mvp.core.network.ApiHttpException
 import edu.bnbu.student.mvp.core.network.StudentLoginRequest
 import edu.bnbu.student.mvp.core.network.ProofFileReference
 import edu.bnbu.student.mvp.core.network.SubmitSportRecordRequest
@@ -41,6 +42,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -66,18 +70,30 @@ class StudentAppState(
     private val job = kotlinx.coroutines.Job()
     private val scope = CoroutineScope(Dispatchers.Main + job)
     private val persistenceMutex = Mutex()
+    private var sessionRequestJob: Job? = null
+    @Volatile
+    private var sessionGeneration: Long = 0
     private var initialLocalStateApplied = false
+    @Volatile
+    private var localSessionInvalidated = false
+    private var pendingSessionClear: Job? = null
     private val initialLocalState = scope.async(Dispatchers.IO) {
         persistenceMutex.withLock {
             val store = localStore ?: return@withLock InitialLocalState()
             try {
-                InitialLocalState(
+                val loaded = InitialLocalState(
                     workspace = store.readWorkspace().value,
                     draft = store.readDraft().value,
                     lastSyncTimestamp = store.loadLastSyncTime(),
                     authToken = store.loadAuthToken(),
                     userProfileJson = store.loadUserProfileJson()
                 )
+                if (localSessionInvalidated) {
+                    store.clearAll()
+                    InitialLocalState()
+                } else {
+                    loaded
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -121,7 +137,7 @@ class StudentAppState(
 
     fun updateThemeMode(mode: AppThemeMode) {
         themeMode = mode
-        persist(event = "save theme mode") {
+        persist(event = "save theme mode", expectedGeneration = null) {
             saveThemeMode(mode)
         }
     }
@@ -139,6 +155,10 @@ class StudentAppState(
 
     private suspend fun ensureInitialLocalState(): InitialLocalState {
         val loaded = initialLocalState.await()
+        if (localSessionInvalidated) {
+            initialLocalStateApplied = true
+            return InitialLocalState()
+        }
         if (initialLocalStateApplied) return loaded
 
         initialLocalStateApplied = true
@@ -229,39 +249,61 @@ class StudentAppState(
         }
         isLoading = true
         lastError = null
+        val generation = beginSessionGeneration()
 
-        scope.launch {
+        launchSessionRequest {
             try {
                 ensureInitialLocalState()
                 val repo = ApiStudentRepository()
                 val response = repo.login(StudentLoginRequest(account = account, password = password))
                 val client = StudentApiClient().withToken(response.token)
                 val apiRepo = ApiStudentRepository(apiClient = client, userProfile = response.user)
-                apiRepository = apiRepo
 
-                // Persist token and user profile for session restore (AND-004)
-                val authSaved = withLocalStoreOnIo(event = "save authenticated session") {
+                // Do not expose or persist a half-initialized session. Login is
+                // considered complete only after the required workspace calls succeed.
+                val remoteWorkspace = apiRepo.loadWorkspaceAsync()
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+
+                awaitPendingSessionClear()
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                localSessionInvalidated = false
+                val now = currentSyncTimestamp()
+                val sessionSaved = withLocalStoreOnIo(
+                    event = "save authenticated session",
+                    expectedGeneration = generation
+                ) {
                     val tokenSaved = saveAuthToken(response.token)
                     val profileSaved = saveUserProfile(gson.toJson(response.user))
-                    tokenSaved && profileSaved
+                    val workspaceSaved = saveWorkspace(remoteWorkspace)
+                    val syncTimeSaved = saveLastSyncTime(now)
+                    tokenSaved && profileSaved && workspaceSaved && syncTimeSaved
                 }
-                if (authSaved == false) {
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                if (sessionSaved == false) {
                     android.util.Log.w("StudentAppState", "save authenticated session failed")
                 }
 
-                // Fetch remote workspace
-                val remoteWorkspace = apiRepo.loadWorkspaceAsync()
+                apiRepository = apiRepo
                 workspace = remoteWorkspace
                 isAuthenticated = true
                 isShowingCachedData = false
-                saveWorkspaceNow(event = "登录成功，工作台已同步")
+                lastSyncTimestamp = now
                 onResult(true)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                if (!isCurrentSession(generation)) return@launchSessionRequest
                 android.util.Log.e("StudentAppState", "Login failed", e)
+                apiRepository = null
+                isAuthenticated = false
+                isShowingCachedData = false
+                withLocalStoreOnIo(event = "rollback failed login session") {
+                    clearAuth()
+                }
                 lastError = errorMessage(e)
                 onResult(false)
             } finally {
-                isLoading = false
+                if (isCurrentSession(generation)) isLoading = false
             }
         }
     }
@@ -284,14 +326,15 @@ class StudentAppState(
         if (isLoading) return
         isLoading = true
         lastError = null
-        scope.launch {
+        val generation = beginSessionGeneration()
+        launchSessionRequest {
             try {
                 val loaded = ensureInitialLocalState()
                 val savedToken = loaded.authToken
                 val savedUserJson = loaded.userProfileJson
                 if (savedToken == null || savedUserJson == null) {
                     onResult(false)
-                    return@launch
+                    return@launchSessionRequest
                 }
                 val user = withContext(Dispatchers.IO) {
                     gson.fromJson(savedUserJson, UserDto::class.java)
@@ -300,25 +343,27 @@ class StudentAppState(
                 val apiRepo = ApiStudentRepository(apiClient = client, userProfile = user)
                 apiRepository = apiRepo
                 val remoteWorkspace = apiRepo.loadWorkspaceAsync()
+                if (!isCurrentSession(generation)) return@launchSessionRequest
                 workspace = remoteWorkspace
                 isAuthenticated = true
                 isShowingCachedData = false
-                saveWorkspaceNow(event = "会话已恢复")
+                saveWorkspaceNow(event = "会话已恢复", expectedGeneration = generation)
+                if (!isCurrentSession(generation)) return@launchSessionRequest
                 onResult(true)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                val msg = e.message.orEmpty()
-                if (msg.contains("401") || msg.contains("403")) {
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                if (isUnauthorized(e)) {
                     // Token expired or revoked — clear auth, show login
-                    withLocalStoreOnIo(event = "clear expired session") {
-                        this.clearAuth()
-                    }
-                    lastError = null
+                    expireSession(message = null)
                     onResult(false)
                 } else {
                     // Network error — enter offline mode only when usable cache exists.
-                    val hasCachedWorkspace = workspace != StudentWorkspace.empty()
+                    val hasCachedWorkspace = hasUsableCachedWorkspace()
                     isShowingCachedData = hasCachedWorkspace
                     isAuthenticated = hasCachedWorkspace
+                    if (!hasCachedWorkspace) apiRepository = null
                     lastError = if (hasCachedWorkspace) {
                         "无法连接服务器，显示缓存数据"
                     } else {
@@ -327,7 +372,7 @@ class StudentAppState(
                     onResult(hasCachedWorkspace)
                 }
             } finally {
-                isLoading = false
+                if (isCurrentSession(generation)) isLoading = false
             }
         }
     }
@@ -341,16 +386,26 @@ class StudentAppState(
         if (isLoading) return
         isLoading = true
         lastError = null
-        scope.launch {
+        val generation = sessionGeneration
+        launchSessionRequest {
             try {
-                workspace = apiRepo.loadWorkspaceAsync()
+                val refreshedWorkspace = apiRepo.loadWorkspaceAsync()
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                workspace = refreshedWorkspace
                 isShowingCachedData = false
-                saveWorkspaceNow(event = "工作台已刷新")
+                saveWorkspaceNow(event = "工作台已刷新", expectedGeneration = generation)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                isShowingCachedData = workspace != StudentWorkspace.empty()
-                lastError = errorMessage(e)
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                if (isUnauthorized(e)) {
+                    expireSession("登录已过期，请重新登录")
+                } else {
+                    isShowingCachedData = hasUsableCachedWorkspace()
+                    lastError = errorMessage(e)
+                }
             } finally {
-                isLoading = false
+                if (isCurrentSession(generation)) isLoading = false
             }
         }
     }
@@ -363,16 +418,44 @@ class StudentAppState(
         lastError = null
     }
 
+    /**
+     * Runs feature-screen network work under the current authenticated session.
+     * Logout or token expiry cancels the returned job and, through the
+     * repository's cancellable client, the underlying OkHttp call.
+     */
+    fun launchAuthenticatedRequest(
+        block: suspend CoroutineScope.() -> Unit
+    ): Job? {
+        val generation = sessionGeneration
+        val requestParent = sessionRequestJob?.takeIf { it.isActive } ?: return null
+        if (!isAuthenticated) return null
+        return scope.launch(context = requestParent) {
+            if (!isAuthenticated || !isCurrentSession(generation)) return@launch
+            block()
+        }
+    }
+
     fun logout() {
+        invalidateSessionGeneration()
+        localSessionInvalidated = true
+        try {
+            localStore?.clearAll()
+        } catch (error: RuntimeException) {
+            android.util.Log.e("StudentAppState", "clear local data on logout failed", error)
+        }
+        scheduleFinalSessionClear("clear local data on logout")
         isAuthenticated = false
         apiRepository = null
         lastError = null
         isLoading = false
         workspace = StudentWorkspace.empty()
         draft = null
-        persistUnit(event = "clear local data on logout") {
-            this.clearAll()
-        }
+    }
+
+    fun handleUnauthorized() {
+        if (!isAuthenticated) return
+        logout()
+        lastError = "登录已过期，请重新登录"
     }
 
     /**
@@ -401,21 +484,34 @@ class StudentAppState(
         val notice = workspace.notices.firstOrNull { it.id == id } ?: return
         if (!notice.isUnread) return
 
-        workspace = workspace.copy(
-            notices = workspace.notices.map {
-                if (it.id == id) it.copy(isUnread = false) else it
+        val repo = apiRepository ?: run {
+            lastError = "当前处于离线状态，连接服务器后再标记已读"
+            return
+        }
+        val generation = sessionGeneration
+        launchSessionRequest {
+            val result = repo.markNotificationRead(id)
+            if (!isCurrentSession(generation)) return@launchSessionRequest
+            result.onSuccess {
+                workspace = workspace.copy(
+                    notices = workspace.notices.map {
+                        if (it.id == id) it.copy(isUnread = false) else it
+                    }
+                )
+                enqueueSyncOperation(
+                    type = SyncOperationType.MarkNoticeRead,
+                    title = "标记通知已读",
+                    detail = notice.title,
+                    status = SyncOperationStatus.Synced
+                )
+                saveWorkspace(event = "通知已读状态已同步")
+            }.onFailure { error ->
+                if (isUnauthorized(error)) {
+                    expireSession("登录已过期，请重新登录")
+                } else {
+                    lastError = errorMessage(error.asException())
+                }
             }
-        )
-        enqueueSyncOperation(
-            type = SyncOperationType.MarkNoticeRead,
-            title = "标记通知已读",
-            detail = notice.title
-        )
-        saveWorkspace(event = "通知已读状态已保存")
-
-        // Fire-and-forget to backend
-        apiRepository?.let { repo ->
-            scope.launch { repo.markNotificationRead(id) }
         }
     }
 
@@ -426,24 +522,46 @@ class StudentAppState(
         // Capture which notices were unread BEFORE mutating
         val previouslyUnreadIds = visibleNotices.filter { it.isUnread }.map { it.id }
 
-        workspace = workspace.copy(
-            notices = workspace.notices.map {
-                if (it.id in previouslyUnreadIds) it.copy(isUnread = false) else it
+        val repo = apiRepository ?: run {
+            lastError = "当前处于离线状态，连接服务器后再标记已读"
+            return
+        }
+        val generation = sessionGeneration
+        launchSessionRequest {
+            val syncedIds = mutableSetOf<String>()
+            var firstError: Throwable? = null
+            for (id in previouslyUnreadIds) {
+                val result = repo.markNotificationRead(id)
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                result.onSuccess { syncedIds += id }
+                    .onFailure { if (firstError == null) firstError = it }
+                if (firstError?.let(::isUnauthorized) == true) break
             }
-        )
-        enqueueSyncOperation(
-            type = SyncOperationType.MarkNoticeRead,
-            title = "批量标记通知已读",
-            detail = "$count 条通知已切换为已读"
-        )
-        saveWorkspace(event = "批量通知已读已保存")
 
-        // Sync only previously-unread notices to backend (not every notice)
-        apiRepository?.let { repo ->
-            scope.launch {
-                val idsToSync = previouslyUnreadIds
-                idsToSync.forEach { id ->
-                    runCatching { repo.markNotificationRead(id) }
+            if (syncedIds.isNotEmpty()) {
+                workspace = workspace.copy(
+                    notices = workspace.notices.map {
+                        if (it.id in syncedIds) it.copy(isUnread = false) else it
+                    }
+                )
+                enqueueSyncOperation(
+                    type = SyncOperationType.MarkNoticeRead,
+                    title = "批量标记通知已读",
+                    detail = "${syncedIds.size} 条通知已同步",
+                    status = SyncOperationStatus.Synced
+                )
+                saveWorkspace(event = "批量通知已读已同步")
+            }
+
+            firstError?.let { error ->
+                if (isUnauthorized(error)) {
+                    expireSession("登录已过期，请重新登录")
+                } else {
+                    lastError = if (syncedIds.isEmpty()) {
+                        errorMessage(error.asException())
+                    } else {
+                        "部分通知同步失败，请重试"
+                    }
                 }
             }
         }
@@ -459,12 +577,24 @@ class StudentAppState(
         proofAttachments: List<ProofAttachment>,
         onResult: (Result<Unit>) -> Unit = {}
     ) {
+        if (isLoading) {
+            failSubmission("submitCheckIn", "正在处理上一项请求，请稍候", onResult)
+            return
+        }
         if (hasSubmittedCheckInToday()) {
             failSubmission("submitCheckIn", "今日已打卡，每天只能提交一次", onResult)
             return
         }
         if (task.status != TaskStatus.Active) {
             failSubmission("submitCheckIn", "当前任务不可提交", onResult)
+            return
+        }
+        if (note.length > 2_000) {
+            failSubmission("submitCheckIn", "补充说明不能超过 2000 个字符", onResult)
+            return
+        }
+        if (sportType != null && sportType.length > 100) {
+            failSubmission("submitCheckIn", "运动项目不能超过 100 个字符", onResult)
             return
         }
         if (proofAttachments.isEmpty()) {
@@ -487,13 +617,18 @@ class StudentAppState(
         val submittedHours = normalizedHours(hours, task)
         isLoading = true
         lastError = null
-        scope.launch {
+        val generation = sessionGeneration
+        launchSessionRequest {
             try {
                 val cDir = cacheDir ?: File(System.getProperty("java.io.tmpdir") ?: "/tmp")
                 val uploadedFiles = repo.uploadProofFiles(
                     proofAttachments = proofAttachments,
                     cacheDir = cDir
                 ).getOrThrow()
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                check(uploadedFiles.size == proofAttachments.size) {
+                    "部分凭证上传失败，请重新选择后再试"
+                }
                 val proofFiles = uploadedFiles.map { uploaded ->
                     ProofFileReference(
                         cosKey = uploaded.cosKey,
@@ -512,6 +647,7 @@ class StudentAppState(
                     sportType = sportType
                 )
                 val response = repo.submitRecord(payload).getOrThrow()
+                if (!isCurrentSession(generation)) return@launchSessionRequest
                 val serverProofs = uploadedFiles.map { uploaded ->
                     ProofAttachment(
                         id = uploaded.cosKey,
@@ -551,13 +687,21 @@ class StudentAppState(
                 clearDraft()
                 saveWorkspace(event = "打卡提交已同步")
                 onResult(Result.success(Unit))
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                if (!isCurrentSession(generation)) return@launchSessionRequest
                 android.util.Log.e("StudentAppState", "submitCheckIn API failed", e)
-                val message = errorMessage(e)
-                lastError = message
-                onResult(Result.failure(IllegalStateException(message, e)))
+                if (isUnauthorized(e)) {
+                    expireSession("登录已过期，请重新登录")
+                    onResult(Result.failure(IllegalStateException("登录已过期，请重新登录", e)))
+                } else {
+                    val message = errorMessage(e)
+                    lastError = message
+                    onResult(Result.failure(IllegalStateException(message, e)))
+                }
             } finally {
-                isLoading = false
+                if (isCurrentSession(generation)) isLoading = false
             }
         }
     }
@@ -569,8 +713,16 @@ class StudentAppState(
         proofAttachments: List<ProofAttachment>,
         onResult: (Result<Unit>) -> Unit = {}
     ) {
+        if (isLoading) {
+            failSubmission("submitSupplement", "正在处理上一项请求，请稍候", onResult)
+            return
+        }
         if (record.status != ReviewStatus.Supplement && record.status != ReviewStatus.Rejected) {
             failSubmission("submitSupplement", "记录状态不允许补交", onResult)
+            return
+        }
+        if (note.length > 2_000) {
+            failSubmission("submitSupplement", "补充说明不能超过 2000 个字符", onResult)
             return
         }
         if (proofAttachments.isEmpty()) {
@@ -598,13 +750,18 @@ class StudentAppState(
         val submittedHours = if (hours >= 2.0 && supplementMaxHours >= 2.0) 2.0 else 1.0
         isLoading = true
         lastError = null
-        scope.launch {
+        val generation = sessionGeneration
+        launchSessionRequest {
             try {
                 val cDir = cacheDir ?: File(System.getProperty("java.io.tmpdir") ?: "/tmp")
                 val uploadedFiles = repo.uploadProofFiles(
                     proofAttachments = proofAttachments,
                     cacheDir = cDir
                 ).getOrThrow()
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                check(uploadedFiles.size == proofAttachments.size) {
+                    "部分凭证上传失败，请重新选择后再试"
+                }
                 val proofFiles = uploadedFiles.map { uploaded ->
                     ProofFileReference(
                         cosKey = uploaded.cosKey,
@@ -619,6 +776,7 @@ class StudentAppState(
                     proofFiles = proofFiles
                 )
                 repo.supplementRecord(record.id, payload).getOrThrow()
+                if (!isCurrentSession(generation)) return@launchSessionRequest
                 val serverProofs = uploadedFiles.map { uploaded ->
                     ProofAttachment(
                         id = uploaded.cosKey,
@@ -667,13 +825,21 @@ class StudentAppState(
                 )
                 saveWorkspace(event = "补充材料已同步")
                 onResult(Result.success(Unit))
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                if (!isCurrentSession(generation)) return@launchSessionRequest
                 android.util.Log.e("StudentAppState", "submitSupplement API failed", e)
-                val message = errorMessage(e)
-                lastError = message
-                onResult(Result.failure(IllegalStateException(message, e)))
+                if (isUnauthorized(e)) {
+                    expireSession("登录已过期，请重新登录")
+                    onResult(Result.failure(IllegalStateException("登录已过期，请重新登录", e)))
+                } else {
+                    val message = errorMessage(e)
+                    lastError = message
+                    onResult(Result.failure(IllegalStateException(message, e)))
+                }
             } finally {
-                isLoading = false
+                if (isCurrentSession(generation)) isLoading = false
             }
         }
     }
@@ -686,7 +852,11 @@ class StudentAppState(
         customSportType: String,
         proofAttachments: List<ProofAttachment>
     ) {
-        val task = workspace.tasks.firstOrNull { it.id == taskId && it.status == TaskStatus.Active }
+        val task = if (taskId == selfCheckInTask.id) {
+            selfCheckInTask
+        } else {
+            workspace.tasks.firstOrNull { it.id == taskId && it.status == TaskStatus.Active }
+        }
             ?: run {
                 clearDraft()
                 return
@@ -765,6 +935,71 @@ class StudentAppState(
         }
     }
 
+    private fun hasUsableCachedWorkspace(): Boolean {
+        // Sync-operation metadata is added even to an empty workspace during
+        // startup, so equality with StudentWorkspace.empty() is not a safe test.
+        return workspace.student.id.isNotBlank()
+    }
+
+    private fun isUnauthorized(error: Throwable): Boolean {
+        if (error is ApiHttpException && error.statusCode == 401) return true
+        val message = error.message.orEmpty()
+        return message.contains("HTTP 401") ||
+            message.contains("AUTH_REQUIRED") ||
+            message.contains("TOKEN_EXPIRED")
+    }
+
+    private fun isCurrentSession(generation: Long): Boolean = sessionGeneration == generation
+
+    /**
+     * Starts a new generation for every login/restore attempt. All network work
+     * for that generation is parented to one supervisor so logout can cancel the
+     * underlying OkHttp calls instead of merely ignoring their eventual result.
+     */
+    private fun beginSessionGeneration(): Long {
+        sessionRequestJob?.cancel()
+        sessionRequestJob = SupervisorJob(job)
+        return ++sessionGeneration
+    }
+
+    private fun invalidateSessionGeneration() {
+        sessionGeneration++
+        sessionRequestJob?.cancel()
+        sessionRequestJob = null
+    }
+
+    private fun launchSessionRequest(
+        block: suspend CoroutineScope.() -> Unit
+    ): Job {
+        val requestParent = sessionRequestJob
+            ?: SupervisorJob(job).also { sessionRequestJob = it }
+        return scope.launch(context = requestParent, block = block)
+    }
+
+    private suspend fun expireSession(message: String?) {
+        // This method is commonly called by a session request that is itself
+        // about to be cancelled. Keep the privacy cleanup independent from it.
+        withContext(NonCancellable) {
+            invalidateSessionGeneration()
+            localSessionInvalidated = true
+            apiRepository = null
+            isAuthenticated = false
+            isShowingCachedData = false
+            isLoading = false
+            workspace = StudentWorkspace.empty()
+            draft = null
+            withLocalStoreOnIo(
+                event = "clear expired session",
+                expectedGeneration = null
+            ) {
+                clearAll()
+            }
+            lastError = message
+        }
+    }
+
+    private fun Throwable.asException(): Exception = this as? Exception ?: Exception(this)
+
     private fun logValidationFailure(method: String, reason: String) {
         android.util.Log.w("StudentAppState", "$method blocked: $reason")
     }
@@ -821,11 +1056,17 @@ class StudentAppState(
         }
     }
 
-    private suspend fun saveWorkspaceNow(event: String) {
+    private suspend fun saveWorkspaceNow(
+        event: String,
+        expectedGeneration: Long = sessionGeneration
+    ) {
         val workspaceSnapshot = workspace
         val now = currentSyncTimestamp()
         lastSyncTimestamp = now
-        val saved = withLocalStoreOnIo(event = event) {
+        val saved = withLocalStoreOnIo(
+            event = event,
+            expectedGeneration = expectedGeneration
+        ) {
             val workspaceSaved = saveWorkspace(workspaceSnapshot)
             val syncTimeSaved = saveLastSyncTime(now)
             workspaceSaved && syncTimeSaved
@@ -849,23 +1090,29 @@ class StudentAppState(
 
     private fun persist(
         event: String,
+        expectedGeneration: Long? = sessionGeneration,
         block: AndroidAppLocalStore.() -> Boolean
     ) {
         val store = localStore ?: return
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            persistenceMutex.withLock {
-                val saved = withContext(Dispatchers.IO) {
-                    try {
-                        store.block()
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Exception) {
-                        android.util.Log.w("StudentAppState", "$event failed", error)
-                        false
+            withContext(NonCancellable) {
+                persistenceMutex.withLock {
+                    if (!canPersist(expectedGeneration)) return@withLock
+                    val saved = withContext(Dispatchers.IO) {
+                        try {
+                            store.block()
+                        } catch (error: Exception) {
+                            android.util.Log.w("StudentAppState", "$event failed", error)
+                            false
+                        }
                     }
-                }
-                if (!saved) {
-                    android.util.Log.w("StudentAppState", "$event failed")
+                    if (!canPersist(expectedGeneration)) {
+                        clearStoreAfterStaleWrite(store, event)
+                        return@withLock
+                    }
+                    if (!saved) {
+                        android.util.Log.w("StudentAppState", "$event failed")
+                    }
                 }
             }
         }
@@ -873,18 +1120,23 @@ class StudentAppState(
 
     private fun persistUnit(
         event: String,
+        expectedGeneration: Long? = sessionGeneration,
         block: AndroidAppLocalStore.() -> Unit
     ) {
         val store = localStore ?: return
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            persistenceMutex.withLock {
-                withContext(Dispatchers.IO) {
-                    try {
-                        store.block()
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Exception) {
-                        android.util.Log.w("StudentAppState", "$event failed", error)
+            withContext(NonCancellable) {
+                persistenceMutex.withLock {
+                    if (!canPersist(expectedGeneration)) return@withLock
+                    withContext(Dispatchers.IO) {
+                        try {
+                            store.block()
+                        } catch (error: Exception) {
+                            android.util.Log.w("StudentAppState", "$event failed", error)
+                        }
+                    }
+                    if (!canPersist(expectedGeneration)) {
+                        clearStoreAfterStaleWrite(store, event)
                     }
                 }
             }
@@ -893,21 +1145,74 @@ class StudentAppState(
 
     private suspend fun <T> withLocalStoreOnIo(
         event: String,
+        expectedGeneration: Long? = sessionGeneration,
         block: AndroidAppLocalStore.() -> T
     ): T? {
         val store = localStore ?: return null
-        return persistenceMutex.withLock {
-            withContext(Dispatchers.IO) {
-                try {
-                    store.block()
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    android.util.Log.w("StudentAppState", "$event failed", error)
+        return withContext(NonCancellable) {
+            persistenceMutex.withLock {
+                if (!canPersist(expectedGeneration)) return@withLock null
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        store.block()
+                    } catch (error: Exception) {
+                        android.util.Log.w("StudentAppState", "$event failed", error)
+                        null
+                    }
+                }
+                if (!canPersist(expectedGeneration)) {
+                    clearStoreAfterStaleWrite(store, event)
                     null
+                } else {
+                    result
                 }
             }
         }
+    }
+
+    private fun canPersist(expectedGeneration: Long?): Boolean {
+        return expectedGeneration == null ||
+            (isCurrentSession(expectedGeneration) && !localSessionInvalidated)
+    }
+
+    private suspend fun clearStoreAfterStaleWrite(
+        store: AndroidAppLocalStore,
+        event: String
+    ) {
+        withContext(Dispatchers.IO) {
+            try {
+                store.clearAll()
+            } catch (error: Exception) {
+                android.util.Log.e(
+                    "StudentAppState",
+                    "$event completed for a stale session and cleanup failed",
+                    error
+                )
+            }
+        }
+    }
+
+    private fun scheduleFinalSessionClear(event: String) {
+        val store = localStore ?: return
+        pendingSessionClear = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            withContext(NonCancellable) {
+                persistenceMutex.withLock {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            store.clearAll()
+                        } catch (error: Exception) {
+                            android.util.Log.e("StudentAppState", "$event failed", error)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun awaitPendingSessionClear() {
+        val pending = pendingSessionClear ?: return
+        pending.join()
+        if (pendingSessionClear === pending) pendingSessionClear = null
     }
 
     private fun localWorkspaceLoadedOperation(): SyncOperation {

@@ -31,6 +31,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,12 +64,14 @@ import edu.bnbu.student.mvp.core.designsystem.UniversityBrandLockup
 @Composable
 fun LoginScreen(
     onLogin: (account: String, password: String) -> Unit,
+    onOpenPrivacy: () -> Unit = {},
     isLoading: Boolean = false,
     errorMessage: String? = null
 ) {
     var account by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
-    var passwordVisible by rememberSaveable { mutableStateOf(false) }
+    // Passwords must not enter Android's saved-instance-state bundle.
+    var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
     val passwordFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val canLogin = account.isNotBlank() && password.isNotBlank() && !isLoading
@@ -194,7 +197,13 @@ fun LoginScreen(
                         onClick = submitLogin
                     )
 
-                    // Demo fallback
+                    TextButton(
+                        onClick = onOpenPrivacy,
+                        enabled = !isLoading,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("登录前请阅读《隐私政策》")
+                    }
                 }
             }
 

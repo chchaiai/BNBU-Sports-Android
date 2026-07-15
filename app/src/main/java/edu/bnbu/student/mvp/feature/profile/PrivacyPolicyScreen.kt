@@ -1,5 +1,6 @@
 package edu.bnbu.student.mvp.feature.profile
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
+import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 
 /**
  * Privacy policy & data collection disclosure screen.
@@ -31,29 +33,46 @@ import edu.bnbu.student.mvp.core.designsystem.SwissPanel
  */
 @Composable
 fun PrivacyPolicyScreen(onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .bnbuClickable(onClick = onBack)
+                    .padding(vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "隐私政策",
-                    color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.headlineSmall
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                    contentDescription = "返回",
+                    tint = MaterialTheme.colorScheme.onSurface
                 )
-                Spacer(Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "返回",
+                    color = MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.bodyMedium
+                )
             }
+        }
+
+        item {
+            Text(
+                text = "隐私政策",
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.headlineSmall
+            )
         }
 
         item { PrivacySection("一、信息收集", listOf(
             "本应用由北京师范大学珠海校区（BNBU）体育教学部门开发，仅收集与体育课程成绩管理直接相关的必要信息。",
             "账户信息：学号/工号、姓名、邮箱、学院、年级。",
             "体育数据：打卡记录、运动凭证（图片/视频）、体测成绩、免测申请材料。",
-            "设备权限：仅申请网络访问权限（android.permission.INTERNET），用于与后端服务器通信。"
+            "设备能力：应用声明网络访问权限（android.permission.INTERNET）。拍照功能调用系统相机应用并通过 FileProvider 接收照片，本应用不声明 CAMERA 权限。"
         )) }
 
         item { PrivacySection("二、信息使用", listOf(
@@ -66,27 +85,29 @@ fun PrivacyPolicyScreen(onBack: () -> Unit) {
         )) }
 
         item { PrivacySection("三、信息存储与安全", listOf(
-            "学生数据存储于北京师范大学珠海校区自有服务器（IP: 123.207.5.70），由 Baota 面板管理。",
-            "密码通过 PBKDF2-SHA512 散列存储，不保存明文密码。",
-            "API 通信使用 Bearer Token 认证。生产环境部署完成后将启用 HTTPS 加密传输。",
-            "用户上传的运动凭证图片/视频保存在服务器 uploads 目录，由 Nginx 直接提供静态访问。"
+            "业务服务器地址由安装包的 BNBU_API_BASE_URL 配置决定，业务数据由后端及其配置的对象存储服务保存。",
+            "密码仅用于发起登录请求，Android 端不会把密码写入本地持久化状态。API 请求使用 Bearer Token 认证，登录令牌优先使用 Android Keystore 支持的加密方式保存。",
+            "工作台缓存、个人资料摘要和未提交草稿会保存在应用私有存储中，以支持会话恢复和离线查看；退出登录会清理这些本地记录。",
+            "正式版要求业务接口使用系统信任的 HTTPS 证书并禁止明文流量。调试版可为联调服务器和本地模拟器临时放行 HTTP；调试版不应承载真实敏感数据。",
+            "通过拍照生成的原始照片位于应用专属图片目录；清除应用数据或卸载会删除本地副本，但不会自动删除已经提交到服务器的记录。"
         )) }
 
         item { PrivacySection("四、信息共享", listOf(
             "您的信息仅在以下范围内共享：",
             "• 您的体育老师可查看您的学时、成绩和打卡记录。",
-            "• 系统管理员可查看导出的统计数据（不含原始凭证图片）。",
+            "• 经授权的系统管理员可处理课程统计、申请和故障排查。",
             "• 校队/社团负责人可提交成员抵扣申请，但不能访问成员的其他个人数据。",
-            "您的个人信息不会出售、出租或共享给任何第三方。"
+            "• 上传凭证可能由部署方配置的对象存储服务处理。",
+            "您的个人信息不会被出售或用于个性化广告。"
         )) }
 
         item { PrivacySection("五、用户权利", listOf(
             "根据《中华人民共和国个人信息保护法》，您享有以下权利：",
             "• 知情权：了解您的个人信息被收集和使用的情况。",
             "• 查阅权：随时查看您的学时、成绩和打卡记录。",
-            "• 更正权：通过 App 更新个人资料（性别、年级），或联系老师修正错误记录。",
+            "• 更正权：联系体育老师或系统管理员修正错误的个人资料和课程记录。",
             "• 删除权：联系系统管理员请求删除您的个人数据。",
-            "• 撤回同意：卸载 App 即视为撤回同意。如不再选修体育课程，可联系管理员注销账户。"
+            "• 撤回同意：卸载或清除应用数据只会移除设备上的本地副本；如需注销账户、撤回授权或删除服务器数据，请联系系统管理员。"
         )) }
 
         item { PrivacySection("六、未成年人保护", listOf(
@@ -95,7 +116,7 @@ fun PrivacyPolicyScreen(onBack: () -> Unit) {
 
         item { PrivacySection("七、政策更新", listOf(
             "本隐私政策可能适时修订。重大变更将通过 App 内通知或学校公告方式告知。",
-            "最新修订日期：2026 年 6 月 19 日。"
+            "最新修订日期：2026 年 7 月 14 日。"
         )) }
 
         item { PrivacySection("八、联系方式", listOf(

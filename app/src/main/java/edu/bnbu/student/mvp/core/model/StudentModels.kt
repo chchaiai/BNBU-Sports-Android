@@ -227,6 +227,7 @@ object ProofUploadRule {
     const val maxAttachmentCount = maxImageCount + maxVideoCount
     const val maxImageBytes = 8_000_000
     const val maxVideoBytes = 100_000_000
+    const val maxRequestBytes = 120_000_000
 
     val summaryText: String
         get() = "最多 $maxImageCount 张照片（每张不超过 8MB），最多 $maxVideoCount 个视频（不超过 100MB）。"

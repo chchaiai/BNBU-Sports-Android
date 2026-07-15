@@ -28,10 +28,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +42,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import edu.bnbu.student.mvp.core.data.ApiStudentRepository
+import edu.bnbu.student.mvp.core.network.ApiHttpException
 import edu.bnbu.student.mvp.core.designsystem.ActionButton
 import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
@@ -52,12 +53,16 @@ import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.model.EnduranceConversionRequest
 import edu.bnbu.student.mvp.core.model.EnduranceScoreResult
 import edu.bnbu.student.mvp.core.model.StudentProfile
-import kotlinx.coroutines.launch
+import edu.bnbu.student.mvp.core.state.StudentAppState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 
 @Composable
 fun EnduranceScoringScreen(
+    appState: StudentAppState,
     student: StudentProfile,
     repository: ApiStudentRepository,
+    onUnauthorized: () -> Unit,
     onBack: () -> Unit
 ) {
     var minutes by remember { mutableStateOf("") }
@@ -65,7 +70,7 @@ fun EnduranceScoringScreen(
     var result by remember { mutableStateOf<EnduranceScoreResult?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
+    val requestJob = remember { mutableStateOf<Job?>(null) }
     val focusManager = LocalFocusManager.current
     val cs = MaterialTheme.colorScheme
     val handleBack = {
@@ -75,10 +80,15 @@ fun EnduranceScoringScreen(
 
     BackHandler(onBack = handleBack)
 
+    DisposableEffect(Unit) {
+        onDispose { requestJob.value?.cancel() }
+    }
+
     // Auto-determine run type from gender
     val runType = if (student.gender == "male") "1000m" else "800m"
 
     fun convert() {
+        if (isLoading || requestJob.value?.isActive == true) return
         val minVal = minutes.toIntOrNull() ?: 0
         val secVal = seconds.toIntOrNull() ?: 0
         val totalSeconds = minVal * 60 + secVal
@@ -105,7 +115,7 @@ fun EnduranceScoringScreen(
 
         isLoading = true
         errorMessage = null
-        scope.launch {
+        val request = appState.launchAuthenticatedRequest {
             try {
                 val response = repository.convertEndurance(
                     EnduranceConversionRequest(
@@ -122,11 +132,22 @@ fun EnduranceScoringScreen(
                     gradeLevel = response.gradeLevel,
                     gradeGroup = response.gradeGroup
                 )
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                if (e is ApiHttpException && e.statusCode == 401) {
+                    onUnauthorized()
+                    return@launchAuthenticatedRequest
+                }
                 errorMessage = "换算失败: ${e.message}"
             } finally {
                 isLoading = false
             }
+        }
+        requestJob.value = request
+        if (request == null) {
+            isLoading = false
+            onUnauthorized()
         }
     }
 
@@ -246,6 +267,7 @@ fun EnduranceScoringScreen(
                 title = if (isLoading) "换算中..." else "开始换算",
                 icon = Icons.Filled.Timer,
                 filled = true,
+                enabled = !isLoading && requestJob.value?.isActive != true,
                 onClick = { convert() }
             )
         }
