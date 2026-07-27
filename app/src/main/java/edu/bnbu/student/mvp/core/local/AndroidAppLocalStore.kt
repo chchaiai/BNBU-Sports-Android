@@ -12,6 +12,7 @@ import edu.bnbu.student.mvp.core.model.AppThemeMode
 import edu.bnbu.student.mvp.core.model.StudentTaskList
 import edu.bnbu.student.mvp.core.model.StudentWorkspace
 import java.security.KeyStore
+import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -24,7 +25,7 @@ import javax.crypto.spec.GCMParameterSpec
 class AndroidAppLocalStore(
     context: Context,
     private val gson: Gson = GsonBuilder().disableHtmlEscaping().create()
-) {
+) : ExerciseSessionSnapshotStorage {
     private val preferences = context.applicationContext.getSharedPreferences(
         StoreName,
         Context.MODE_PRIVATE
@@ -61,6 +62,28 @@ class AndroidAppLocalStore(
 
     fun saveDraft(draft: CheckInDraft): Boolean {
         return save(DraftStorageKey, draft)
+    }
+
+    override fun readExerciseSessionSnapshot(
+        accountId: String
+    ): LocalStoreReadResult<ExerciseSessionSnapshot> {
+        val key = exerciseSessionStorageKey(accountId)
+            ?: return LocalStoreReadResult(value = null, status = LocalStoreReadStatus.Discarded)
+        return read(key, ExerciseSessionSnapshot::class.java)
+    }
+
+    override fun saveExerciseSessionSnapshot(
+        accountId: String,
+        snapshot: ExerciseSessionSnapshot
+    ): Boolean {
+        val key = exerciseSessionStorageKey(accountId) ?: return false
+        return save(key, snapshot)
+    }
+
+    override fun clearExerciseSessionSnapshot(accountId: String) {
+        val key = exerciseSessionStorageKey(accountId) ?: return
+        preferences.edit().remove(key).commit()
+        clearEncryptedValue(key)
     }
 
     fun saveAuthToken(token: String): Boolean {
@@ -322,12 +345,22 @@ class AndroidAppLocalStore(
 
     private fun encryptedIvKey(key: String): String = "$key.iv"
 
+    private fun exerciseSessionStorageKey(accountId: String): String? {
+        val normalizedAccountId = accountId.trim()
+        if (normalizedAccountId.isEmpty()) return null
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(normalizedAccountId.toByteArray(Charsets.UTF_8))
+            .joinToString(separator = "") { byte -> "%02x".format(byte) }
+        return "$ExerciseSessionStorageKey.$digest"
+    }
+
     private data class EncryptedValue(val value: String, val iv: String)
 
     companion object {
         const val StoreName = "bnbu.student.local.v1"
         const val WorkspaceStorageKey = "bnbu.student.workspace.v1"
         const val DraftStorageKey = "bnbu.student.checkin.draft.v1"
+        const val ExerciseSessionStorageKey = "bnbu.student.exercise.session.v1"
         const val AuthTokenKey = "bnbu.student.auth.token.v1"
         const val UserProfileKey = "bnbu.student.auth.profile.v1"
         const val LastSyncKey = "bnbu.student.last_sync.v1"
