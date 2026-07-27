@@ -57,6 +57,7 @@ import edu.bnbu.student.mvp.R
 import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.checkin.CheckInScreen
+import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
 import edu.bnbu.student.mvp.feature.courses.CoursesScreen
 import edu.bnbu.student.mvp.feature.dashboard.DashboardScreen
 import edu.bnbu.student.mvp.feature.grades.GradesScreen
@@ -92,10 +93,16 @@ private enum class AuthUiState {
 }
 
 @Composable
-fun AppRootScreen(
+internal fun AppRootScreen(
     appState: StudentAppState,
+    exerciseSessionController: ExerciseSessionController,
     isRestoringSession: Boolean = false
 ) {
+    LaunchedEffect(appState.isAuthenticated, appState.workspace.student.id) {
+        exerciseSessionController.bindAccount(
+            if (appState.isAuthenticated) appState.workspace.student.id else ""
+        )
+    }
     var showLoginPrivacy by rememberSaveable { mutableStateOf(false) }
     val authUiState = when {
         isRestoringSession -> AuthUiState.Restoring
@@ -122,7 +129,10 @@ fun AppRootScreen(
     ) { state ->
         when (state) {
             AuthUiState.Restoring -> SessionRestoreScreen()
-            AuthUiState.Authenticated -> AuthenticatedAppContent(appState)
+            AuthUiState.Authenticated -> AuthenticatedAppContent(
+                appState = appState,
+                exerciseSessionController = exerciseSessionController
+            )
             AuthUiState.Login -> {
                 if (showLoginPrivacy) {
                     PreLoginPrivacyScreen(onBack = { showLoginPrivacy = false })
@@ -177,7 +187,10 @@ private fun PreLoginPrivacyScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun AuthenticatedAppContent(appState: StudentAppState) {
+private fun AuthenticatedAppContent(
+    appState: StudentAppState,
+    exerciseSessionController: ExerciseSessionController
+) {
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.Dashboard) }
     var subScreen by rememberSaveable { mutableStateOf(SubScreen.None) }
     var renderedSubScreen by rememberSaveable { mutableStateOf(subScreen) }
@@ -229,6 +242,7 @@ private fun AuthenticatedAppContent(appState: StudentAppState) {
                         RootTabContent(
                             tab = selectedTab,
                             appState = appState,
+                            exerciseSessionController = exerciseSessionController,
                             contentPadding = PaddingValues(0.dp),
                             onOpenNotificationSheet = { showNotificationSheet = true },
                             openExemption = { targetId ->
@@ -449,6 +463,7 @@ private fun StudentBottomBar(
 private fun RootTabContent(
     tab: AppTab,
     appState: StudentAppState,
+    exerciseSessionController: ExerciseSessionController,
     contentPadding: PaddingValues,
     onOpenNotificationSheet: () -> Unit,
     openExemption: (String?) -> Unit = {},
@@ -484,7 +499,7 @@ private fun RootTabContent(
                 when (animatedTab) {
                     AppTab.Dashboard -> DashboardScreen(appState, onOpenNotificationSheet)
                     AppTab.Courses -> CoursesScreen(appState)
-                    AppTab.CheckIn -> CheckInScreen(appState)
+                    AppTab.CheckIn -> CheckInScreen(appState, exerciseSessionController)
                     AppTab.Grades -> GradesScreen(appState)
                         AppTab.Profile -> ProfileScreen(
                             appState = appState,

@@ -14,6 +14,8 @@ import edu.bnbu.student.mvp.core.designsystem.BNBUStudentTheme
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.shell.AppRootScreen
+import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     private val appStateViewModel: StudentAppStateViewModel by viewModels()
@@ -26,6 +28,7 @@ class MainActivity : ComponentActivity() {
             BNBUStudentTheme(themeMode = appState.themeMode) {
                 AppRootScreen(
                     appState = appState,
+                    exerciseSessionController = appStateViewModel.exerciseSessionController,
                     isRestoringSession = appStateViewModel.isRestoringSession
                 )
             }
@@ -34,9 +37,16 @@ class MainActivity : ComponentActivity() {
 }
 
 class StudentAppStateViewModel(application: Application) : AndroidViewModel(application) {
+    private val localStore = AndroidAppLocalStore(application)
+
     val appState = StudentAppState(
-        localStore = AndroidAppLocalStore(application),
+        localStore = localStore,
         cacheDir = application.cacheDir
+    )
+
+    internal val exerciseSessionController = ExerciseSessionController(
+        snapshotStorage = localStore,
+        mediaRootDirectory = File(application.filesDir, "exercise_session_drafts")
     )
 
     var isRestoringSession by mutableStateOf(true)
@@ -50,6 +60,7 @@ class StudentAppStateViewModel(application: Application) : AndroidViewModel(appl
     }
 
     override fun onCleared() {
+        exerciseSessionController.destroy()
         appState.destroy()
         super.onCleared()
     }
