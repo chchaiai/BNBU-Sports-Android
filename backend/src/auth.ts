@@ -56,6 +56,37 @@ export function studentAuth(config: AppConfig, store: BackendStore): RequestHand
   };
 }
 
+/** Protects the help-content lifecycle API used by the administrator console. */
+export function adminAuth(config: AppConfig, store: BackendStore): RequestHandler {
+  return async (request, _response, next) => {
+    try {
+      const authorization = request.header("authorization");
+      if (!authorization?.startsWith("Bearer ")) throw new AppError(401, "AUTH_REQUIRED", "Authentication required");
+      const token = authorization.slice("Bearer ".length).trim();
+      let decoded: string | JwtPayload;
+      try {
+        decoded = jwt.verify(token, config.JWT_SECRET, {
+          issuer: config.JWT_ISSUER,
+          audience: config.JWT_AUDIENCE,
+          algorithms: ["HS256"]
+        });
+      } catch {
+        throw new AppError(401, "TOKEN_INVALID", "Authentication token is invalid");
+      }
+      const claims = claimsSchema.parse(decoded);
+      if (claims.role !== "admin") throw new AppError(403, "ROLE_FORBIDDEN", "Administrator access required");
+      const user = await store.findUserById(claims.sub);
+      if (!user || user.role !== "admin" || user.status !== "正常" || user.tokenVersion !== claims.tokenVersion) {
+        throw new AppError(401, "TOKEN_REVOKED", "Authentication token has been revoked");
+      }
+      request.auth = { id: user.id, role: user.role, tokenVersion: user.tokenVersion };
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
 export function studentId(request: { auth?: AuthenticatedUser }): string {
   if (!request.auth) throw new AppError(401, "AUTH_REQUIRED", "未登录");
   return request.auth.id;

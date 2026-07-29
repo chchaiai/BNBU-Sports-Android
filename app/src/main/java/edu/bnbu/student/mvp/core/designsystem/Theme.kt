@@ -1,12 +1,16 @@
 package edu.bnbu.student.mvp.core.designsystem
 
 import android.app.Activity
+import android.graphics.drawable.ColorDrawable
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
@@ -14,146 +18,148 @@ import androidx.core.view.WindowCompat
 import edu.bnbu.student.mvp.core.model.AppThemeMode
 
 /**
- * ── Google Material 3 Dynamic Color Palette ─────────────────
+ * Calm, content-first palette informed by Apple HIG semantics.
  *
- * Seed color:  Google Blue  #1A73E8
- * Secondary:   Sport Orange #FD7E14
- *
- * The "高级感" (premium feel) comes from NeutralVariant — grays
- * with a faint blue/purple undertone, never pure #808080.
- *
- * Light background:  #F8F9FA  (slightly warm off-white)
- * Dark background:   #0F172A  (deep navy, per the design spec)
+ * These values intentionally map onto Material's semantic slots instead of
+ * copying iOS controls. Screens consume roles such as primary, surface and
+ * error, so hierarchy and contrast remain stable in both appearance modes.
  */
+private val primaryLight = Color(0xFF007AFF)
+private val onPrimaryLight = Color.White
+private val primaryContainerLight = Color(0xFFE8F2FF)
+private val onPrimaryContainerLight = Color(0xFF003E7D)
 
-// ── Primary (Google Blue family) ────────────────────────────
-private val md_primary_light = Color(0xFF1A73E8)
-private val md_onPrimary_light = Color(0xFFFFFFFF)
-private val md_primaryContainer_light = Color(0xFFD3E3FD)
-private val md_onPrimaryContainer_light = Color(0xFF041E49)
+private val primaryDark = Color(0xFF0A84FF)
+private val onPrimaryDark = Color.White
+private val primaryContainerDark = Color(0xFF16395F)
+private val onPrimaryContainerDark = Color(0xFFD6E9FF)
 
-private val md_primary_dark = Color(0xFF8AB4F8)
-private val md_onPrimary_dark = Color(0xFF062E6F)
-private val md_primaryContainer_dark = Color(0xFF0842A0)
-private val md_onPrimaryContainer_dark = Color(0xFFD3E3FD)
+private val secondaryLight = Color(0xFFFF9500)
+private val onSecondaryLight = Color.White
+private val secondaryContainerLight = Color(0xFFFFF1D6)
+private val onSecondaryContainerLight = Color(0xFF5A3500)
 
-// ── Secondary (Sport Orange) ─────────────────────────────────
-private val md_secondary_light = Color(0xFFFD7E14)
-private val md_onSecondary_light = Color(0xFFFFFFFF)
-private val md_secondaryContainer_light = Color(0xFFFFDCC2)
-private val md_onSecondaryContainer_light = Color(0xFF2E1500)
+private val secondaryDark = Color(0xFFFF9F0A)
+private val onSecondaryDark = Color(0xFF2C1A00)
+private val secondaryContainerDark = Color(0xFF503500)
+private val onSecondaryContainerDark = Color(0xFFFFE2A8)
 
-private val md_secondary_dark = Color(0xFFFFB77C)
-private val md_onSecondary_dark = Color(0xFF4A2000)
-private val md_secondaryContainer_dark = Color(0xFF6A2F00)
-private val md_onSecondaryContainer_dark = Color(0xFFFFDCC2)
+private val tertiaryLight = Color(0xFF248A3D)
+private val onTertiaryLight = Color.White
+private val tertiaryContainerLight = Color(0xFFE6F6E9)
+private val onTertiaryContainerLight = Color(0xFF0E4B1D)
 
-// ── Tertiary (Teal accent) ──────────────────────────────────
-private val md_tertiary_light = Color(0xFF00897B)
-private val md_onTertiary_light = Color(0xFFFFFFFF)
-private val md_tertiaryContainer_light = Color(0xFFA7F3D0)
-private val md_onTertiaryContainer_light = Color(0xFF001A12)
+private val tertiaryDark = Color(0xFF30D158)
+private val onTertiaryDark = Color(0xFF002C0D)
+private val tertiaryContainerDark = Color(0xFF164B24)
+private val onTertiaryContainerDark = Color(0xFFC7F5D0)
 
-private val md_tertiary_dark = Color(0xFF80CBC4)
-private val md_onTertiary_dark = Color(0xFF00382E)
-private val md_tertiaryContainer_dark = Color(0xFF005048)
-private val md_onTertiaryContainer_dark = Color(0xFFA7F3D0)
+private val errorLight = Color(0xFFFF3B30)
+private val onErrorLight = Color.White
+private val errorContainerLight = Color(0xFFFFE9E7)
+private val onErrorContainerLight = Color(0xFF7A1712)
 
-// ── Error ────────────────────────────────────────────────────
-private val md_error_light = Color(0xFFD93025)
-private val md_onError_light = Color(0xFFFFFFFF)
-private val md_errorContainer_light = Color(0xFFF9DEDC)
-private val md_onErrorContainer_light = Color(0xFF410002)
+private val errorDark = Color(0xFFFF453A)
+private val onErrorDark = Color.White
+private val errorContainerDark = Color(0xFF5C201D)
+private val onErrorContainerDark = Color(0xFFFFD2CE)
 
-private val md_error_dark = Color(0xFFFFB4AB)
-private val md_onError_dark = Color(0xFF690005)
-private val md_errorContainer_dark = Color(0xFF93000A)
-private val md_onErrorContainer_dark = Color(0xFFF9DEDC)
+private val backgroundLight = Color(0xFFF2F2F7)
+private val onBackgroundLight = Color(0xFF1C1C1E)
+private val surfaceLight = Color.White
+private val onSurfaceLight = Color(0xFF1C1C1E)
+private val surfaceVariantLight = Color(0xFFEFEFF4)
+private val onSurfaceVariantLight = Color(0xFF636366)
+private val outlineLight = Color(0xFF8E8E93)
+private val outlineVariantLight = Color(0xFFC6C6C8)
 
-// ── Background / Surface ─────────────────────────────────────
-private val md_background_light = Color(0xFFF8F9FA)
-private val md_onBackground_light = Color(0xFF202124)
-private val md_surface_light = Color(0xFFFFFFFF)
-private val md_onSurface_light = Color(0xFF202124)
-private val md_surfaceVariant_light = Color(0xFFF1F3F9)
-private val md_onSurfaceVariant_light = Color(0xFF44474E)
-private val md_outline_light = Color(0xFF747775)
+private val backgroundDark = Color.Black
+private val onBackgroundDark = Color(0xFFF2F2F7)
+private val surfaceDark = Color(0xFF1C1C1E)
+private val onSurfaceDark = Color(0xFFF2F2F7)
+private val surfaceVariantDark = Color(0xFF2C2C2E)
+private val onSurfaceVariantDark = Color(0xFFAEAEB2)
+private val outlineDark = Color(0xFF8E8E93)
+private val outlineVariantDark = Color(0xFF3A3A3C)
 
-private val md_background_dark = Color(0xFF0F172A)
-private val md_onBackground_dark = Color(0xFFE2E2E3)
-private val md_surface_dark = Color(0xFF1E2433)
-private val md_onSurface_dark = Color(0xFFE2E2E3)
-private val md_surfaceVariant_dark = Color(0xFF2A3142)
-private val md_onSurfaceVariant_dark = Color(0xFFC4C6D0)
-private val md_outline_dark = Color(0xFF8E918F)
+private val inverseSurfaceLight = Color(0xFF2C2C2E)
+private val inverseOnSurfaceLight = Color(0xFFF2F2F7)
+private val inversePrimaryLight = Color(0xFF64B5FF)
 
-// ── Inverse ──────────────────────────────────────────────────
-private val md_inverseSurface_light = Color(0xFF2F3033)
-private val md_inverseOnSurface_light = Color(0xFFF1F1F1)
-private val md_inversePrimary_light = Color(0xFF8AB4F8)
-
-private val md_inverseSurface_dark = Color(0xFFE2E2E3)
-private val md_inverseOnSurface_dark = Color(0xFF2F3033)
-private val md_inversePrimary_dark = Color(0xFF1A73E8)
+private val inverseSurfaceDark = Color(0xFFF2F2F7)
+private val inverseOnSurfaceDark = Color(0xFF1C1C1E)
+private val inversePrimaryDark = Color(0xFF0066CC)
 
 // ── Color schemes ────────────────────────────────────────────
 
 private val BNBULightColorScheme = lightColorScheme(
-    primary = md_primary_light,
-    onPrimary = md_onPrimary_light,
-    primaryContainer = md_primaryContainer_light,
-    onPrimaryContainer = md_onPrimaryContainer_light,
-    secondary = md_secondary_light,
-    onSecondary = md_onSecondary_light,
-    secondaryContainer = md_secondaryContainer_light,
-    onSecondaryContainer = md_onSecondaryContainer_light,
-    tertiary = md_tertiary_light,
-    onTertiary = md_onTertiary_light,
-    tertiaryContainer = md_tertiaryContainer_light,
-    onTertiaryContainer = md_onTertiaryContainer_light,
-    error = md_error_light,
-    onError = md_onError_light,
-    errorContainer = md_errorContainer_light,
-    onErrorContainer = md_onErrorContainer_light,
-    background = md_background_light,
-    onBackground = md_onBackground_light,
-    surface = md_surface_light,
-    onSurface = md_onSurface_light,
-    surfaceVariant = md_surfaceVariant_light,
-    onSurfaceVariant = md_onSurfaceVariant_light,
-    outline = md_outline_light,
-    inverseSurface = md_inverseSurface_light,
-    inverseOnSurface = md_inverseOnSurface_light,
-    inversePrimary = md_inversePrimary_light
+    primary = primaryLight,
+    onPrimary = onPrimaryLight,
+    primaryContainer = primaryContainerLight,
+    onPrimaryContainer = onPrimaryContainerLight,
+    secondary = secondaryLight,
+    onSecondary = onSecondaryLight,
+    secondaryContainer = secondaryContainerLight,
+    onSecondaryContainer = onSecondaryContainerLight,
+    tertiary = tertiaryLight,
+    onTertiary = onTertiaryLight,
+    tertiaryContainer = tertiaryContainerLight,
+    onTertiaryContainer = onTertiaryContainerLight,
+    error = errorLight,
+    onError = onErrorLight,
+    errorContainer = errorContainerLight,
+    onErrorContainer = onErrorContainerLight,
+    background = backgroundLight,
+    onBackground = onBackgroundLight,
+    surface = surfaceLight,
+    onSurface = onSurfaceLight,
+    surfaceVariant = surfaceVariantLight,
+    onSurfaceVariant = onSurfaceVariantLight,
+    outline = outlineLight,
+    outlineVariant = outlineVariantLight,
+    inverseSurface = inverseSurfaceLight,
+    inverseOnSurface = inverseOnSurfaceLight,
+    inversePrimary = inversePrimaryLight,
+    surfaceContainerLowest = surfaceLight,
+    surfaceContainerLow = Color(0xFFF8F8FA),
+    surfaceContainer = Color(0xFFEFEFF4),
+    surfaceContainerHigh = Color(0xFFE9E9EE),
+    surfaceContainerHighest = Color(0xFFE3E3E8)
 )
 
 private val BNBUDarkColorScheme = darkColorScheme(
-    primary = md_primary_dark,
-    onPrimary = md_onPrimary_dark,
-    primaryContainer = md_primaryContainer_dark,
-    onPrimaryContainer = md_onPrimaryContainer_dark,
-    secondary = md_secondary_dark,
-    onSecondary = md_onSecondary_dark,
-    secondaryContainer = md_secondaryContainer_dark,
-    onSecondaryContainer = md_onSecondaryContainer_dark,
-    tertiary = md_tertiary_dark,
-    onTertiary = md_onTertiary_dark,
-    tertiaryContainer = md_tertiaryContainer_dark,
-    onTertiaryContainer = md_onTertiaryContainer_dark,
-    error = md_error_dark,
-    onError = md_onError_dark,
-    errorContainer = md_errorContainer_dark,
-    onErrorContainer = md_onErrorContainer_dark,
-    background = md_background_dark,
-    onBackground = md_onBackground_dark,
-    surface = md_surface_dark,
-    onSurface = md_onSurface_dark,
-    surfaceVariant = md_surfaceVariant_dark,
-    onSurfaceVariant = md_onSurfaceVariant_dark,
-    outline = md_outline_dark,
-    inverseSurface = md_inverseSurface_dark,
-    inverseOnSurface = md_inverseOnSurface_dark,
-    inversePrimary = md_inversePrimary_dark
+    primary = primaryDark,
+    onPrimary = onPrimaryDark,
+    primaryContainer = primaryContainerDark,
+    onPrimaryContainer = onPrimaryContainerDark,
+    secondary = secondaryDark,
+    onSecondary = onSecondaryDark,
+    secondaryContainer = secondaryContainerDark,
+    onSecondaryContainer = onSecondaryContainerDark,
+    tertiary = tertiaryDark,
+    onTertiary = onTertiaryDark,
+    tertiaryContainer = tertiaryContainerDark,
+    onTertiaryContainer = onTertiaryContainerDark,
+    error = errorDark,
+    onError = onErrorDark,
+    errorContainer = errorContainerDark,
+    onErrorContainer = onErrorContainerDark,
+    background = backgroundDark,
+    onBackground = onBackgroundDark,
+    surface = surfaceDark,
+    onSurface = onSurfaceDark,
+    surfaceVariant = surfaceVariantDark,
+    onSurfaceVariant = onSurfaceVariantDark,
+    outline = outlineDark,
+    outlineVariant = outlineVariantDark,
+    inverseSurface = inverseSurfaceDark,
+    inverseOnSurface = inverseOnSurfaceDark,
+    inversePrimary = inversePrimaryDark,
+    surfaceContainerLowest = Color.Black,
+    surfaceContainerLow = Color(0xFF141416),
+    surfaceContainer = surfaceDark,
+    surfaceContainerHigh = Color(0xFF242426),
+    surfaceContainerHighest = surfaceVariantDark
 )
 
 // ── Legacy convenience singleton ─────────────────────────────
@@ -162,20 +168,15 @@ private val BNBUDarkColorScheme = darkColorScheme(
 // in new code; use these only where the call-site hasn't been updated yet.
 
 object BNBUColors {
-    // Primary family
-    val Ink   get() = Color(0xFF202124)        // onBackground / onSurface → #202124
-    val Paper get() = Color(0xFFF8F9FA)        // background → #F8F9FA
-    val Surface get() = Color.White            // surface → #FFFFFF
-    val Muted get() = Color(0xFF5F6368)        // onSurfaceVariant (readable gray)
-    val Line  get() = Color(0xFF747775)        // outline (M3 outline, NOT black)
-
-    // Accent family
-    val Blue      get() = Color(0xFF1A73E8)    // primary
-    val BlueLight get() = Color(0xFF8AB4F8)    // primary dark-mode variant
-    val BlueSoft  get() = Color(0xFFD3E3FD)    // primaryContainer (light)
-
-    // Retained for compatibility; unused in new components
-    val Pale      get() = Color(0xFFF8F9FA)
+    val Ink get() = onSurfaceLight
+    val Paper get() = backgroundLight
+    val Surface get() = surfaceLight
+    val Muted get() = onSurfaceVariantLight
+    val Line get() = outlineVariantLight
+    val Blue get() = primaryLight
+    val BlueLight get() = primaryDark
+    val BlueSoft get() = primaryContainerLight
+    val Pale get() = backgroundLight
 }
 
 // ── Theme composable ─────────────────────────────────────────
@@ -195,11 +196,15 @@ fun BNBUStudentTheme(
     val colorScheme = if (darkTheme) BNBUDarkColorScheme else BNBULightColorScheme
     val view = LocalView.current
 
-    if (!view.isInEditMode) {
-        SideEffect {
-            val window = (view.context as? Activity)?.window ?: return@SideEffect
-            window.statusBarColor = colorScheme.background.toArgb()
-            window.navigationBarColor = colorScheme.background.toArgb()
+    val window = (view.context as? Activity)?.window
+    if (!view.isInEditMode && window != null) {
+        // Keep the platform window behind Compose in the same color as the active scheme.
+        // The effect only reruns for a real theme change, not for ordinary page recomposition.
+        LaunchedEffect(window, colorScheme.background, darkTheme) {
+            val backgroundColor = colorScheme.background.toArgb()
+            window.setBackgroundDrawable(ColorDrawable(backgroundColor))
+            window.statusBarColor = backgroundColor
+            window.navigationBarColor = backgroundColor
             WindowCompat.getInsetsController(window, view).apply {
                 isAppearanceLightStatusBars = !darkTheme
                 isAppearanceLightNavigationBars = !darkTheme
@@ -211,6 +216,11 @@ fun BNBUStudentTheme(
         colorScheme = colorScheme,
         typography = BNBUTypography,
         shapes = BNBUShapes,
-        content = content
-    )
+    ) {
+        // Apple-style press feedback is communicated by scale, opacity and
+        // elevation rather than an expanding Android ripple.
+        CompositionLocalProvider(LocalIndication provides ripple(color = Color.Transparent)) {
+            content()
+        }
+    }
 }

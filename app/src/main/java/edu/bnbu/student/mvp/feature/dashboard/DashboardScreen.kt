@@ -1,110 +1,559 @@
 package edu.bnbu.student.mvp.feature.dashboard
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AssignmentTurnedIn
+import androidx.compose.material.icons.filled.AddBox
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.automirrored.filled.DirectionsRun
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
-import androidx.compose.material.icons.filled.RadioButtonUnchecked
-import androidx.compose.material.icons.filled.TrackChanges
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import edu.bnbu.student.mvp.core.designsystem.AppleIconButton as IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import edu.bnbu.student.mvp.core.designsystem.AppleTextButton as TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import edu.bnbu.student.mvp.core.designsystem.BrandMark
+import edu.bnbu.student.mvp.R
+import edu.bnbu.student.mvp.core.designsystem.BNBULayout
 import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
-import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
-import edu.bnbu.student.mvp.core.designsystem.HourProgressBar
-import edu.bnbu.student.mvp.core.designsystem.SectionTitle
-import edu.bnbu.student.mvp.core.designsystem.StatusBadge
-import edu.bnbu.student.mvp.core.designsystem.SwissPanel
+import edu.bnbu.student.mvp.core.designsystem.PrimaryActionButton
+import edu.bnbu.student.mvp.core.designsystem.interfaceText
+import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.designsystem.pressScale
-import edu.bnbu.student.mvp.core.model.CourseTask
-import edu.bnbu.student.mvp.core.model.CreditType
-import edu.bnbu.student.mvp.core.model.NoticeCategory
-import edu.bnbu.student.mvp.core.model.StudentNotice
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.state.StudentAppState
+import edu.bnbu.student.mvp.feature.checkin.canStartExercise
+import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
+import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionState
+import edu.bnbu.student.mvp.feature.checkin.session.effectiveDurationMillis
+import edu.bnbu.student.mvp.feature.courses.JoinRequestEntryPanel
+import androidx.compose.runtime.mutableLongStateOf
+import java.text.SimpleDateFormat
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.util.Date
+import kotlinx.coroutines.delay
 
+/**
+ * The dashboard is deliberately organized around one question:
+ * "What do I still need to do this semester?"
+ *
+ * Data and callbacks stay owned by [StudentAppState] and the root navigator.
+ * This file only changes hierarchy and presentation.
+ */
 @Composable
-fun DashboardScreen(
+internal fun DashboardScreen(
     appState: StudentAppState,
-    onOpenNotificationSheet: () -> Unit = {}
+    exerciseSessionController: ExerciseSessionController,
+    onOpenNotificationSheet: () -> Unit = {},
+    onOpenCheckIn: () -> Unit = {},
+    onScanJoin: () -> Unit = {},
+    onEnterCode: () -> Unit = {},
+    onOpenJoinRequest: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        contentPadding = PaddingValues(top = 4.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(28.dp)
     ) {
         item { DashboardHeader(appState, onOpenNotificationSheet) }
-        item { ProgressPanel(appState) }
-        item { RiskPanel(appState) }
-        item { FocusPlan(appState) }
-        item { NextTasks(appState) }
+
+        if (appState.hasActiveEnrollment) {
+            item {
+                TodayCheckInPanel(
+                    appState = appState,
+                    hasCheckedIn = appState.hasSubmittedCheckInToday(),
+                    onOpenCheckIn = onOpenCheckIn
+                )
+            }
+        }
+
+        appState.newSemesterWelcomeAcademicYear?.let { academicYear ->
+            item {
+                NewSemesterWelcomePanel(
+                    academicYear = academicYear,
+                    onDismiss = appState::dismissNewSemesterWelcome
+                )
+            }
+        }
+
+        val joinRequest = appState.workspace.courseJoinRequest
+            ?.takeIf { appState.hasPendingJoinRequest }
+        if (joinRequest != null) {
+            item {
+                JoinRequestEntryPanel(
+                    request = joinRequest,
+                    onOpen = onOpenJoinRequest
+                )
+            }
+        } else if (!appState.hasActiveEnrollment) {
+            item {
+                CourseJoinEntryPanel(
+                    onScanJoin = onScanJoin,
+                    onEnterCode = onEnterCode
+                )
+            }
+        }
+
+        val ongoingSession = exerciseSessionController.state.takeIf {
+            it is ExerciseSessionState.Active || it is ExerciseSessionState.Paused
+        }
+        if (ongoingSession != null) {
+            item {
+                ExerciseResumePanel(
+                    state = ongoingSession,
+                    onResumeExercise = onOpenCheckIn
+                )
+            }
+        }
+
+        item { ProgressOverview(appState) }
+        item { ProgressBreakdown(appState) }
+    }
+}
+
+/**
+ * Keeps the student's immediate daily decision ahead of longer-term progress.
+ * A successful submission is intentionally presented as a calm confirmation;
+ * the primary action only appears while a check-in is still needed.
+ */
+@Composable
+private fun ExerciseResumePanel(
+    state: ExerciseSessionState,
+    onResumeExercise: () -> Unit
+) {
+    val startedAtEpochMillis = when (state) {
+        is ExerciseSessionState.Active -> state.startedAtEpochMillis
+        is ExerciseSessionState.Paused -> state.startedAtEpochMillis
+        else -> return
+    }
+    var now by remember(state) { mutableLongStateOf(System.currentTimeMillis()) }
+    val duration = state.effectiveDurationMillis(now)
+
+    LaunchedEffect(state) {
+        while (state is ExerciseSessionState.Active) {
+            now = System.currentTimeMillis()
+            delay(1_000L)
+        }
+    }
+
+    HomeCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Timer,
+                contentDescription = null,
+                tint = homeAccentColor(),
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = stringResource(R.string.dashboard_exercise_in_progress),
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+        ResumeExerciseFact(
+            label = stringResource(R.string.dashboard_exercise_start_time),
+            value = SimpleDateFormat("HH:mm", AppLanguagePreferences.currentLocale)
+                .format(Date(startedAtEpochMillis))
+        )
+        Spacer(Modifier.height(10.dp))
+        ResumeExerciseFact(
+            label = stringResource(R.string.dashboard_exercise_duration),
+            value = formatResumeDuration(duration)
+        )
+        Spacer(Modifier.height(20.dp))
+        PrimaryActionButton(
+            title = stringResource(R.string.dashboard_exercise_continue),
+            icon = Icons.Filled.Timer,
+            onClick = onResumeExercise
+        )
     }
 }
 
 @Composable
-private fun DashboardHeader(appState: StudentAppState, onOpenNotificationSheet: () -> Unit) {
+private fun ResumeExerciseFact(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = label,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            text = value,
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+private fun formatResumeDuration(durationMillis: Long): String {
+    val totalSeconds = (durationMillis / 1_000L).coerceAtLeast(0L)
+    return "%02d:%02d:%02d".format(
+        totalSeconds / 3_600L,
+        (totalSeconds % 3_600L) / 60L,
+        totalSeconds % 60L
+    )
+}
+
+/**
+ * Keeps the student's immediate daily decision ahead of longer-term progress.
+ * A successful submission is intentionally presented as a calm confirmation;
+ * the primary action only appears while a check-in is still needed.
+ */
+@Composable
+private fun TodayCheckInPanel(
+    appState: StudentAppState,
+    hasCheckedIn: Boolean,
+    onOpenCheckIn: () -> Unit
+) {
     val cs = MaterialTheme.colorScheme
-    Row(
-        verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        BrandMark(compact = true)
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(5.dp)
+    val accent = homeAccentColor()
+    var currentShanghaiTime by remember { mutableStateOf(ZonedDateTime.now(DashboardShanghaiZoneId)) }
+    val timeWindow = appState.checkInTimeWindow
+    val isLoadingPolicy = timeWindow.windowMode == "unavailable"
+    val blockedReason = if (isLoadingPolicy) null else timeWindow.canStartExercise(currentShanghaiTime)
+    val canStart = !isLoadingPolicy && blockedReason == null
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000L)
+            currentShanghaiTime = ZonedDateTime.now(DashboardShanghaiZoneId)
+        }
+    }
+
+    HomeCard(contentPadding = 20.dp) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = "你好，${appState.workspace.student.name}",
+                text = stringResource(R.string.dashboard_today_checkin),
+                modifier = Modifier.weight(1f),
                 color = cs.onSurface,
-                style = MaterialTheme.typography.headlineMedium
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            if (hasCheckedIn) {
+                Icon(
+                    imageVector = Icons.Filled.CheckCircle,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Text(
+            text = stringResource(
+                if (hasCheckedIn) {
+                    R.string.dashboard_today_checkin_complete
+                } else {
+                    R.string.dashboard_today_checkin_pending
+                }
+            ),
+            color = cs.onSurface,
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = stringResource(
+                if (hasCheckedIn) {
+                    R.string.dashboard_today_checkin_complete_hint
+                } else {
+                    R.string.dashboard_today_checkin_pending_hint
+                }
+            ),
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium
+        )
+
+        Spacer(Modifier.height(16.dp))
+        CheckInTimeWindowStatus(
+            isLoadingPolicy = isLoadingPolicy,
+            canStart = canStart,
+            dailyStartTime = timeWindow.dailyStartTime,
+            dailyEndTime = timeWindow.dailyEndTime,
+            blockedReason = blockedReason
+        )
+
+        if (!hasCheckedIn) {
+            Spacer(Modifier.height(20.dp))
+            PrimaryActionButton(
+                title = stringResource(R.string.dashboard_start_checkin),
+                icon = Icons.Filled.AddBox,
+                onClick = onOpenCheckIn
+            )
+        }
+    }
+}
+
+private val DashboardShanghaiZoneId: ZoneId = ZoneId.of("Asia/Shanghai")
+
+/** Uses the same policy evaluator as the check-in screen to avoid conflicting states. */
+@Composable
+private fun CheckInTimeWindowStatus(
+    isLoadingPolicy: Boolean,
+    canStart: Boolean,
+    dailyStartTime: String,
+    dailyEndTime: String,
+    blockedReason: String?
+) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Surface(
+            shape = CircleShape,
+            color = when {
+                isLoadingPolicy -> colors.surfaceVariant
+                canStart -> colors.primaryContainer
+                else -> colors.errorContainer
+            }
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Timer,
+                contentDescription = null,
+                modifier = Modifier.padding(8.dp).size(18.dp),
+                tint = when {
+                    isLoadingPolicy -> colors.onSurfaceVariant
+                    canStart -> colors.onPrimaryContainer
+                    else -> colors.onErrorContainer
+                }
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = when {
+                    isLoadingPolicy -> interfaceText("正在同步打卡时间窗", "Syncing check-in hours")
+                    canStart -> interfaceText("当前可开始运动", "You can start exercising now")
+                    else -> interfaceText("当前不可开始运动", "You cannot start exercising now")
+                },
+                color = colors.onSurface,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
             )
             Text(
-                text = "${appState.workspace.student.college} · ${appState.workspace.student.id}",
+                text = when {
+                    isLoadingPolicy -> interfaceText("加载完成后将显示当前状态", "Your current status will appear once loading finishes.")
+                    canStart -> interfaceText(
+                        "每日打卡时间 $dailyStartTime–$dailyEndTime",
+                        "Daily check-in hours $dailyStartTime–$dailyEndTime"
+                    )
+                    else -> blockedReason.orEmpty()
+                },
+                color = colors.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        CheckInTimeWindowPill(
+            text = when {
+                isLoadingPolicy -> interfaceText("同步中", "Syncing")
+                canStart -> interfaceText("可开始", "Available")
+                else -> interfaceText("不可开始", "Unavailable")
+            },
+            isLoadingPolicy = isLoadingPolicy,
+            canStart = canStart
+        )
+    }
+}
+
+@Composable
+private fun CheckInTimeWindowPill(
+    text: String,
+    isLoadingPolicy: Boolean,
+    canStart: Boolean
+) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = when {
+            isLoadingPolicy -> colors.surfaceVariant
+            canStart -> colors.primaryContainer
+            else -> colors.errorContainer
+        }
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            color = when {
+                isLoadingPolicy -> colors.onSurfaceVariant
+                canStart -> colors.onPrimaryContainer
+                else -> colors.onErrorContainer
+            },
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
+private fun NewSemesterWelcomePanel(
+    academicYear: String,
+    onDismiss: () -> Unit
+) {
+    HomeCard {
+        Text(
+            text = stringResource(R.string.dashboard_new_semester_welcome),
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.dashboard_new_semester_hint, academicYear),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(12.dp))
+        TextButton(
+            onClick = onDismiss,
+            modifier = Modifier.align(Alignment.End)
+        ) {
+            Text(stringResource(R.string.dashboard_new_semester_continue))
+        }
+    }
+}
+
+@Composable
+fun CourseJoinEntryPanel(
+    onScanJoin: () -> Unit,
+    onEnterCode: () -> Unit
+) {
+    HomeCard {
+        Text(
+            text = stringResource(R.string.dashboard_join_course),
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.dashboard_join_course_hint),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(20.dp))
+        PrimaryActionButton(
+            title = stringResource(R.string.login_scan_button),
+            icon = Icons.Filled.QrCodeScanner,
+            onClick = onScanJoin
+        )
+        Spacer(Modifier.height(4.dp))
+        TextButton(
+            onClick = onEnterCode,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.TextFields,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = stringResource(R.string.dashboard_enter_invite),
+                style = MaterialTheme.typography.labelLarge
+            )
+        }
+    }
+}
+
+@Composable
+private fun DashboardHeader(
+    appState: StudentAppState,
+    onOpenNotificationSheet: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = stringResource(
+                    R.string.dashboard_greeting,
+                    appState.workspace.student.name
+                ),
+                color = cs.onSurface,
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = appState.workspace.student.id,
                 color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
-        Column(horizontalAlignment = Alignment.End) {
-            NotificationBell(
-                unreadCount = appState.unreadNoticeCount,
-                onClick = onOpenNotificationSheet
-            )
-            Spacer(Modifier.height(6.dp))
-            StatusBadge(text = appState.workspace.progress.status, filled = true)
-        }
+        NotificationBell(
+            unreadCount = appState.unreadNoticeCount,
+            onClick = onOpenNotificationSheet
+        )
     }
 }
 
@@ -117,14 +566,22 @@ private fun NotificationBell(unreadCount: Int, onClick: () -> Unit) {
             onClick = onClick,
             interactionSource = interactionSource,
             modifier = Modifier
-                .size(44.dp)
-                .background(cs.surfaceVariant, MaterialTheme.shapes.small)
-                .pressScale(interactionSource = interactionSource, pressedScale = 0.94f)
+                .size(48.dp)
+                .background(cs.surface, CircleShape)
+                .pressScale(
+                    interactionSource = interactionSource,
+                    pressedScale = 0.94f
+                )
         ) {
             Icon(
-                imageVector = if (unreadCount > 0) Icons.Filled.NotificationsActive else Icons.Filled.Notifications,
-                contentDescription = "打开通知",
-                tint = cs.onSurface
+                imageVector = if (unreadCount > 0) {
+                    Icons.Filled.NotificationsActive
+                } else {
+                    Icons.Filled.Notifications
+                },
+                contentDescription = stringResource(R.string.dashboard_open_notifications),
+                tint = cs.onSurface,
+                modifier = Modifier.size(22.dp)
             )
         }
         AnimatedVisibility(
@@ -139,341 +596,327 @@ private fun NotificationBell(unreadCount: Int, onClick: () -> Unit) {
                 targetScale = 0.72f
             )
         ) {
-            Text(
-                text = if (unreadCount > 99) "99+" else unreadCount.toString(),
-                color = cs.onPrimary,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold,
+            Box(
                 modifier = Modifier
-                    .background(cs.primary, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 4.dp, vertical = 1.dp)
-            )
+                    .background(cs.error, CircleShape)
+                    .heightIn(min = 18.dp)
+                    .padding(horizontal = 5.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (unreadCount > 99) "99+" else unreadCount.toString(),
+                    color = cs.onError,
+                    fontSize = 10.sp,
+                    lineHeight = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun ProgressPanel(appState: StudentAppState) {
+private fun ProgressOverview(appState: StudentAppState) {
     val cs = MaterialTheme.colorScheme
-    SwissPanel {
-        SectionTitle(eyebrow = "Sports Credit", title = "体育学时进度")
+    val accent = homeAccentColor()
+    val completionPercent = (appState.completionRatio * 100).toInt()
 
-        Spacer(Modifier.height(18.dp))
+    HomeCard(contentPadding = 20.dp) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.dashboard_progress),
+                modifier = Modifier.weight(1f),
+                color = cs.onSurface,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            HomeStatusPill(
+                text = appState.workspace.progress.status,
+                emphasized = !appState.hasHourRisk
+            )
+        }
 
-        Row(verticalAlignment = Alignment.Bottom) {
+        Spacer(Modifier.height(28.dp))
+        Text(
+            text = stringResource(R.string.dashboard_total_completed),
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(4.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Bottom
+        ) {
             Text(
                 text = appState.totalCompleted.hourText(),
                 color = cs.onSurface,
-                style = MaterialTheme.typography.displaySmall
+                fontSize = 44.sp,
+                lineHeight = 50.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = (-1).sp
             )
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(8.dp))
             Text(
                 text = "/ ${appState.hourRule.total.hourText()}",
                 color = cs.onSurfaceVariant,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Medium
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 6.dp)
             )
             Spacer(Modifier.weight(1f))
             Text(
-                text = "${(appState.completionRatio * 100).toInt()}%",
-                color = cs.primary,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Medium
+                text = "$completionPercent%",
+                color = accent,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(bottom = 4.dp)
             )
         }
-
-        Spacer(Modifier.height(14.dp))
-        HourProgressBar(value = appState.totalCompleted, total = appState.hourRule.total)
 
         Spacer(Modifier.height(18.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            ProgressLine(
-                title = "课程相关",
+        HomeProgressBar(
+            value = appState.totalCompleted,
+            total = appState.hourRule.total,
+            height = 8.dp
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = if (appState.totalRemaining == 0.0) {
+                stringResource(R.string.dashboard_goal_reached)
+            } else {
+                stringResource(
+                    R.string.dashboard_total_remaining,
+                    appState.totalRemaining.hourText()
+                )
+            },
+            color = if (appState.totalRemaining == 0.0) accent else cs.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (appState.totalRemaining == 0.0) {
+                FontWeight.Medium
+            } else {
+                FontWeight.Normal
+            }
+        )
+    }
+}
+
+@Composable
+private fun ProgressBreakdown(appState: StudentAppState) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        HomeSectionTitle(stringResource(R.string.dashboard_breakdown))
+        HomeCard {
+            ProgressMetric(
+                title = stringResource(R.string.dashboard_course_exercise),
                 value = appState.workspace.progress.course,
                 total = appState.hourRule.courseRequired,
-                detail = "还差 ${appState.courseRemaining.hourText()}"
+                rawValue = appState.workspace.progress.rawCourse,
+                remainingHours = appState.courseRemaining
             )
-            ProgressLine(
-                title = "其他运动",
+
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 20.dp),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
+            )
+
+            ProgressMetric(
+                title = stringResource(R.string.dashboard_general_exercise),
                 value = appState.workspace.progress.general,
                 total = appState.hourRule.generalRequired,
-                detail = if (appState.generalRemaining == 0.0) "已完成" else "还差 ${appState.generalRemaining.hourText()}"
+                rawValue = appState.workspace.progress.rawGeneral,
+                remainingHours = appState.generalRemaining
             )
         }
     }
 }
 
 @Composable
-private fun RiskPanel(appState: StudentAppState) {
-    val cs = MaterialTheme.colorScheme
-    val hasHourRisk = appState.hasHourRisk
-    SwissPanel {
-        Row(
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Icon(
-                imageVector = if (hasHourRisk) Icons.Filled.Warning else Icons.Filled.CheckCircle,
-                contentDescription = null,
-                tint = if (hasHourRisk) cs.secondary else cs.primary,
-                modifier = Modifier.size(28.dp)
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = if (hasHourRisk) "当前风险提示" else "当前状态稳定",
-                    color = cs.onSurface,
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    text = appState.riskText,
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun FocusPlan(appState: StudentAppState) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle(eyebrow = "Plan", title = "本周行动计划")
-
-        SwissPanel {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                appState.focusPlanItems.forEach { item ->
-                    FocusPlanRow(item = item)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NextTasks(appState: StudentAppState) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle(eyebrow = "Deadline", title = "近期任务")
-
-        if (appState.activeTasks.isEmpty()) {
-            EmptyPlaceholder(
-                title = "暂无近期任务",
-                message = "当前没有进行中的打卡任务；新任务发布后会在这里显示。"
-            )
-        } else {
-            appState.activeTasks.take(2).forEach { task ->
-                TaskRow(task = task)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProgressLine(
+private fun ProgressMetric(
     title: String,
     value: Double,
     total: Double,
-    detail: String
+    rawValue: Double,
+    remainingHours: Double
 ) {
     val cs = MaterialTheme.colorScheme
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = title,
-                color = cs.onSurface,
-                style = MaterialTheme.typography.bodyMedium
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = "${value.hourText()} / ${total.hourText()}",
-                color = cs.onSurface,
-                style = MaterialTheme.typography.bodyMedium
-            )
-            Spacer(Modifier.width(8.dp))
-            StatusBadge(text = detail)
-        }
-        HourProgressBar(value = value, total = total)
-    }
-}
-
-@Composable
-private fun FocusPlanRow(item: FocusPlanItem) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Icon(
-            imageVector = item.icon,
-            contentDescription = null,
-            tint = cs.primary,
-            modifier = Modifier.size(28.dp)
+    val offsetHours = (value - rawValue).coerceAtLeast(0.0)
+    val detail = when {
+        remainingHours == 0.0 -> stringResource(R.string.dashboard_completed)
+        offsetHours > 0.0 -> stringResource(
+            R.string.dashboard_remaining_after_offset,
+            remainingHours.hourText()
         )
-        Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = item.title,
-                    color = cs.onSurface,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f)
-                )
-                StatusBadge(text = item.status)
-            }
-            Text(
-                text = item.detail,
-                color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
+        else -> stringResource(R.string.dashboard_remaining, remainingHours.hourText())
     }
-}
 
-@Composable
-private fun TaskRow(task: CourseTask) {
-    val cs = MaterialTheme.colorScheme
-    SwissPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
-            verticalAlignment = Alignment.Top,
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Icon(
-                imageVector = task.creditType.dashboardIcon,
-                contentDescription = null,
-                tint = cs.primary,
-                modifier = Modifier.size(32.dp)
+            Text(
+                text = title,
+                modifier = Modifier.weight(1f),
+                color = cs.onSurface,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium
             )
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = task.title,
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f)
-                    )
-                    StatusBadge(text = task.creditType.label)
-                }
-                Text(
-                    text = "截止：${task.deadline}",
-                    color = cs.onSurface,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Text(
-                    text = "证明：${task.proof}",
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
+            HomeStatusPill(
+                text = detail,
+                emphasized = value >= total
+            )
         }
+
+        HomeProgressBar(value = value, total = total, height = 6.dp)
+        ProgressFactRow(
+            label = stringResource(R.string.dashboard_checked_in),
+            value = rawValue.hourText()
+        )
+        if (offsetHours > 0.0) {
+            ProgressFactRow(
+                label = stringResource(R.string.dashboard_organization_offset),
+                value = stringResource(
+                    R.string.dashboard_offset_applied,
+                    offsetHours.hourText()
+                )
+            )
+        }
+        ProgressFactRow(
+            label = stringResource(R.string.dashboard_total),
+            value = "${value.hourText()} / ${total.hourText()}",
+            emphasized = true
+        )
     }
 }
 
 @Composable
-private fun NoticeRow(notice: StudentNotice) {
+private fun ProgressFactRow(
+    label: String,
+    value: String,
+    emphasized: Boolean = false
+) {
     val cs = MaterialTheme.colorScheme
-    SwissPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = notice.category.dashboardIcon,
-                    contentDescription = null,
-                    tint = cs.primary,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(Modifier.width(5.dp))
-                Text(
-                    text = notice.category.label,
-                    color = cs.primary,
-                    style = MaterialTheme.typography.labelMedium
-                )
-                Spacer(Modifier.weight(1f))
-                if (notice.isUnread) {
-                    Box(
-                        modifier = Modifier
-                            .size(9.dp)
-                            .background(cs.primary, RoundedCornerShape(4.dp))
-                    )
-                }
-            }
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = notice.title,
-                    color = cs.onSurface,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f)
-                )
-                StatusBadge(text = notice.time)
-            }
-
-            Text(
-                text = notice.message,
-                color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = label,
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            text = value,
+            color = if (emphasized) cs.onSurface else cs.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (emphasized) FontWeight.Medium else FontWeight.Normal
+        )
     }
 }
 
-private data class FocusPlanItem(
-    val title: String,
-    val detail: String,
-    val icon: ImageVector,
-    val status: String
-)
+@Composable
+private fun HomeCard(
+    modifier: Modifier = Modifier,
+    contentPadding: androidx.compose.ui.unit.Dp = BNBULayout.CardPadding,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 0.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(contentPadding),
+            content = content
+        )
+    }
+}
+
+@Composable
+private fun HomeSectionTitle(title: String) {
+    Text(
+        text = title,
+        color = MaterialTheme.colorScheme.onSurface,
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.SemiBold
+    )
+}
+
+@Composable
+private fun HomeStatusPill(
+    text: String,
+    emphasized: Boolean = false
+) {
+    val cs = MaterialTheme.colorScheme
+    val accent = homeAccentColor()
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = if (emphasized) {
+            accent.copy(alpha = 0.12f)
+        } else {
+            cs.surfaceVariant
+        }
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            color = if (emphasized) accent else cs.onSurfaceVariant,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun HomeProgressBar(
+    value: Double,
+    total: Double,
+    height: androidx.compose.ui.unit.Dp
+) {
+    val cs = MaterialTheme.colorScheme
+    val accent = homeAccentColor()
+    val progress = if (total <= 0.0) {
+        0f
+    } else {
+        (value / total).toFloat().coerceIn(0f, 1f)
+    }
+    val animatedProgress = animateFloatAsState(
+        targetValue = progress,
+        animationSpec = BNBUMotion.progressSpec,
+        label = "dashboardProgress"
+    ).value
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(height)
+            .background(cs.surfaceVariant, CircleShape)
+            .semantics {
+                progressBarRangeInfo = ProgressBarRangeInfo(
+                    current = progress,
+                    range = 0f..1f
+                )
+            }
+    ) {
+        Box(
+            modifier = Modifier
+                // Use the computed fraction as the actual layout width instead
+                // of scaling a full-width layer. Scaling may leave the original
+                // layer visible on some render paths, making a partial result
+                // look like a completed progress bar.
+                .fillMaxWidth(animatedProgress)
+                .fillMaxHeight()
+                .background(accent, CircleShape)
+        )
+    }
+}
+
+@Composable
+private fun homeAccentColor() = MaterialTheme.colorScheme.primary
 
 private val StudentAppState.hasHourRisk: Boolean
     get() = courseRemaining > 0.0 || generalRemaining > 0.0
-
-private val StudentAppState.riskText: String
-    get() {
-        if (courseRemaining > 0.0 && generalRemaining > 0.0) {
-            return "课程相关还差 ${courseRemaining.hourText()}，其他运动还差 ${generalRemaining.hourText()}。请优先关注课程任务和可计入的自主运动。"
-        }
-        if (courseRemaining > 0.0) {
-            return "课程相关还差 ${courseRemaining.hourText()}。其他运动已由组织认证完成，但不能替代课程相关学时。"
-        }
-        if (generalRemaining > 0.0) {
-            return "其他运动还差 ${generalRemaining.hourText()}。可通过自主运动打卡或有效组织认证完成。"
-        }
-        return "课程相关与其他运动均达到本学期要求，请继续保持运动并关注课程通知。"
-    }
-
-private val StudentAppState.focusPlanItems: List<FocusPlanItem>
-    get() {
-        val items = mutableListOf<FocusPlanItem>()
-        if (courseRemaining > 0.0) {
-            items += FocusPlanItem(
-                title = "优先补齐课程相关 ${courseRemaining.hourText()}",
-                detail = if (activeTasks.isEmpty()) {
-                    "课程相关不能被组织抵扣替代；当前暂无可提交任务，请等待老师发布。"
-                } else {
-                    "课程相关不能被组织抵扣替代，建议先完成 GEPE101 相关任务。"
-                },
-                icon = Icons.Filled.TrackChanges,
-                status = "高优先级"
-            )
-        }
-        if (items.isEmpty()) {
-            items += FocusPlanItem(
-                title = "当前没有阻塞事项",
-                detail = "保持运动记录连续性，关注下一次课程任务发布。",
-                icon = Icons.Filled.AssignmentTurnedIn,
-                status = "稳定"
-            )
-        }
-        return items.take(4)
-    }
-
-private val CreditType.dashboardIcon: ImageVector
-    get() = when (this) {
-        CreditType.CourseRelated -> Icons.Filled.AssignmentTurnedIn
-        CreditType.General -> Icons.AutoMirrored.Filled.DirectionsRun
-        CreditType.OrganizationOffset -> Icons.Filled.CheckCircle
-    }
-
-private val NoticeCategory.dashboardIcon: ImageVector
-    get() = when (this) {
-        NoticeCategory.Deadline -> Icons.Filled.NotificationsActive
-        NoticeCategory.Review -> Icons.Filled.AssignmentTurnedIn
-        NoticeCategory.Organization -> Icons.Filled.CheckCircle
-        NoticeCategory.System -> Icons.Filled.RadioButtonUnchecked
-    }

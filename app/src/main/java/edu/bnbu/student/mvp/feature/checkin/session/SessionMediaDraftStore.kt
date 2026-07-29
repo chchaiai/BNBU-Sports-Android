@@ -28,6 +28,8 @@ internal data class SessionMediaDraft(
     val capturedAtEpochMillis: Long,
     val byteCount: Long,
     val durationSeconds: Double? = null,
+    /** A persisted video-frame position used by the thumbnail renderer. */
+    val coverTimestampMillis: Long? = null,
     val selected: Boolean = false,
     val status: SessionMediaDraftStatus = SessionMediaDraftStatus.Ready
 )
@@ -37,6 +39,22 @@ internal data class SessionCaptureTarget(
     val draftId: String,
     val type: ProofMediaType,
     val file: File
+)
+
+/**
+ * A new, unreferenced file for safely replacing or editing an existing draft.
+ *
+ * The current draft file remains referenced by the index until [commitFileUpdate]
+ * has written a new index successfully. This is what keeps the original proof
+ * available when a camera, encoder, or storage operation fails.
+ */
+internal data class SessionMediaFileUpdateTarget(
+    val key: SessionDraftKey,
+    val draftId: String,
+    val type: ProofMediaType,
+    val sourceFile: File,
+    val file: File,
+    val replacesCapture: Boolean
 )
 
 internal class SessionMediaDraftStore(
@@ -144,6 +162,56 @@ internal class SessionMediaDraftStore(
         return writeIndex(key, updated)
     }
 
+    /** Persists a user-selected video cover frame without changing the media file. */
+    @Synchronized
+    fun setVideoCover(
+        key: SessionDraftKey,
+        draftId: String,
+        timestampMillis: Long
+    ): Boolean {
+        validateKey(key)
+        if (timestampMillis < 0L) return false
+        val index = readAndRecoverIndex(key)
+        val draft = index.drafts.firstOrNull {
+            it.id == draftId &&
+                it.type == ProofMediaType.Video &&
+                it.status == SessionMediaDraftStatus.Ready
+        } ?: return false
+        return writeIndex(
+            key,
+            index.copy(drafts = index.drafts.map {
+                if (it.id == draft.id) it.copy(coverTimestampMillis = timestampMillis) else it
+            })
+        )
+    }
+
+    /**
+     * Reorders only ready photos. Video positions and pending capture entries stay
+     * where they are, so the supplied photo order is also the eventual upload order.
+     */
+    @Synchronized
+    fun reorderImages(key: SessionDraftKey, orderedImageIds: List<String>): Boolean {
+        validateKey(key)
+        val index = readAndRecoverIndex(key)
+        val images = index.drafts.filter {
+            it.type == ProofMediaType.Image && it.status == SessionMediaDraftStatus.Ready
+        }
+        if (images.size < 2) return false
+        if (orderedImageIds.distinct().size != images.size || orderedImageIds.toSet() != images.map { it.id }.toSet()) {
+            return false
+        }
+        val orderedImages = images.associateBy { it.id }
+        val iterator = orderedImageIds.iterator()
+        val updated = index.copy(drafts = index.drafts.map { draft ->
+            if (draft.type == ProofMediaType.Image && draft.status == SessionMediaDraftStatus.Ready) {
+                orderedImages.getValue(iterator.next())
+            } else {
+                draft
+            }
+        })
+        return writeIndex(key, updated)
+    }
+
     @Synchronized
     fun selectedForSubmission(key: SessionDraftKey): Result<List<SessionMediaDraft>> = runCatching {
         val selected = list(key).filter { it.selected }
@@ -170,6 +238,83 @@ internal class SessionMediaDraftStore(
         val index = readIndex(key)
         val draft = index.drafts.firstOrNull { it.id == draftId } ?: return false
         return removeDraftInternal(key, index, draft)
+    }
+
+    /** Allocates a staging file for a replacement capture while preserving the original draft. */
+    @Synchronized
+    fun prepareReplacement(
+        key: SessionDraftKey,
+        draftId: String
+    ): Result<SessionMediaFileUpdateTarget> = prepareFileUpdate(key, draftId, replacesCapture = true)
+
+    /** Allocates a staging file for a photo/video edit while preserving the original draft. */
+    @Synchronized
+    fun prepareEdit(
+        key: SessionDraftKey,
+        draftId: String
+    ): Result<SessionMediaFileUpdateTarget> = prepareFileUpdate(key, draftId, replacesCapture = false)
+
+    /** Removes an uncommitted edit/replacement staging file. */
+    @Synchronized
+    fun cancelFileUpdate(target: SessionMediaFileUpdateTarget): Boolean {
+        validateKey(target.key)
+        return safeDelete(target.file, sessionDirectory(target.key))
+    }
+
+    /**
+     * Commits a staged edit or replacement. The index is switched first and only
+     * then is the no-longer-referenced original removed, preserving the original
+     * whenever processing or index persistence fails.
+     */
+    @Synchronized
+    fun commitFileUpdate(
+        target: SessionMediaFileUpdateTarget,
+        durationSeconds: Double? = null
+    ): Result<SessionMediaDraft> = runCatching {
+        validateKey(target.key)
+        val directory = sessionDirectory(target.key).canonicalFile
+        check(target.file.canonicalFile.parentFile == directory) {
+            "编辑后的媒体文件不属于当前运动会话"
+        }
+        check(target.sourceFile.canonicalFile.parentFile == directory) {
+            "原始媒体文件不属于当前运动会话"
+        }
+        check(target.file.name != target.sourceFile.name) { "编辑文件不能覆盖原始文件" }
+        // The staged output is intentionally not in the index yet. Preserve it
+        // during recovery so orphan cleanup does not remove the file we are
+        // about to validate and commit.
+        val index = readAndRecoverIndex(target.key, setOf(target.file.name))
+        val original = index.drafts.firstOrNull {
+            it.id == target.draftId && it.status == SessionMediaDraftStatus.Ready
+        } ?: error("找不到待更新的媒体草稿")
+        check(original.type == target.type) { "媒体类型与草稿不一致" }
+        check(resolveFile(target.key, original).canonicalFile == target.sourceFile.canonicalFile) {
+            "原始媒体草稿已变化，请重新操作"
+        }
+        validateCapturedFile(target.type, target.file.length())
+
+        val updated = original.copy(
+            fileName = target.file.name,
+            capturedAtEpochMillis = if (target.replacesCapture) clock.nowEpochMillis() else original.capturedAtEpochMillis,
+            byteCount = target.file.length(),
+            durationSeconds = durationSeconds?.takeIf { it >= 0.0 } ?: original.durationSeconds,
+            coverTimestampMillis = null
+        )
+        val updatedIndex = index.copy(drafts = index.drafts.map {
+            if (it.id == original.id) updated else it
+        })
+        check(writeIndex(target.key, updatedIndex)) { "无法保存编辑后的媒体草稿" }
+
+        // The updated index already points to the new file. A failed cleanup only
+        // leaves an orphan that readAndRecoverIndex removes later; it never loses
+        // the newly saved draft.
+        runCatching { safeDelete(target.sourceFile, directory) }
+        runCatching { cleanupUnreferencedFiles(target.key, updatedIndex) }
+        updated
+    }.onFailure {
+        // Before the index switch this is only a staging file, so removing it is safe.
+        // After a successful switch there are no fallible statements above this line.
+        cancelFileUpdate(target)
     }
 
     @Synchronized
@@ -235,7 +380,10 @@ internal class SessionMediaDraftStore(
         }
     }
 
-    private fun readAndRecoverIndex(key: SessionDraftKey): SessionMediaDraftIndex {
+    private fun readAndRecoverIndex(
+        key: SessionDraftKey,
+        preserveFileNames: Set<String> = emptySet()
+    ): SessionMediaDraftIndex {
         val index = readIndex(key)
         val now = clock.nowEpochMillis()
         var changed = false
@@ -283,6 +431,7 @@ internal class SessionMediaDraftStore(
         if (recovered.size != index.drafts.size) changed = true
         val result = index.copy(drafts = recovered)
         if (changed) writeIndex(key, result)
+        cleanupUnreferencedFiles(key, result, preserveFileNames)
         return result
     }
 
@@ -335,16 +484,49 @@ internal class SessionMediaDraftStore(
         index: SessionMediaDraftIndex,
         draft: SessionMediaDraft
     ): Boolean {
-        val fileDeleted = runCatching {
-            safeDelete(resolveFile(key, draft), sessionDirectory(key))
-        }.getOrDefault(false)
         val remaining = index.drafts.filterNot { it.id == draft.id }
         val indexUpdated = writeIndex(key, index.copy(drafts = remaining))
+        if (!indexUpdated) return false
+        runCatching {
+            safeDelete(resolveFile(key, draft), sessionDirectory(key))
+        }
         if (remaining.isEmpty()) {
             indexFile(key).delete()
             sessionDirectory(key).delete()
+        } else {
+            cleanupUnreferencedFiles(key, index.copy(drafts = remaining))
         }
-        return fileDeleted && indexUpdated
+        return true
+    }
+
+    private fun prepareFileUpdate(
+        key: SessionDraftKey,
+        draftId: String,
+        replacesCapture: Boolean
+    ): Result<SessionMediaFileUpdateTarget> = runCatching {
+        validateKey(key)
+        val index = readAndRecoverIndex(key)
+        val draft = index.drafts.firstOrNull {
+            it.id == draftId && it.status == SessionMediaDraftStatus.Ready
+        } ?: error("找不到可更新的媒体草稿")
+        val source = resolveFile(key, draft)
+        check(source.isFile && source.length() > 0L) { "原始媒体文件不存在或已损坏" }
+        val directory = sessionDirectory(key).also { directory ->
+            check(directory.mkdirs() || directory.isDirectory) { "无法创建媒体编辑目录" }
+        }
+        val extension = if (draft.type == ProofMediaType.Image) "jpg" else "mp4"
+        val prefix = if (draft.type == ProofMediaType.Image) "photo" else "video"
+        val purpose = if (replacesCapture) "replacement" else "edit"
+        val targetFile = File(directory, "${prefix}_${purpose}_${UUID.randomUUID()}.$extension")
+        check(targetFile.createNewFile()) { "无法创建媒体编辑临时文件" }
+        SessionMediaFileUpdateTarget(
+            key = key,
+            draftId = draft.id,
+            type = draft.type,
+            sourceFile = source,
+            file = targetFile,
+            replacesCapture = replacesCapture
+        )
     }
 
     private fun enforceAvailableSlot(
@@ -395,6 +577,29 @@ internal class SessionMediaDraftStore(
     }
 
     private fun indexFile(key: SessionDraftKey): File = File(sessionDirectory(key), IndexFileName)
+
+    /** Removes files that are no longer referenced after cancelled edits/replacements. */
+    private fun cleanupUnreferencedFiles(
+        key: SessionDraftKey,
+        index: SessionMediaDraftIndex,
+        preserveFileNames: Set<String> = emptySet()
+    ) {
+        val directory = sessionDirectory(key)
+        if (!directory.isDirectory) return
+        val referenced = index.drafts.map { it.fileName }.toSet()
+        directory.listFiles()?.forEach { candidate ->
+            if (
+                candidate.isFile &&
+                candidate.name != IndexFileName &&
+                candidate.name != "$IndexFileName.tmp" &&
+                candidate.name !in referenced &&
+                candidate.name !in preserveFileNames &&
+                isSafeFileName(candidate.name)
+            ) {
+                safeDelete(candidate, directory)
+            }
+        }
+    }
 
     private fun isWithinRoot(file: File): Boolean {
         val rootPath = rootDirectory.canonicalFile.toPath()

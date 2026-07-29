@@ -63,7 +63,12 @@ data class StudentApiClient(
             if (endpoint.method != HttpMethod.GET) {
                 put("Content-Type", "application/json")
             }
-            if (endpoint.method != HttpMethod.GET && endpoint != StudentEndpoint.Login) {
+            if (
+                endpoint.method != HttpMethod.GET &&
+                endpoint != StudentEndpoint.Login &&
+                endpoint != StudentEndpoint.EmailLogin &&
+                endpoint != StudentEndpoint.PhoneLogin
+            ) {
                 val idempotencyKey = idempotencyKeyProvider().trim()
                 require(idempotencyKey.isNotEmpty()) { "Idempotency-Key must not be blank" }
                 put("Idempotency-Key", idempotencyKey)
@@ -136,6 +141,11 @@ data class StudentApiClient(
             HttpMethod.PUT -> builder.put(
                 (bodyJson ?: "").toRequestBody("application/json".toMediaType())
             )
+            HttpMethod.DELETE -> {
+                if (bodyJson == null) builder.delete() else builder.delete(
+                    bodyJson.toRequestBody("application/json".toMediaType())
+                )
+            }
         }
         return builder.build()
     }

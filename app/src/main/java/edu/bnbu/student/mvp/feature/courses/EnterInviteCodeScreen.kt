@@ -1,0 +1,210 @@
+package edu.bnbu.student.mvp.feature.courses
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.Keyboard
+import edu.bnbu.student.mvp.core.designsystem.AppleButton as Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import edu.bnbu.student.mvp.core.designsystem.AppleTextButton as TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import edu.bnbu.student.mvp.core.network.StudentApiClient
+import edu.bnbu.student.mvp.core.network.StudentEndpoint
+import edu.bnbu.student.mvp.core.designsystem.interfaceText
+import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+
+/**
+ * Dedicated invite-code entry page for students who do not have a scannable QR code.
+ *
+ * A valid code is resolved through the same public lookup endpoint as [ScanJoinScreen]
+ * before the student can continue to [CourseJoinConfirmScreen].
+ */
+@Composable
+fun EnterInviteCodeScreen(
+    onInviteResolved: (inviteCode: String, course: CourseJoinInfo) -> Unit,
+    onBack: () -> Unit,
+    onInviteUnavailable: (() -> Unit)? = null,
+    apiClient: StudentApiClient = remember { StudentApiClient() }
+) {
+    val appLanguage = AppLanguagePreferences.currentLanguage
+    var code by rememberSaveable { mutableStateOf("") }
+    var isResolving by rememberSaveable { mutableStateOf(false) }
+    // Presentation text must not be restored from the old locale after an
+    // Activity recreation; the input itself remains saveable.
+    var errorMessage by rememberSaveable(appLanguage) { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val normalizedCode = code.trim().uppercase()
+    val hasFormatError = code.isNotBlank() && !isInviteCode(normalizedCode)
+
+    fun resolveInviteCode() {
+        if (isResolving) return
+        if (!isInviteCode(normalizedCode)) {
+            errorMessage = interfaceText(
+                "请输入有效的邀请码，格式如 BNBU-7K3P9Q。",
+                "Enter a valid invitation code, such as BNBU-7K3P9Q."
+            )
+            return
+        }
+
+        errorMessage = null
+        isResolving = true
+        scope.launch {
+            try {
+                val response = apiClient.executeAndParseCancellable(
+                    apiClient.request(StudentEndpoint.CourseInviteLookup(normalizedCode)),
+                    CourseInviteLookupResponse::class.java
+                )
+                onInviteResolved(normalizedCode, response.toCourseJoinInfo())
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                if (isInviteUnavailableError(error) && onInviteUnavailable != null) {
+                    onInviteUnavailable()
+                } else {
+                    errorMessage = inviteLookupErrorMessage(error)
+                }
+            } finally {
+                isResolving = false
+            }
+        }
+    }
+
+    BackHandler(enabled = !isResolving, onBack = onBack)
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .testTag("screen.courseJoin.enterCode"),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Spacer(Modifier.height(8.dp))
+            TextButton(
+                onClick = onBack,
+                enabled = !isResolving,
+                modifier = Modifier.testTag("courseJoin.enterCode.back")
+            ) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null)
+                Text(interfaceText("返回", "Back"))
+            }
+
+            Icon(
+                imageVector = Icons.Filled.Keyboard,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = interfaceText("输入邀请码", "Enter invitation code"),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = interfaceText(
+                    "请输入老师提供的邀请码。查询后请核对课程、教学班和教师信息，再提交加入申请。",
+                    "Enter the code from your teacher. Review the course, section, and instructor before submitting your request."
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = code,
+                onValueChange = {
+                    code = it
+                    errorMessage = null
+                },
+                enabled = !isResolving,
+                label = { Text(interfaceText("邀请码", "Invitation code")) },
+                placeholder = { Text(interfaceText("例如 BNBU-7K3P9Q", "For example: BNBU-7K3P9Q")) },
+                supportingText = if (hasFormatError) {
+                    {
+                        Text(
+                            interfaceText(
+                                "请输入有效的邀请码，格式如 BNBU-7K3P9Q。",
+                                "Enter a valid invitation code, such as BNBU-7K3P9Q."
+                            )
+                        )
+                    }
+                } else {
+                    null
+                },
+                isError = hasFormatError,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Characters,
+                    keyboardType = KeyboardType.Ascii,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = KeyboardActions(onDone = { resolveInviteCode() }),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("courseJoin.enterCode.input")
+            )
+            errorMessage?.let {
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("courseJoin.enterCode.error")
+                )
+            }
+            Button(
+                onClick = ::resolveInviteCode,
+                enabled = !isResolving && isInviteCode(normalizedCode),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .testTag("courseJoin.enterCode.submit")
+            ) {
+                if (isResolving) {
+                    CircularProgressIndicator(
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .testTag("courseJoin.enterCode.loading")
+                    )
+                } else {
+                    Text(interfaceText("查询课程", "Find course"))
+                }
+            }
+        }
+    }
+}

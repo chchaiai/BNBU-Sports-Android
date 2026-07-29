@@ -1,8 +1,8 @@
 package edu.bnbu.student.mvp.core.designsystem
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -20,20 +21,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.DirectionsRun
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material3.Button
+import edu.bnbu.student.mvp.core.designsystem.AppleButton as Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import edu.bnbu.student.mvp.core.designsystem.AppleFilledTonalButton as FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import edu.bnbu.student.mvp.core.designsystem.AppleTextButton as TextButton
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.runtime.Composable
@@ -41,68 +46,49 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import edu.bnbu.student.mvp.R
 
 // ═══════════════════════════════════════════════════════════════
-//  GridBackground — subtle dot-grid in M3 surfaceVariant tone
+//  GridBackground — retained API, now a calm content-first backdrop
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
 fun GridBackground(modifier: Modifier = Modifier) {
-    Canvas(
-        modifier = modifier
-            .background(MaterialTheme.colorScheme.background)
-            .clipToBounds()
-    ) {
-        val spacing = 42.dp.toPx()
-        val outlineColor = Color(0xFF747775).copy(alpha = 0.06f)
-        var x = 0f
-        while (x <= size.width) {
-            drawLine(outlineColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
-            x += spacing
-        }
-        var y = 0f
-        while (y <= size.height) {
-            drawLine(outlineColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
-            y += spacing
-        }
-    }
+    Box(modifier = modifier.background(MaterialTheme.colorScheme.background))
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  SwissPanel  →  Google M3 Card
-//
-//  Card replaces the old white-background + black-border panel.
-//  It uses tonal elevation for subtle depth and the M3 medium
-//  shape (12 dp corner radius) defined in BNBUShapes.
+//  SwissPanel — grouped surface with no decorative border or shadow
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
 fun SwissPanel(
     modifier: Modifier = Modifier,
+    contentPadding: Dp = BNBULayout.CardPadding,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.medium,
+        shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp), content = content)
+        Column(modifier = Modifier.padding(contentPadding), content = content)
     }
 }
 
@@ -113,23 +99,103 @@ fun SwissPanel(
 @Composable
 fun BrandMark(modifier: Modifier = Modifier, compact: Boolean = false) {
     val size = if (compact) 44.dp else 64.dp
-    val cs = MaterialTheme.colorScheme
 
     Surface(
         modifier = modifier
             .size(size),
         shape = MaterialTheme.shapes.medium,
         color = Color.White,
-        border = BorderStroke(1.dp, cs.outlineVariant.copy(alpha = 0.55f)),
-        shadowElevation = if (compact) 0.dp else 1.dp
+        shadowElevation = 0.dp
     ) {
         Image(
             painter = painterResource(R.drawable.bnbu_emblem),
-            contentDescription = "BNBU 校徽",
+            contentDescription = interfaceText("BNBU 校徽", "BNBU emblem"),
             modifier = Modifier
                 .fillMaxSize()
                 .padding(if (compact) 5.dp else 7.dp)
         )
+    }
+}
+
+/**
+ * The stacked identity used while the app starts. The official school emblem
+ * remains unchanged; the sports seal is a separate companion mark.
+ */
+@Composable
+fun BnbuSportsBrandLockup(
+    modifier: Modifier = Modifier,
+    emblemSize: Dp = 84.dp,
+    sportsSealSize: Dp = 34.dp
+) {
+    val officialBlue = colorResource(R.color.bnbu_brand_official)
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Image(
+            painter = painterResource(R.drawable.bnbu_emblem),
+            contentDescription = interfaceText("BNBU 校徽", "BNBU emblem"),
+            modifier = Modifier.size(emblemSize)
+        )
+        Text(
+            text = "BNBU",
+            color = officialBlue,
+            style = MaterialTheme.typography.displaySmall,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 4.sp
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            SportsSeal(size = sportsSealSize)
+            Text(
+                text = "SPORTS",
+                color = officialBlue,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 3.sp
+            )
+        }
+    }
+}
+
+/** A formal, official-blue sports companion mark with a seal-like silhouette. */
+@Composable
+fun SportsSeal(
+    modifier: Modifier = Modifier,
+    size: Dp = 34.dp
+) {
+    val officialBlue = colorResource(R.color.bnbu_brand_official)
+
+    Surface(
+        modifier = modifier.size(size),
+        shape = CircleShape,
+        color = Color.White,
+        border = BorderStroke(1.dp, officialBlue),
+        shadowElevation = 0.dp
+    ) {
+        Box(
+            modifier = Modifier.padding(4.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                shape = CircleShape,
+                color = officialBlue,
+                contentColor = Color.White,
+                shadowElevation = 0.dp
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.DirectionsRun,
+                    contentDescription = interfaceText("运动标识", "Sports mark"),
+                    modifier = Modifier.padding(5.dp),
+                    tint = Color.White
+                )
+            }
+        }
     }
 }
 
@@ -147,14 +213,17 @@ fun UniversityBrandLockup(modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             Text(
-                text = "北师香港浸会大学",
+                text = interfaceText(
+                    "北师香港浸会大学",
+                    "Beijing Normal University–Hong Kong Baptist University"
+                ),
                 color = cs.onSurface,
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = "BNBU · STUDENT SPORTS",
+                text = interfaceText("BNBU · 学生体育", "BNBU · STUDENT SPORTS"),
                 color = cs.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 letterSpacing = 0.6.sp,
@@ -183,11 +252,60 @@ fun SectionTitle(title: String, modifier: Modifier = Modifier, eyebrow: String =
     )
 }
 
+/**
+ * Reusable consent control for entry points that require policy acceptance.
+ * State remains with the caller so policy persistence and navigation are not
+ * coupled to this visual component.
+ */
+@Composable
+fun PrivacyConsentRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    onOpenPrivacy: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = CheckboxDefaults.colors(checkedColor = cs.primary)
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.login_privacy_prefix),
+                color = cs.onSurface,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            TextButton(
+                onClick = onOpenPrivacy,
+                modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.login_privacy_policy),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+            if (!checked) {
+                Text(
+                    text = stringResource(R.string.login_privacy_required),
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════
-//  StatusBadge — low-saturation rounded chip
-//
-//  Google M3 style:  unchecked → surfaceVariant background,
-//  checked → primaryContainer.  No more black border.
+//  StatusBadge — low-saturation semantic capsule
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
@@ -206,7 +324,7 @@ fun StatusBadge(text: String, modifier: Modifier = Modifier, filled: Boolean = f
 
     Surface(
         modifier = modifier,
-        shape = MaterialTheme.shapes.extraSmall,
+        shape = MaterialTheme.shapes.extraLarge,
         color = bg
     ) {
         Text(
@@ -237,13 +355,13 @@ fun HourProgressBar(value: Double, total: Double, modifier: Modifier = Modifier)
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(12.dp)
+            .height(8.dp)
             .background(cs.surfaceVariant, MaterialTheme.shapes.small)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(12.dp)
+                .height(8.dp)
                 .background(cs.primary, MaterialTheme.shapes.small)
                 .graphicsLayer {
                     transformOrigin = TransformOrigin(0f, 0.5f)
@@ -267,7 +385,7 @@ fun EmptyPlaceholder(
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(containerColor = cs.surfaceVariant.copy(alpha = 0.5f))
+        colors = CardDefaults.cardColors(containerColor = cs.surface)
     ) {
         Column(modifier = Modifier.padding(18.dp)) {
             Text(
@@ -304,13 +422,14 @@ fun PrimaryActionButton(
         onClick = onClick,
         modifier = modifier
             .fillMaxWidth()
+            .heightIn(min = BNBULayout.PrimaryControlHeight)
             .pressScale(
                 interactionSource = interactionSource,
                 enabled = enabled && !loading
             ),
         enabled = enabled && !loading,
         interactionSource = interactionSource,
-        shape = MaterialTheme.shapes.extraLarge,
+        shape = MaterialTheme.shapes.medium,
         colors = ButtonDefaults.buttonColors(
             disabledContainerColor = if (loading) cs.primary.copy(alpha = 0.58f) else cs.surfaceVariant,
             disabledContentColor = if (loading) cs.onPrimary else cs.onSurfaceVariant
@@ -338,7 +457,7 @@ fun PrimaryActionButton(
 fun <T> SegmentedControl(
     values: List<T>,
     selected: T,
-    label: (T) -> String,
+    label: @Composable (T) -> String,
     onSelected: (T) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
@@ -346,38 +465,29 @@ fun <T> SegmentedControl(
         modifier = Modifier
             .fillMaxWidth()
             .selectableGroup()
-            .background(cs.surfaceVariant, MaterialTheme.shapes.small)
+            .background(cs.surfaceContainerHighest, MaterialTheme.shapes.small)
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         values.forEach { value ->
             val isSelected = value == selected
+            val interactionSource = remember { MutableInteractionSource() }
+            val indication = LocalIndication.current
             val backgroundColor by animateColorAsState(
-                targetValue = if (isSelected) cs.primaryContainer else Color.Transparent,
+                targetValue = if (isSelected) cs.surface else Color.Transparent,
                 animationSpec = BNBUMotion.colorSpec,
                 label = "segmentBackground"
             )
             val contentColor by animateColorAsState(
-                targetValue = if (isSelected) cs.onPrimaryContainer else cs.onSurfaceVariant,
+                targetValue = if (isSelected) cs.onSurface else cs.onSurfaceVariant,
                 animationSpec = BNBUMotion.colorSpec,
                 label = "segmentContent"
-            )
-            val scale by animateFloatAsState(
-                targetValue = if (isSelected) 1f else 0.97f,
-                animationSpec = androidx.compose.animation.core.spring(
-                    dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
-                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
-                ),
-                label = "segmentScale"
             )
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 48.dp)
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                    }
+                    .heightIn(min = 44.dp)
+                    .pressScale(interactionSource)
                     .background(
                         backgroundColor,
                         MaterialTheme.shapes.small
@@ -385,6 +495,8 @@ fun <T> SegmentedControl(
                     .selectable(
                         selected = isSelected,
                         role = Role.Tab,
+                        interactionSource = interactionSource,
+                        indication = indication,
                         onClick = { onSelected(value) }
                     )
                     .padding(horizontal = 8.dp),
@@ -404,8 +516,8 @@ fun <T> SegmentedControl(
 // ═══════════════════════════════════════════════════════════════
 //  ActionButton
 //
-//  filled=true   → M3 FilledTonalButton (PrimaryContainer)
-//  filled=false  → M3 OutlinedButton
+//  filled=true   → primary action
+//  filled=false  → quiet secondary action
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
@@ -420,26 +532,31 @@ fun ActionButton(
     val interactionSource = remember { MutableInteractionSource() }
     val animatedModifier = modifier
         .fillMaxWidth()
+        .heightIn(min = BNBULayout.PrimaryControlHeight)
         .pressScale(interactionSource = interactionSource, enabled = enabled)
     if (filled) {
-        FilledTonalButton(
+        Button(
             onClick = onClick,
             modifier = animatedModifier,
             interactionSource = interactionSource,
             enabled = enabled,
-            shape = MaterialTheme.shapes.large
+            shape = MaterialTheme.shapes.medium
         ) {
             Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text(text = title, maxLines = 1)
         }
     } else {
-        OutlinedButton(
+        FilledTonalButton(
             onClick = onClick,
             modifier = animatedModifier,
             interactionSource = interactionSource,
             enabled = enabled,
-            shape = MaterialTheme.shapes.large
+            shape = MaterialTheme.shapes.medium,
+            colors = ButtonDefaults.filledTonalButtonColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                contentColor = MaterialTheme.colorScheme.primary
+            )
         ) {
             Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
@@ -461,13 +578,13 @@ fun StatusMessagePanel(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(containerColor = cs.primaryContainer.copy(alpha = 0.6f))
+        colors = CardDefaults.cardColors(containerColor = cs.tertiaryContainer)
     ) {
         Column(modifier = Modifier.padding(18.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = Icons.Filled.CheckCircle,
-                    contentDescription = "操作成功",
+                    contentDescription = interfaceText("操作成功", "Operation succeeded"),
                     tint = cs.primary,
                     modifier = Modifier.size(24.dp)
                 )
@@ -478,11 +595,11 @@ fun StatusMessagePanel(
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f)
                 )
-                StatusBadge(text = "完成", filled = true)
+                StatusBadge(text = interfaceText("完成", "Complete"), filled = true)
             }
             Spacer(Modifier.height(10.dp))
             ActionButton(
-                title = "知道了",
+                title = interfaceText("知道了", "Got it"),
                 icon = Icons.Filled.Clear,
                 filled = false,
                 onClick = onDismiss
@@ -507,7 +624,7 @@ fun ValidationPanel(message: String) {
     ) {
         Icon(
             imageVector = Icons.Filled.Error,
-            contentDescription = "验证错误",
+            contentDescription = interfaceText("验证错误", "Validation error"),
             tint = cs.error,
             modifier = Modifier.size(20.dp)
         )

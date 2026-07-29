@@ -1,7 +1,10 @@
 package edu.bnbu.student.mvp.feature.profile
 
+import android.content.Context
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,15 +16,26 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import edu.bnbu.student.mvp.core.designsystem.AppleIconButton as IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import edu.bnbu.student.mvp.core.designsystem.AppleTextButton as TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,11 +43,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import edu.bnbu.student.mvp.core.designsystem.ActionButton
 import edu.bnbu.student.mvp.core.designsystem.BrandMark
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
@@ -41,9 +55,14 @@ import edu.bnbu.student.mvp.core.designsystem.SegmentedControl
 import edu.bnbu.student.mvp.core.designsystem.StatusBadge
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
+import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.model.Membership
 import edu.bnbu.student.mvp.core.model.AppThemeMode
+import edu.bnbu.student.mvp.core.model.AppLanguage
+import edu.bnbu.student.mvp.core.model.StudentProfile
+import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.state.StudentAppState
+import edu.bnbu.student.mvp.R
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
@@ -52,74 +71,75 @@ private fun ApplicationPanel(
     onOpenExemption: (String?) -> Unit,
     onOpenEnduranceScoring: () -> Unit
 ) {
-    val cs = MaterialTheme.colorScheme
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle(eyebrow = "Applications", title = "申请与审核")
+        SectionTitle(
+            eyebrow = stringResource(R.string.profile_services_eyebrow),
+            title = stringResource(R.string.profile_services_title)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            ServiceShortcut(
+                title = stringResource(R.string.profile_exemption),
+                description = stringResource(R.string.profile_exemption_short_hint),
+                icon = Icons.Filled.FitnessCenter,
+                modifier = Modifier.weight(1f),
+                onClick = { onOpenExemption(null) }
+            )
+            ServiceShortcut(
+                title = stringResource(R.string.profile_endurance),
+                description = stringResource(R.string.profile_endurance_short_hint),
+                icon = Icons.Filled.Speed,
+                modifier = Modifier.weight(1f),
+                onClick = onOpenEnduranceScoring
+            )
+        }
+    }
+}
 
-        SwissPanel(modifier = Modifier.bnbuClickable { onOpenExemption(null) }) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+@Composable
+private fun ServiceShortcut(
+    title: String,
+    description: String,
+    icon: ImageVector,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    Card(
+        modifier = modifier.bnbuClickable(onClick = onClick),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = cs.surface)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(cs.primaryContainer, MaterialTheme.shapes.medium),
+                contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Filled.FitnessCenter,
+                    imageVector = icon,
                     contentDescription = null,
                     tint = cs.primary,
-                    modifier = Modifier.size(24.dp)
-                )
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = "免测与免打卡",
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        text = "查看申请进度、提交新申请",
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = "进入免测与免打卡申请",
-                    tint = cs.onSurfaceVariant
+                    modifier = Modifier.size(21.dp)
                 )
             }
-        }
-
-        SwissPanel(modifier = Modifier.bnbuClickable(onClick = onOpenEnduranceScoring)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Speed,
-                    contentDescription = null,
-                    tint = cs.primary,
-                    modifier = Modifier.size(24.dp)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = title,
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = "耐力跑成绩换算",
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        text = "按服务器规则换算 800m / 1000m 成绩",
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = "进入耐力跑成绩换算",
-                    tint = cs.onSurfaceVariant
+                Text(
+                    text = description,
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -129,66 +149,123 @@ private fun ApplicationPanel(
 @Composable
 fun ProfileScreen(
     appState: StudentAppState,
+    onOpenAccountDetails: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     onOpenExemption: (String?) -> Unit = {},
-    onOpenEnduranceScoring: () -> Unit = {},
-    onOpenPrivacy: () -> Unit = {}
+    onOpenEnduranceScoring: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-        item { ProfileHeader(appState) }
+        item { ProfileHeader(appState, onOpenAccountDetails, onOpenSettings) }
 
         item { ApplicationPanel(onOpenExemption, onOpenEnduranceScoring) }
         item { TeacherPanel(appState) }
         item { IdentityPanel(appState) }
-        item {
-            SettingsPanel(appState = appState, onOpenPrivacy = onOpenPrivacy)
-        }
         item { Spacer(Modifier.height(40.dp)) }
     }
 }
 
 @Composable
-private fun ProfileHeader(appState: StudentAppState) {
+private fun ProfileHeader(
+    appState: StudentAppState,
+    onOpenAccountDetails: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
     val cs = MaterialTheme.colorScheme
     val student = appState.workspace.student
+    val pendingCalculation = stringResource(R.string.profile_pending_calculation)
 
-    SwissPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            BrandMark(compact = true)
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = student.name,
-                    color = cs.onSurface,
-                    style = MaterialTheme.typography.headlineSmall
+            Text(
+                text = stringResource(R.string.profile_heading),
+                color = cs.onSurface,
+                style = MaterialTheme.typography.headlineLarge,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onOpenSettings) {
+                Icon(
+                    imageVector = Icons.Filled.Settings,
+                    contentDescription = stringResource(R.string.profile_settings),
+                    tint = cs.onSurface
                 )
-                Text(
-                    text = "${student.id} · ${student.college}",
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                val studentTags = listOf(
-                    student.className,
-                    student.genderLabel,
-                    student.gradeLabel
-                ).filter { it.isNotBlank() }.joinToString(" · ")
-                if (studentTags.isNotBlank()) {
-                    Text(
-                        text = studentTags,
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelMedium
+            }
+        }
+        SwissPanel(
+            modifier = Modifier.bnbuClickable(
+                onClickLabel = stringResource(R.string.profile_account_details),
+                onClick = onOpenAccountDetails
+            )
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    BrandMark(compact = true)
+                    Column(
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = student.name,
+                            color = cs.onSurface,
+                            style = MaterialTheme.typography.headlineSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    StatusBadge(text = student.status, filled = true)
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = cs.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
+
+                ProfileFacts(
+                    studentId = student.id,
+                    className = student.className,
+                    grade = student.localizedGradeLabel().ifBlank { pendingCalculation }
+                )
             }
-            StatusBadge(text = student.status, filled = true)
         }
+    }
+}
+
+@Composable
+private fun ProfileFacts(studentId: String, className: String, grade: String) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(cs.surfaceVariant, MaterialTheme.shapes.medium)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        ProfileFact(label = stringResource(R.string.profile_student_id_short), value = studentId, modifier = Modifier.weight(1f))
+        ProfileFact(label = stringResource(R.string.profile_class_short), value = className.ifBlank { "—" }, modifier = Modifier.weight(1f))
+        ProfileFact(label = stringResource(R.string.profile_grade_short), value = grade, modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun ProfileFact(label: String, value: String, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(text = label, color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+        Text(
+            text = value,
+            color = cs.onSurface,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -198,31 +275,42 @@ private fun TeacherPanel(appState: StudentAppState) {
     val teachers = appState.workspace.teachers
     if (teachers.isEmpty()) return
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle(eyebrow = "My Teacher", title = "我的老师")
-        teachers.forEach { teacher ->
-            SwissPanel {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Filled.CheckCircle,
-                        contentDescription = null,
-                        tint = cs.primary,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+        SectionTitle(
+            eyebrow = stringResource(R.string.profile_teacher_eyebrow),
+            title = stringResource(R.string.profile_teacher_title)
+        )
+        SwissPanel {
+            Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                teachers.forEachIndexed { index, teacher ->
+                    if (index > 0) {
+                        HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                    }
+                    Row(
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = teacher.teacherName,
-                            color = cs.onSurface,
-                            style = MaterialTheme.typography.titleMedium
+                        Icon(
+                            imageVector = Icons.Filled.CheckCircle,
+                            contentDescription = null,
+                            tint = cs.primary,
+                            modifier = Modifier.size(22.dp)
                         )
-                        Text(
-                            text = "任课教师",
-                            color = cs.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelMedium
-                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = teacher.teacherName,
+                                color = cs.onSurface,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = stringResource(R.string.profile_teacher_role),
+                                color = cs.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
                     }
                 }
             }
@@ -233,137 +321,228 @@ private fun TeacherPanel(appState: StudentAppState) {
 @Composable
 private fun IdentityPanel(appState: StudentAppState) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle(eyebrow = "Identity", title = "组织认证与抵扣记录")
+        SectionTitle(
+            eyebrow = stringResource(R.string.profile_identity_eyebrow),
+            title = stringResource(R.string.profile_identity_title)
+        )
 
         if (appState.workspace.memberships.isEmpty()) {
             EmptyPlaceholder(
-                title = "暂无认证记录",
-                message = "当前没有校队或社团抵扣认证。认证生效后，只能抵扣其他运动小时，不能替代课程相关小时。"
+                title = stringResource(R.string.profile_no_memberships),
+                message = stringResource(R.string.profile_no_memberships_hint)
             )
         } else {
-            appState.workspace.memberships.forEach { membership ->
-                MembershipCard(membership)
+            SwissPanel {
+                Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    appState.workspace.memberships.forEachIndexed { index, membership ->
+                        if (index > 0) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                        }
+                        MembershipContent(membership, modifier = Modifier.padding(vertical = 12.dp))
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun MembershipCard(membership: Membership) {
+private fun MembershipContent(membership: Membership, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
-    SwissPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.Top) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "${membership.typeTitle} · ${membership.organization}",
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = stringResource(R.string.profile_valid_until, membership.validUntil.toDisplayDate()),
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StatusBadge(text = membership.status, filled = membership.status == "认证有效")
+                    Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "${membership.typeTitle} · ${membership.organization}",
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        text = "有效至 ${membership.validUntil.toDisplayDate()}",
-                        color = cs.onSurfaceVariant,
+                        text = stringResource(R.string.profile_offset, membership.offset),
+                        color = cs.primary,
                         style = MaterialTheme.typography.labelMedium
                     )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        StatusBadge(text = membership.status, filled = membership.status == "认证有效")
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = "抵扣: ${membership.offset}",
-                            color = cs.primary,
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
                 }
             }
+        }
 
-            if (membership.comment.isNotBlank() && membership.comment != "offset") {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(cs.surfaceVariant, MaterialTheme.shapes.small)
-                        .padding(10.dp),
-                    verticalAlignment = Alignment.Top
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Notifications,
-                        contentDescription = null,
-                        tint = cs.primary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        text = membership.comment,
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+        if (membership.comment.isNotBlank() && membership.comment != "offset") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(cs.surfaceVariant, MaterialTheme.shapes.small)
+                    .padding(10.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Notifications,
+                    contentDescription = null,
+                    tint = cs.primary,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = membership.comment,
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
     }
 }
 
-private val membershipDateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy年M月d日")
-
 private fun String.toDisplayDate(): String {
     val rawDate = take(10)
     return runCatching {
-        LocalDate.parse(rawDate).format(membershipDateFormatter)
+        LocalDate.parse(rawDate).format(
+            DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM)
+                .withLocale(AppLanguagePreferences.currentLocale)
+        )
     }.getOrDefault(rawDate)
+}
+
+/** Full settings page, opened from the gear button in the Profile header. */
+@Composable
+fun ProfileSettingsScreen(
+    appState: StudentAppState,
+    onBack: () -> Unit,
+    onOpenContactBinding: () -> Unit = {},
+    onOpenPrivacy: () -> Unit = {},
+    onOpenHelpCenter: () -> Unit = {},
+    onOpenFeedback: () -> Unit = {},
+    onOpenAbout: () -> Unit = {}
+) {
+    BackHandler(onBack = onBack)
+    val cs = MaterialTheme.colorScheme
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .bnbuClickable(
+                        onClickLabel = stringResource(R.string.common_back),
+                        onClick = onBack
+                    )
+                    .padding(top = 12.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                    contentDescription = null,
+                    tint = cs.onSurface
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.common_back), color = cs.onSurface)
+            }
+        }
+        item {
+            Text(
+                text = stringResource(R.string.profile_settings),
+                color = cs.onSurface,
+                style = MaterialTheme.typography.headlineSmall
+            )
+        }
+        item {
+            SettingsPanel(
+                appState = appState,
+                onOpenContactBinding = onOpenContactBinding,
+                onOpenPrivacy = onOpenPrivacy,
+                onOpenHelpCenter = onOpenHelpCenter,
+                onOpenFeedback = onOpenFeedback,
+                onOpenAbout = onOpenAbout
+            )
+        }
+        item { Spacer(Modifier.height(40.dp)) }
+    }
 }
 
 @Composable
 private fun SettingsPanel(
     appState: StudentAppState,
-    onOpenPrivacy: () -> Unit = {}
+    onOpenContactBinding: () -> Unit = {},
+    onOpenPrivacy: () -> Unit = {},
+    onOpenHelpCenter: () -> Unit = {},
+    onOpenFeedback: () -> Unit = {},
+    onOpenAbout: () -> Unit = {}
 ) {
     val cs = MaterialTheme.colorScheme
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle(eyebrow = "Settings", title = "设置")
-
+    val context = LocalContext.current
+    val chineseLanguageLabel = stringResource(R.string.profile_chinese)
+    val englishLanguageLabel = stringResource(R.string.profile_english)
+    var showLogoutConfirmation by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         SwissPanel {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SettingLine(label = "学生姓名", value = appState.workspace.student.name)
-                SettingLine(label = "学号", value = appState.workspace.student.id)
-                SettingLine(label = "学院", value = appState.workspace.student.college)
-                SettingLine(label = "班级", value = appState.workspace.student.className)
-                SettingLine(
-                    label = "入学年份",
-                    value = appState.workspace.student.admissionYear?.toString() ?: "待完善"
+            Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                GroupLabel(stringResource(R.string.profile_account_security), modifier = Modifier.padding(bottom = 4.dp))
+                NavigationSettingRow(
+                    title = stringResource(R.string.profile_login_contacts),
+                    icon = Icons.Filled.Phone,
+                    onClick = onOpenContactBinding
                 )
-                SettingLine(
-                    label = "当前年级",
-                    value = appState.workspace.student.gradeLabel.ifBlank { "待计算" }
-                )
-                if (appState.workspace.student.currentAcademicYear.isNotBlank()) {
-                    SettingLine(
-                        label = "计算年份",
-                        value = appState.workspace.student.currentAcademicYear
-                    )
-                }
-                SettingLine(label = "App 版本", value = "BNBU Student MVP 1.0")
             }
         }
 
         SwissPanel {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                GroupLabel(stringResource(R.string.profile_preferences))
                 Text(
-                    text = "外观模式",
+                    text = stringResource(R.string.profile_appearance),
                     color = cs.onSurface,
                     style = MaterialTheme.typography.titleMedium
                 )
                 SegmentedControl(
                     values = AppThemeMode.entries,
                     selected = appState.themeMode,
-                    label = { it.label },
+                    label = {
+                        when (it) {
+                            AppThemeMode.Light -> stringResource(R.string.theme_light)
+                            AppThemeMode.Dark -> stringResource(R.string.theme_dark)
+                            AppThemeMode.System -> stringResource(R.string.theme_system)
+                        }
+                    },
                     onSelected = appState::updateThemeMode
                 )
                 Text(
-                    text = "默认使用浅色模式；选择跟随系统后会随设备设置切换。",
+                    text = stringResource(R.string.profile_appearance_hint),
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                Text(
+                    text = stringResource(R.string.profile_language),
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                SegmentedControl(
+                    values = AppLanguage.entries,
+                    selected = appState.appLanguage,
+                    label = { if (it == AppLanguage.Chinese) chineseLanguageLabel else englishLanguageLabel },
+                    onSelected = { language ->
+                        if (language != appState.appLanguage) {
+                            if (appState.updateAppLanguage(language)) {
+                                context.findActivity()?.recreate()
+                            }
+                        }
+                    }
+                )
+                Text(
+                    text = stringResource(R.string.profile_language_hint),
                     color = cs.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall
                 )
@@ -371,81 +550,130 @@ private fun SettingsPanel(
         }
 
         SwissPanel {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                ActionButton(
-                    title = "隐私政策",
-                    icon = Icons.Filled.FitnessCenter,
-                    filled = false,
-                    onClick = onOpenPrivacy
-                )
-                ActionButton(
-                    title = "退出登录",
-                    icon = Icons.Filled.Clear,
-                    filled = true,
-                    onClick = appState::logout
+            Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                GroupLabel(stringResource(R.string.profile_help_support), modifier = Modifier.padding(bottom = 4.dp))
+                NavigationSettingRow(title = stringResource(R.string.profile_help_center), icon = Icons.AutoMirrored.Filled.HelpOutline, onClick = onOpenHelpCenter)
+                HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                NavigationSettingRow(title = stringResource(R.string.profile_privacy), icon = Icons.Filled.FitnessCenter, onClick = onOpenPrivacy)
+                HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                NavigationSettingRow(title = stringResource(R.string.profile_feedback), icon = Icons.Filled.Notifications, onClick = onOpenFeedback)
+                HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                NavigationSettingRow(
+                    title = stringResource(R.string.profile_about),
+                    icon = Icons.Filled.Info,
+                    onClick = onOpenAbout
                 )
             }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth().bnbuClickable { showLogoutConfirmation = true },
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = cs.errorContainer)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Clear,
+                    contentDescription = null,
+                    tint = cs.error,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = stringResource(R.string.profile_logout),
+                    color = cs.onErrorContainer,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = cs.error,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
+        if (showLogoutConfirmation) {
+            AlertDialog(
+                onDismissRequest = { showLogoutConfirmation = false },
+                title = { Text(stringResource(R.string.profile_logout)) },
+                text = { Text(stringResource(R.string.profile_logout_confirmation_message)) },
+                dismissButton = {
+                    TextButton(onClick = { showLogoutConfirmation = false }) {
+                        Text(stringResource(R.string.common_cancel))
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = appState::logout) {
+                        Text(stringResource(R.string.profile_logout))
+                    }
+                }
+            )
         }
     }
 }
 
-@Composable
-private fun SettingLine(label: String, value: String) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top
-    ) {
-        Text(
-            text = label,
-            color = cs.onSurface,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(
-            text = value,
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f)
-        )
-    }
+private tailrec fun Context.findActivity(): android.app.Activity? = when (this) {
+    is android.app.Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+internal fun StudentProfile.localizedGradeLabel(): String = when (gradeLevel) {
+    "freshman" -> interfaceText("大一", "Year 1")
+    "sophomore" -> interfaceText("大二", "Year 2")
+    "junior" -> interfaceText("大三", "Year 3")
+    "senior" -> interfaceText("大四", "Year 4")
+    else -> gradeLevel
 }
 
 @Composable
-private fun InlineAction(
+private fun GroupLabel(title: String, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Text(
+        text = title,
+        modifier = modifier,
+        color = cs.onSurface,
+        style = MaterialTheme.typography.titleMedium
+    )
+}
+
+@Composable
+private fun NavigationSettingRow(
     title: String,
     icon: ImageVector,
-    enabled: Boolean,
     onClick: () -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
-            .background(cs.surface, MaterialTheme.shapes.small)
-            .bnbuClickable(enabled = enabled, onClick = onClick)
-            .padding(14.dp),
+            .fillMaxWidth()
+            .bnbuClickable(onClick = onClick)
+            .padding(vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = if (enabled) cs.primary else cs.onSurfaceVariant,
+            tint = cs.primary,
             modifier = Modifier.size(20.dp)
         )
         Spacer(Modifier.width(10.dp))
         Text(
             text = title,
-            color = if (enabled) cs.onSurface else cs.onSurfaceVariant,
+            color = cs.onSurface,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f)
         )
-        if (enabled) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(18.dp)
-            )
-        }
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = cs.onSurfaceVariant,
+            modifier = Modifier.size(18.dp)
+        )
     }
 }

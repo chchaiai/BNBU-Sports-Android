@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomInt, randomUUID } from "node:crypto";
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import multer from "multer";
@@ -8,11 +8,12 @@ import type { AppConfig } from "./config/env";
 import { AppError } from "./errors";
 import { asyncHandler, idParameter, parseBody } from "./http";
 import { idempotencyRequestHash } from "./idempotency";
-import { signAccessToken, studentAuth, studentId } from "./auth";
+import { adminAuth, signAccessToken, studentAuth, studentId } from "./auth";
 import type { BackendStore } from "./store";
 import { createProofObjectKey, type ObjectStorage } from "./storage/storage";
 import { validateUploads } from "./storage/validation";
 import { DUMMY_PASSWORD_HASH, verifyPassword } from "./password";
+import { CODE_TTL_SECONDS, deliverContactCode } from "./contact-code-delivery";
 
 const loginSchema = z.object({
   account: z.string().trim().min(1).max(254),
@@ -39,7 +40,11 @@ const submitRecordSchema = z.object({
   courseId: z.string().trim().min(1).max(128).nullable().optional().default(null),
   taskId: z.string().trim().min(1).max(128).nullable().optional().default(null),
   hours: z.coerce.number().refine((value) => value === 1 || value === 2, "hours must be 1 or 2"),
+  startTime: z.string().datetime({ offset: true }),
+  endTime: z.string().datetime({ offset: true }),
+  actualDurationSeconds: z.coerce.number().int().min(1).max(7_200),
   description: z.string().trim().max(2000).default(""),
+  remark: z.string().trim().max(200).default(""),
   proofFiles: z.array(proofReferenceSchema).min(1).max(7),
   sportType: z.string().trim().min(1).max(100).nullable().optional().default(null)
 }).strict().superRefine((value, context) => {
@@ -53,16 +58,25 @@ const submitRecordSchema = z.object({
       message: "其他运动打卡不能关联课程或课程任务"
     });
   }
+  if (Date.parse(value.endTime) < Date.parse(value.startTime)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["endTime"], message: "结束时间不能早于开始时间" });
+  }
 });
-
-const supplementSchema = z.object({
-  hours: z.coerce.number().refine((value) => value === 1 || value === 2, "hours must be 1 or 2"),
-  description: z.string().trim().max(2000).default(""),
-  proofFiles: z.array(proofReferenceSchema).min(1).max(7)
-}).strict();
 
 const profileSchema = z.object({
   gender: z.enum(["male", "female"]).nullable()
+}).strict();
+
+const languagePreferenceSchema = z.object({
+  language: z.enum(["zh-CN", "en"])
+}).strict();
+
+const emailContactSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254)
+}).strict();
+
+const phoneContactSchema = z.object({
+  phone: z.string().trim().regex(/^\+[1-9]\d{6,30}$/, "请输入有效的国际格式手机号")
 }).strict();
 
 const exemptionSchema = z.object({
@@ -89,6 +103,32 @@ const pageQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).max(1_000_000).default(0)
 });
 
+// FCM registration tokens are opaque identifiers. Notification text, personal
+// details, course names, and grades are expressly not accepted by this endpoint.
+const pushDeviceSchema = z.object({
+  token: z.string().trim().min(20).max(4096),
+  platform: z.literal("android"),
+  appVersion: z.string().trim().min(1).max(64)
+}).strict();
+
+const helpArticleSchema = z.object({
+  title: z.string().trim().min(1).max(255),
+  category: z.string().trim().max(100).default(""),
+  content: z.string().trim().min(1).max(20_000),
+  sortOrder: z.coerce.number().int().min(0).max(1_000_000).default(0),
+  status: z.enum(["draft", "published", "offline"])
+}).strict();
+
+const feedbackSchema = z.object({
+  category: z.string().trim().min(1).max(100),
+  description: z.string().trim().min(1).max(2_000),
+  currentPage: z.string().trim().min(1).max(256),
+  clientVersion: z.string().trim().min(1).max(64),
+  screenshots: z.array(z.string().trim().min(1).max(1_024)).max(3).default([]),
+  email: z.string().trim().email().max(254),
+  phone: z.string().trim().regex(/^[0-9+()\-\s]{5,32}$/)
+}).strict();
+
 const idempotencyKey = (header: string | undefined): string | undefined => {
   if (!header) return undefined;
   if (!/^[A-Za-z0-9._:-]{8,128}$/.test(header)) throw new AppError(422, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key 格式不正确");
@@ -113,7 +153,11 @@ async function refreshProofUrls(value: unknown, storage: ObjectStorage): Promise
   return refreshed;
 }
 
-export function createApiRouter(config: AppConfig, store: BackendStore, storage: ObjectStorage): Router {
+export function createApiRouter(
+  config: AppConfig,
+  store: BackendStore,
+  storage: ObjectStorage
+): Router {
   const router = Router();
   const uploadGate = new ConcurrencyGate(config.UPLOAD_MAX_CONCURRENT);
   const loginLimiter = rateLimit({
@@ -149,6 +193,7 @@ export function createApiRouter(config: AppConfig, store: BackendStore, storage:
     if (user.role !== "student") throw new AppError(403, "ROLE_FORBIDDEN", "请使用学生账号登录");
     if (user.status !== "正常") throw new AppError(403, "ACCOUNT_DISABLED", "账号已停用，请联系管理员");
     const token = signAccessToken(config, user);
+    const contactBinding = await store.getContactBindingStatus(user.id);
     response.json({
       token,
       user: {
@@ -161,13 +206,90 @@ export function createApiRouter(config: AppConfig, store: BackendStore, storage:
         status: user.status,
         gender: user.gender,
         gradeLevel: user.gradeLevel,
-        className: user.className
+        className: user.className,
+        account_status: contactBinding.accountStatus,
+        contacts: contactBinding.contacts
       },
       defaultRoute: "/student"
     });
   }));
 
+  // The administrator console controls the complete lifecycle of help content.
+  // Setting an article to `offline` removes it from the student endpoint.
+  router.get("/admin/help-articles", adminAuth(config, store), asyncHandler(async (_request, response) => {
+    response.setHeader("Cache-Control", "no-store");
+    response.json(await store.listHelpArticles());
+  }));
+  router.post("/admin/help-articles", adminAuth(config, store), asyncHandler(async (request, response) => {
+    const input = parseBody(helpArticleSchema, request.body);
+    response.status(201).json(await store.upsertHelpArticle(request.auth!.id, null, {
+      ...input,
+      category: input.category ?? "",
+      sortOrder: input.sortOrder ?? 0
+    }));
+  }));
+  router.put("/admin/help-articles/:id", adminAuth(config, store), asyncHandler(async (request, response) => {
+    const articleId = idParameter.parse(request.params.id);
+    const input = parseBody(helpArticleSchema, request.body);
+    response.json(await store.upsertHelpArticle(request.auth!.id, articleId, {
+      ...input,
+      category: input.category ?? "",
+      sortOrder: input.sortOrder ?? 0
+    }));
+  }));
+
   router.use(studentAuth(config, store));
+
+  router.get("/student/profile", asyncHandler(async (request, response) => {
+    response.json(await store.getProfile(studentId(request)));
+  }));
+
+  const sendContactCode = (channel: "email" | "phone") => asyncHandler(async (request, response) => {
+    const contact = channel === "email"
+      ? parseBody(emailContactSchema, request.body).email
+      : parseBody(phoneContactSchema, request.body).phone;
+    const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+    const codeHash = createHash("sha256").update(code).digest("hex");
+    const expiresAt = new Date(Date.now() + CODE_TTL_SECONDS * 1_000);
+    await store.issueContactVerificationCode(studentId(request), channel, contact, codeHash, expiresAt);
+    await deliverContactCode(config, channel, contact, code);
+    response.status(204).end();
+  });
+
+  const verifyContactCode = (channel: "email" | "phone") => asyncHandler(async (request, response) => {
+    const input = channel === "email"
+      ? parseBody(emailContactSchema.extend({ code: z.string().regex(/^\d{6}$/, "验证码应为 6 位数字") }).strict(), request.body)
+      : parseBody(phoneContactSchema.extend({ code: z.string().regex(/^\d{6}$/, "验证码应为 6 位数字") }).strict(), request.body);
+    const contact = "email" in input ? input.email : input.phone;
+    const codeHash = createHash("sha256").update(input.code).digest("hex");
+    response.json(await store.verifyContactVerificationCode(studentId(request), channel, contact, codeHash));
+  });
+
+  router.post("/v1/student/contacts/email/send-code", sendContactCode("email"));
+  router.post("/v1/student/contacts/email/verify", verifyContactCode("email"));
+  router.post("/v1/student/contacts/phone/send-code", sendContactCode("phone"));
+  router.post("/v1/student/contacts/phone/verify", verifyContactCode("phone"));
+
+  // The client uses the profile and four contact endpoints above to finish a
+  // focused activation task. Every teaching and account feature below is
+  // server-enforced as well, so a modified client cannot submit a check-in or
+  // use normal services before one contact is verified.
+  router.use((request, _response, next) => {
+    void store.getContactBindingStatus(studentId(request)).then((status) => {
+      if (status.accountStatus === "PENDING_CONTACT_BINDING") {
+        next(new AppError(403, "CONTACT_BINDING_REQUIRED", "请先绑定并验证邮箱或手机号，再继续使用课程与打卡服务"));
+        return;
+      }
+      next();
+    }).catch(next);
+  });
+
+  // Content is authored in the administrator console; students receive only
+  // currently published records, never a client-bundled FAQ.
+  router.get("/common/help-articles", asyncHandler(async (_request, response) => {
+    response.setHeader("Cache-Control", "no-store");
+    response.json(await store.listPublishedHelpArticles());
+  }));
 
   router.get("/sport/summary", asyncHandler(async (request, response) => {
     response.json(await store.getSportSummary(studentId(request)));
@@ -175,7 +297,6 @@ export function createApiRouter(config: AppConfig, store: BackendStore, storage:
 
   router.get("/sport/records", asyncHandler(async (request, response) => {
     const query = pageQuerySchema.extend({
-      status: z.string().max(32).optional(),
       courseId: z.string().max(128).optional()
     }).parse(request.query);
     const records = await store.listSportRecords(studentId(request), query);
@@ -190,8 +311,12 @@ export function createApiRouter(config: AppConfig, store: BackendStore, storage:
       taskId: input.taskId ?? null,
       hours: input.hours,
       description: input.description ?? "",
+      remark: input.remark ?? "",
       proofFiles: input.proofFiles,
       sportType: input.sportType ?? null,
+      startTime: input.startTime,
+      endTime: input.endTime,
+      actualDurationSeconds: input.actualDurationSeconds,
       ...mutationIdempotency(request.header("idempotency-key"), input)
     });
     response.status(201).json(result);
@@ -202,17 +327,6 @@ export function createApiRouter(config: AppConfig, store: BackendStore, storage:
     const record = await store.getSportRecord(studentId(request), id);
     if (!record) throw new AppError(404, "RECORD_NOT_FOUND", "打卡记录不存在");
     response.json(await refreshProofUrls(record, storage));
-  }));
-
-  router.post("/sport/records/:id/supplements", asyncHandler(async (request, response) => {
-    const id = idParameter.parse(request.params.id);
-    const input = parseBody(supplementSchema, request.body);
-    response.status(201).json(await store.supplementSportRecord(studentId(request), id, {
-      hours: input.hours,
-      description: input.description ?? "",
-      proofFiles: input.proofFiles,
-      ...mutationIdempotency(request.header("idempotency-key"), input)
-    }));
   }));
 
   router.get("/sport/identity", asyncHandler(async (request, response) => {
@@ -230,13 +344,46 @@ export function createApiRouter(config: AppConfig, store: BackendStore, storage:
     response.json(result);
   }));
 
-  router.get("/student/profile", asyncHandler(async (request, response) => {
-    response.json(await store.getProfile(studentId(request)));
+  router.post("/v1/student/push-devices", asyncHandler(async (request, response) => {
+    const input = parseBody(pushDeviceSchema, request.body);
+    await store.registerPushDevice(studentId(request), input);
+    response.status(204).end();
+  }));
+
+  router.delete("/v1/student/push-devices", asyncHandler(async (request, response) => {
+    const input = parseBody(pushDeviceSchema, request.body);
+    await store.unregisterPushDevice(studentId(request), input.token);
+    response.status(204).end();
+  }));
+
+  router.get("/v1/student/feedback", asyncHandler(async (request, response) => {
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ tickets: await store.listFeedbackTickets(studentId(request)) });
+  }));
+
+  router.post("/v1/student/feedback", asyncHandler(async (request, response) => {
+    const input = parseBody(feedbackSchema, request.body);
+    const ticket = await store.createFeedback(studentId(request), {
+      category: input.category,
+      description: input.description,
+      currentPage: input.currentPage,
+      clientVersion: input.clientVersion,
+      screenshots: input.screenshots ?? [],
+      email: input.email,
+      phone: input.phone,
+      ...mutationIdempotency(request.header("idempotency-key"), input)
+    });
+    response.status(201).json(ticket);
   }));
 
   router.put("/student/profile", asyncHandler(async (request, response) => {
     const input = parseBody(profileSchema, request.body);
     response.json(await store.updateProfile(studentId(request), input.gender));
+  }));
+
+  router.put("/v1/student/preferences/language", asyncHandler(async (request, response) => {
+    const input = parseBody(languagePreferenceSchema, request.body);
+    response.json(await store.updateLanguagePreference(studentId(request), input.language));
   }));
 
   router.get("/student/courses", asyncHandler(async (request, response) => {
@@ -245,6 +392,11 @@ export function createApiRouter(config: AppConfig, store: BackendStore, storage:
       semesterId: z.string().trim().min(1).max(128).optional()
     }).parse(request.query);
     response.json(await store.listCourses(studentId(request), query.scope, query.semesterId));
+  }));
+
+  router.get("/student/checkin-time-window", asyncHandler(async (request, response) => {
+    response.setHeader("Cache-Control", "no-store");
+    response.json(await store.getCheckInTimeWindow(studentId(request)));
   }));
 
   router.get("/student/tasks", asyncHandler(async (request, response) => {

@@ -1,5 +1,7 @@
 package edu.bnbu.student.mvp.core.network
 
+import com.google.gson.annotations.SerializedName
+
 // ── Response DTOs mirroring backend JSON shapes ──────────────────
 
 data class UserDto(
@@ -12,7 +14,54 @@ data class UserDto(
     val status: String = "正常",
     val gender: String? = null,
     val gradeLevel: String? = null,
-    val className: String = ""
+    val className: String = "",
+    @SerializedName("account_status")
+    val accountStatus: String = "ACTIVE",
+    val contacts: ContactStatusResponse = ContactStatusResponse()
+)
+
+/** Only masked contact values are ever returned to the client after verification. */
+data class ContactMethodResponse(
+    val masked: String? = null,
+    val verified: Boolean = false
+)
+
+data class ContactStatusResponse(
+    val email: ContactMethodResponse = ContactMethodResponse(),
+    val phone: ContactMethodResponse = ContactMethodResponse()
+)
+
+data class SendEmailContactCodeRequest(val email: String)
+
+data class VerifyEmailContactCodeRequest(
+    val email: String,
+    val code: String
+)
+
+data class SendPhoneContactCodeRequest(val phone: String)
+
+data class VerifyPhoneContactCodeRequest(
+    val phone: String,
+    val code: String
+)
+
+/** Response from GET /api/v1/config/minimum-app-version. */
+data class MinimumAppVersionResponse(
+    val minimumVersion: String = "",
+    val downloadUrl: String = "",
+    val updateMessage: String = ""
+)
+
+/**
+ * Backwards-compatible response for GET /api/health. The mode fields are
+ * optional until the server-side maintenance-control rollout is complete.
+ */
+data class SystemHealthResponse(
+    val ok: Boolean = true,
+    @SerializedName("system_mode") val systemMode: String = "NORMAL",
+    @SerializedName("maintenance_message") val maintenanceMessage: String = "",
+    @SerializedName("estimated_recovery_time") val estimatedRecoveryTime: String? = null,
+    @SerializedName("planned_maintenance_at") val plannedMaintenanceAt: String? = null
 )
 
 data class LoginResponse(
@@ -30,7 +79,6 @@ data class SportSummaryResponse(
     val courseRemaining: Double = 10.0,
     val generalRemaining: Double = 10.0,
     val completed: Boolean = false,
-    val pendingCount: Int = 0,
     val rule: SportRuleDto? = null,
     val teachers: List<TeacherDto> = emptyList(),
     val courses: List<StudentCourseDto> = emptyList()
@@ -67,7 +115,22 @@ data class StudentCourseDetailResponse(
     val status: String = "",
     val enrollmentStatus: String = "enrolled",
     val isCurrent: Boolean = false,
+    @SerializedName(value = "finalGrade", alternate = ["final_grade"])
+    val finalGrade: Int? = null,
+    @SerializedName(value = "gradeStatus", alternate = ["grade_status"])
+    val gradeStatus: String? = null,
     val semester: StudentSemesterResponse = StudentSemesterResponse()
+)
+
+/** Response from GET /student/checkin-time-window. All values are server policy. */
+data class CheckInTimeWindowResponse(
+    val windowMode: String = "unavailable",
+    val dateRangeStart: String? = null,
+    val dateRangeEnd: String? = null,
+    val dailyStartTime: String = "",
+    val dailyEndTime: String = "",
+    val excludedDates: List<String> = emptyList(),
+    val semesterDeadline: String? = null
 )
 
 data class StudentSemesterResponse(
@@ -90,24 +153,19 @@ data class SportRuleDto(
 data class SportRecordResponse(
     val id: String,
     val courseId: String? = null,
-    val taskId: String? = null,
     val taskTitle: String? = null,
     val creditType: String = "",
     val hours: Double = 0.0,
-    val approvedHours: Double = 0.0,
     val description: String? = null,
+    val remark: String? = null,
     val proofFiles: List<ProofFileResponse> = emptyList(),
     val sportType: String? = null,
-    val aiReviewStatus: String? = null,
-    val aiRiskLevel: String? = null,
-    val aiRiskCodes: List<String> = emptyList(),
-    val aiReviewMessage: String? = null,
-    val aiConfidence: Double? = null,
-    val aiReviewedAt: String? = null,
-    val status: String = "待审核",
-    val reviewComment: String? = null,
+    val teacherPublicFeedback: String? = null,
+    val teacherInternalNote: String? = null,
     val submittedAt: String? = null,
-    val reviewedAt: String? = null
+    val startTime: String? = null,
+    val endTime: String? = null,
+    val actualDurationSeconds: Long? = null
 )
 
 data class ProofFileResponse(
@@ -120,14 +178,7 @@ data class ProofFileResponse(
 
 data class SubmitRecordResponse(
     val id: String,
-    val status: String,
     val submittedAt: String
-)
-
-data class SupplementResponse(
-    val id: String,
-    val status: String,
-    val message: String = ""
 )
 
 data class MembershipResponse(
@@ -141,6 +192,16 @@ data class MembershipResponse(
     val offset: String = "待确认",
     val comment: String? = null,
     val updatedBy: String? = null,
+    val updatedAt: String? = null
+)
+
+/** Response from GET /api/common/help-articles. */
+data class HelpArticleResponse(
+    val id: String = "",
+    val title: String = "",
+    val category: String = "",
+    val content: String = "",
+    val sortOrder: Int = 0,
     val updatedAt: String? = null
 )
 
@@ -213,25 +274,49 @@ data class StudentProfileResponse(
     val college: String = "",
     val className: String = "",
     val gender: String? = null,
+    val preferredLanguage: String = "zh-CN",
     val gradeLevel: String? = null,
     val admissionYear: Int? = null,
     val currentGradeLevel: String? = null,
     val currentAcademicYear: String? = null,
     val gradeCalculatedAt: String? = null,
     val status: String = "正常",
-    val enrolledCourses: Int = 0
+    val enrolledCourses: Int = 0,
+    @SerializedName("account_status")
+    val accountStatus: String = "ACTIVE",
+    val contacts: ContactStatusResponse = ContactStatusResponse()
+)
+
+/** A student-visible service-feedback work order. */
+data class FeedbackTicketResponse(
+    val id: String = "",
+    val ticketNumber: String = "",
+    val category: String = "",
+    val description: String = "",
+    val currentPage: String = "",
+    val status: String = "pending",
+    val createdAt: String = "",
+    val updatedAt: String? = null,
+    val reply: String? = null,
+    val email: String? = null,
+    val phone: String? = null
+)
+
+/** Expected response for GET /api/v1/student/feedback. */
+data class FeedbackTicketListResponse(
+    val tickets: List<FeedbackTicketResponse> = emptyList()
 )
 
 data class StudentProfileUpdateRequest(
     val gender: String? = null
 )
 
-// ── Student Tasks ──────────────────────────────────────────────────
-
-data class StudentTaskListResponse(
-    val pending: List<StudentTaskItemResponse> = emptyList(),
-    val completed: List<StudentTaskItemResponse> = emptyList()
+/** Response from PUT /api/v1/student/preferences/language. */
+data class LanguagePreferenceResponse(
+    val language: String = "zh-CN"
 )
+
+// ── Student Tasks ──────────────────────────────────────────────────
 
 // ── Student Grades ─────────────────────────────────────────────────
 
@@ -248,9 +333,20 @@ data class StudentGradeResponse(
     val exam: Int = 0,
     val attendance: Int = 0,
     val physical: Int = 0,
+    val enduranceRunTimeSeconds: Int? = null,
+    /** recorded | exempt | absent | not_recorded */
+    val enduranceRunStatus: String? = null,
+    /** The score assigned by the teacher for the endurance-run item. */
+    val enduranceRunScore: Int? = null,
     val overallTotal: Int = 0,
     val total: Int = 0,
-    val sourceTrace: String? = null
+    val sourceTrace: String? = null,
+    val visibleBlocks: List<StudentGradeBlockResponse> = emptyList(),
+    val totalScore: Int? = null,
+    val totalDisplay: String = "未开放",
+    val isPassed: Boolean? = null,
+    val courseGradeStatus: String = "rules_not_published",
+    val displayConfigVersion: Int = 0
 ) {
     val resolvedCheckinScore: Int
         get() = if (checkinScore != 0) checkinScore else checkin
@@ -258,6 +354,25 @@ data class StudentGradeResponse(
     val resolvedTotal: Int
         get() = if (total != 0) total else overallTotal
 }
+
+data class StudentGradeBlockResponse(
+    val id: String,
+    val name: String,
+    val weight: Double,
+    val score: Int? = null,
+    val scoreDisplay: String = "未录入",
+    val isVisible: Boolean = true,
+    val displayOrder: Int = 0,
+    val blockType: String = "custom",
+    val description: String? = null,
+    val subItems: List<StudentGradeSubItemResponse>? = null
+)
+
+data class StudentGradeSubItemResponse(
+    val name: String,
+    val score: Int? = null,
+    val scoreDisplay: String = "未录入"
+)
 
 data class StudentGradesResponse(
     val grades: List<StudentGradeResponse> = emptyList(),
@@ -271,19 +386,4 @@ data class StudentGradesSummary(
     val overallPhysical: Int = 0,
     val overallTotal: Int = 0,
     val totalPossible: Int = 100
-)
-
-data class StudentTaskItemResponse(
-    val id: String,
-    val courseId: String,
-    val courseCode: String = "",
-    val courseSection: String = "",
-    val courseName: String = "",
-    val title: String,
-    val description: String = "",
-    val creditType: String,
-    val requiredHours: Double = 0.0,
-    val deadline: String,
-    val status: String,
-    val completedAt: String? = null
 )

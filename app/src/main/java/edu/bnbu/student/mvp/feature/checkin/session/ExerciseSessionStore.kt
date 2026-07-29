@@ -15,7 +15,7 @@ internal class ExerciseSessionStore(
 ) {
     fun save(accountId: String, state: ExerciseSessionState): Boolean {
         if (accountId.isBlank()) return false
-        if (state == ExerciseSessionState.Idle) {
+        if (state == ExerciseSessionState.Idle || state is ExerciseSessionState.Submitted) {
             storage.clearExerciseSessionSnapshot(accountId)
             return true
         }
@@ -70,6 +70,7 @@ internal fun ExerciseSessionState.toSnapshot(): ExerciseSessionSnapshot {
             sportType = details.sportType,
             customSportName = details.customSportName,
             description = details.description,
+            remark = details.remark,
             startedAtEpochMillis = startedAtEpochMillis,
             activeSegmentStartedAtEpochMillis = activeSegmentStartedAtEpochMillis,
             accumulatedActiveMillis = accumulatedActiveMillis
@@ -83,6 +84,7 @@ internal fun ExerciseSessionState.toSnapshot(): ExerciseSessionSnapshot {
             sportType = details.sportType,
             customSportName = details.customSportName,
             description = details.description,
+            remark = details.remark,
             startedAtEpochMillis = startedAtEpochMillis,
             pausedAtEpochMillis = pausedAtEpochMillis,
             accumulatedActiveMillis = accumulatedActiveMillis
@@ -96,11 +98,14 @@ internal fun ExerciseSessionState.toSnapshot(): ExerciseSessionSnapshot {
             sportType = details.sportType,
             customSportName = details.customSportName,
             description = details.description,
+            remark = details.remark,
             startedAtEpochMillis = startedAtEpochMillis,
             endedAtEpochMillis = endedAtEpochMillis,
             activeDurationMillis = activeDurationMillis,
             creditedHours = creditedHours
         )
+
+        is ExerciseSessionState.Submitted -> error("Submitted sessions are cleared instead of persisted")
     }
 }
 
@@ -111,7 +116,8 @@ internal fun ExerciseSessionSnapshot.toExerciseSessionStateOrNull(): ExerciseSes
         creditType = CreditType.entries.firstOrNull { it.name == creditType } ?: return null,
         sportType = sportType,
         customSportName = customSportName,
-        description = description.orEmpty()
+        description = description.orEmpty(),
+        remark = remark.orEmpty()
     )
     if (!details.isValid) return null
     return when (phase) {

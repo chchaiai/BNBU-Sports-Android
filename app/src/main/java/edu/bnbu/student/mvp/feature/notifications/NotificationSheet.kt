@@ -2,6 +2,7 @@ package edu.bnbu.student.mvp.feature.notifications
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -21,6 +22,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -31,11 +34,11 @@ import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import edu.bnbu.student.mvp.core.designsystem.AppleIconButton as IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import edu.bnbu.student.mvp.core.designsystem.AppleTextButton as TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -46,6 +49,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
@@ -53,15 +57,17 @@ import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.StatusBadge
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
+import edu.bnbu.student.mvp.core.designsystem.pressScale
 import edu.bnbu.student.mvp.core.model.NoticeCategory
 import edu.bnbu.student.mvp.core.model.StudentNotice
+import edu.bnbu.student.mvp.R
 import kotlinx.coroutines.launch
 
-private enum class NotificationFilter(val label: String) {
-    All("全部"),
-    Unread("未读"),
-    Deadline("截止提醒"),
-    Application("申请与材料")
+private enum class NotificationFilter(val labelRes: Int) {
+    All(R.string.notification_all),
+    Unread(R.string.notification_unread),
+    Deadline(R.string.notification_deadline),
+    Application(R.string.notification_application)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -192,7 +198,7 @@ private fun NotificationSheetHeader(
         ) {
             if (showingDetail) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "返回通知列表")
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = stringResource(R.string.notification_back_list))
                 }
             } else {
                 Icon(
@@ -204,14 +210,14 @@ private fun NotificationSheetHeader(
                 Spacer(Modifier.width(10.dp))
             }
             Text(
-                text = if (showingDetail) "通知详情" else "通知",
+                text = stringResource(if (showingDetail) R.string.notification_detail else R.string.notification_title),
                 color = cs.onSurface,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f)
             )
             IconButton(onClick = onDismiss) {
-                Icon(Icons.Filled.Close, contentDescription = "关闭通知")
+                Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.notification_close))
             }
         }
         if (!showingDetail) {
@@ -219,10 +225,10 @@ private fun NotificationSheetHeader(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                StatusBadge(text = if (unreadCount > 0) "$unreadCount 条未读" else "暂无未读")
+                StatusBadge(text = if (unreadCount > 0) stringResource(R.string.notification_unread_count, unreadCount) else stringResource(R.string.notification_none_unread))
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onMarkAllRead, enabled = unreadCount > 0) {
-                    Text("全部标为已读")
+                    Text(stringResource(R.string.notification_mark_all))
                 }
             }
         }
@@ -230,6 +236,7 @@ private fun NotificationSheetHeader(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun NotificationList(
     notices: List<StudentNotice>,
     selectedFilter: NotificationFilter,
@@ -254,12 +261,15 @@ private fun NotificationList(
     ) {
         items(NotificationFilter.entries, key = { it.name }) { filter ->
             val selected = filter == selectedFilter
+            val interactionSource = remember { MutableInteractionSource() }
             FilterChip(
                 selected = selected,
                 onClick = { onFilterSelected(filter) },
+                modifier = Modifier.pressScale(interactionSource),
+                interactionSource = interactionSource,
                 label = {
                     Text(
-                        text = filter.label,
+                        text = stringResource(filter.labelRes),
                         style = MaterialTheme.typography.labelMedium
                     )
                 }
@@ -269,8 +279,8 @@ private fun NotificationList(
 
     if (filtered.isEmpty()) {
         EmptyPlaceholder(
-            title = "暂无通知",
-            message = "当前筛选条件下没有通知。"
+            title = stringResource(R.string.notification_empty),
+            message = stringResource(R.string.notification_empty_hint)
         )
     } else {
         LazyColumn(
@@ -278,21 +288,36 @@ private fun NotificationList(
             modifier = Modifier.fillMaxWidth()
         ) {
             items(filtered, key = { it.id }) { notice ->
-                NotificationRow(notice = notice, onClick = { onNoticeSelected(notice) })
+                NotificationRow(
+                    notice = notice,
+                    modifier = Modifier.animateItemPlacement(
+                        animationSpec = tween(BNBUMotion.Standard, easing = FastOutSlowInEasing)
+                    ),
+                    onClick = { onNoticeSelected(notice) }
+                )
             }
         }
     }
 }
 
 @Composable
-private fun NotificationRow(notice: StudentNotice, onClick: () -> Unit) {
+private fun NotificationRow(
+    notice: StudentNotice,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
     val cs = MaterialTheme.colorScheme
-    SwissPanel(modifier = Modifier.bnbuClickable(onClick = onClick)) {
+    val iconTint by animateColorAsState(
+        targetValue = if (notice.isUnread) cs.primary else cs.onSurfaceVariant,
+        animationSpec = BNBUMotion.colorSpec,
+        label = "notificationReadTint"
+    )
+    SwissPanel(modifier = modifier.bnbuClickable(onClick = onClick)) {
         Row(verticalAlignment = Alignment.Top) {
             Icon(
                 imageVector = if (notice.isUnread) Icons.Filled.NotificationsActive else Icons.Filled.CheckCircle,
                 contentDescription = null,
-                tint = if (notice.isUnread) cs.primary else cs.onSurfaceVariant,
+                tint = iconTint,
                 modifier = Modifier.size(20.dp)
             )
             Spacer(Modifier.width(10.dp))
@@ -334,7 +359,7 @@ private fun NotificationDetail(notice: StudentNotice, onMarkRead: (String) -> Un
                 TextButton(onClick = { onMarkRead(notice.id) }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.CheckCircle, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("标记为已读")
+                    Text(stringResource(R.string.notification_mark_read))
                 }
             }
         }

@@ -74,18 +74,14 @@ CREATE TABLE IF NOT EXISTS sport_records (
   task_id CHAR(36) NULL,
   credit_type ENUM('课程相关', '其他运动', '系统抵扣') NOT NULL,
   hours DECIMAL(4,1) NOT NULL,
-  approved_hours DECIMAL(4,1) NOT NULL DEFAULT 0,
   description TEXT NOT NULL,
   sport_type VARCHAR(100) NULL,
-  status ENUM('待审核', '已通过', '已驳回', '补材料', '系统抵扣') NOT NULL DEFAULT '待审核',
-  review_comment TEXT NULL,
   ai_review_status ENUM('pending', 'normal', 'abnormal', 'manual_review') NULL,
   ai_risk_level ENUM('low', 'medium', 'high') NULL,
   ai_risk_codes JSON NOT NULL,
   ai_review_message TEXT NULL,
   ai_confidence DECIMAL(5,4) NULL,
   ai_reviewed_at DATETIME(3) NULL,
-  reviewed_at DATETIME(3) NULL,
   submitted_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   submission_date DATE NOT NULL,
   source ENUM('student', 'system') NOT NULL DEFAULT 'student',
@@ -100,7 +96,6 @@ CREATE TABLE IF NOT EXISTS sport_records (
   CONSTRAINT fk_records_course FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE SET NULL,
   CONSTRAINT fk_records_task FOREIGN KEY (task_id) REFERENCES sport_tasks(id) ON DELETE SET NULL,
   CHECK (hours IN (1.0, 2.0)),
-  CHECK (approved_hours BETWEEN 0 AND hours)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 -- statement-breakpoint
 CREATE TABLE IF NOT EXISTS proof_files (
@@ -117,19 +112,6 @@ CREATE TABLE IF NOT EXISTS proof_files (
   KEY ix_proof_owner (owner_type, owner_id),
   CONSTRAINT fk_proofs_student FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
   CHECK ((media_type = 'image' AND size_bytes <= 8000000) OR (media_type = 'video' AND size_bytes <= 100000000))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
--- statement-breakpoint
-CREATE TABLE IF NOT EXISTS record_supplements (
-  id CHAR(36) PRIMARY KEY,
-  record_id CHAR(36) NOT NULL,
-  student_id CHAR(36) NOT NULL,
-  hours DECIMAL(4,1) NOT NULL,
-  description TEXT NOT NULL,
-  proof_keys JSON NOT NULL,
-  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  CONSTRAINT fk_supplements_record FOREIGN KEY (record_id) REFERENCES sport_records(id) ON DELETE CASCADE,
-  CONSTRAINT fk_supplements_student FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
-  CHECK (hours IN (1.0, 2.0))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 -- statement-breakpoint
 CREATE TABLE IF NOT EXISTS memberships (

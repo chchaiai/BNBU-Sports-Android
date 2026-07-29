@@ -1,14 +1,11 @@
 package edu.bnbu.student.mvp.feature.grades
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -17,376 +14,306 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AssignmentTurnedIn
-import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
-import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.RadioButtonUnchecked
-import androidx.compose.material.icons.filled.TrackChanges
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import edu.bnbu.student.mvp.core.designsystem.HourProgressBar
+import edu.bnbu.student.mvp.core.designsystem.BNBULayout
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
-import edu.bnbu.student.mvp.core.designsystem.StatusBadge
-import edu.bnbu.student.mvp.core.designsystem.SwissPanel
-import edu.bnbu.student.mvp.core.model.GradeRow
+import edu.bnbu.student.mvp.core.designsystem.interfaceText
+import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
+import edu.bnbu.student.mvp.core.model.EnduranceRunStatus
+import edu.bnbu.student.mvp.core.model.SportHourRule
+import edu.bnbu.student.mvp.core.model.StudentProgress
 import edu.bnbu.student.mvp.core.state.StudentAppState
 
 @Composable
 fun GradesScreen(appState: StudentAppState) {
-    val grades = appState.workspace.grades
-    val components = grades.gradeComponents()
+    val workspace = appState.workspace
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("screen.grades"),
+        contentPadding = PaddingValues(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(BNBULayout.Space16)
     ) {
-        item { SectionTitle(eyebrow = "Grade Progress", title = "成绩进度") }
-        item { TotalPanel(grades) }
-        item { ComponentGrid(components) }
-        item { FormulaPanel(grades = grades, components = components) }
-        item { MissingPanel(grades) }
-        item { TracePanel(grades) }
+        item { CompletionHeader(calculatedAt = workspace.student.gradeCalculatedAt) }
+        item {
+            EnduranceRunCard(
+                gender = workspace.student.gender,
+                timeSeconds = workspace.grades.enduranceRunTimeSeconds,
+                status = workspace.grades.enduranceRunStatus,
+                score = workspace.grades.enduranceRunScore
+            )
+        }
+        item {
+            CheckInHoursCard(
+                progress = workspace.progress,
+                rule = workspace.hourRule
+            )
+        }
     }
 }
 
 @Composable
-private fun TotalPanel(grades: GradeRow) {
+private fun CompletionHeader(calculatedAt: String) {
     val cs = MaterialTheme.colorScheme
-    SwissPanel {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = BNBULayout.Space4),
+        verticalArrangement = Arrangement.spacedBy(BNBULayout.Space4)
+    ) {
+        SectionTitle(title = interfaceText("体测与打卡", "Fitness & check-ins"))
+        Text(
+            text = calculatedAt.takeIf(String::isNotBlank)
+                ?.let { interfaceText(
+                    "本学期完成情况 · 更新于 ${formatCompactTime(it)}",
+                    "This semester's progress · Updated ${formatCompactTime(it)}"
+                ) }
+                ?: interfaceText("本学期完成情况", "This semester's progress"),
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+}
+
+@Composable
+private fun EnduranceRunCard(
+    gender: String,
+    timeSeconds: Int?,
+    status: EnduranceRunStatus,
+    score: Int?
+) {
+    val cs = MaterialTheme.colorScheme
+    val distance = when (gender.trim().lowercase()) {
+        "male" -> interfaceText("1000 米", "1000 m")
+        "female" -> interfaceText("800 米", "800 m")
+        else -> interfaceText("800 米 / 1000 米", "800 m / 1000 m")
+    }
+    val recordedTime = timeSeconds?.takeIf { it > 0 }?.let(::formatRunTime)
+    val display = when (status) {
+        EnduranceRunStatus.Recorded -> EnduranceRunDisplay(
+            primary = recordedTime ?: interfaceText("暂未记录", "Not recorded"),
+            supporting = interfaceText("耐力跑测试用时", "Endurance run time"),
+            score = score
+        )
+        EnduranceRunStatus.Exempt -> EnduranceRunDisplay(
+            primary = interfaceText("免测", "Exempt"),
+            supporting = interfaceText("耐力跑免测 · 教师评分", "Endurance exemption · Teacher-assigned score"),
+            score = score
+        )
+        EnduranceRunStatus.Absent -> EnduranceRunDisplay(
+            primary = interfaceText("缺考（计0分）", "Absent (0 points)"),
+            supporting = interfaceText("耐力跑缺考状态", "Endurance run absence"),
+            score = 0
+        )
+        EnduranceRunStatus.NotRecorded -> EnduranceRunDisplay(
+            primary = interfaceText("暂未记录", "Not recorded"),
+            supporting = interfaceText("耐力跑测试用时", "Endurance run time"),
+            score = null
+        )
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = cs.surface
+    ) {
+        Column(
+            modifier = Modifier.padding(BNBULayout.CardPadding),
+            verticalArrangement = Arrangement.spacedBy(BNBULayout.Space16)
+        ) {
+            CardTitle(
+                icon = {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.DirectionsRun,
+                        contentDescription = null,
+                        tint = cs.primary,
+                        modifier = Modifier.size(21.dp)
+                    )
+                },
+                title = interfaceText("$distance 跑步", "$distance run"),
+                supportingText = display.supporting
+            )
+            Text(
+                text = display.primary,
+                color = cs.onSurface,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            if (status == EnduranceRunStatus.Exempt || status == EnduranceRunStatus.Absent) {
                 Text(
-                    text = "总分预估",
-                    color = cs.onSurface,
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    text = "基于当前已录入的四块成绩与权重规则展示，最终结果以教务汇总为准。",
+                    text = display.score?.let {
+                        interfaceText("成绩：$it 分", "Score: $it points")
+                    } ?: interfaceText("成绩：暂未评分", "Score: not assigned"),
                     color = cs.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
-            Spacer(Modifier.width(14.dp))
-            Text(
-                text = grades.total.toString(),
-                color = cs.onSurface,
-                fontSize = 54.sp,
-                fontWeight = FontWeight.Medium,
-                lineHeight = 54.sp
-            )
         }
     }
 }
 
-@Composable
-private fun ComponentGrid(components: List<GradeComponentSummary>) {
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val useSingleColumn = maxWidth < 320.dp || LocalDensity.current.fontScale >= 1.3f
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (useSingleColumn) {
-                components.forEach { component ->
-                    GradeComponentCard(component = component, modifier = Modifier.fillMaxWidth())
-                }
-            } else {
-                components.chunked(2).forEach { rowComponents ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(IntrinsicSize.Min),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        rowComponents.forEach { component ->
-                            GradeComponentCard(
-                                component = component,
-                                modifier = Modifier.weight(1f).fillMaxHeight()
-                            )
-                        }
-                        if (rowComponents.size == 1) Spacer(Modifier.weight(1f))
-                    }
-                }
-            }
-        }
-    }
-}
+private data class EnduranceRunDisplay(
+    val primary: String,
+    val supporting: String,
+    val score: Int?
+)
 
 @Composable
-private fun GradeComponentCard(
-    component: GradeComponentSummary,
-    modifier: Modifier = Modifier
-) {
+private fun CheckInHoursCard(progress: StudentProgress, rule: SportHourRule) {
     val cs = MaterialTheme.colorScheme
-    SwissPanel(modifier = modifier) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = component.icon,
-                    contentDescription = null,
-                    tint = cs.primary,
-                    modifier = Modifier.size(24.dp)
+    val completed = (progress.course + progress.general).coerceAtLeast(0.0)
+    val required = rule.total.coerceAtLeast(0.0)
+    val remaining = (required - completed).coerceAtLeast(0.0)
+    val isComplete = required > 0.0 && completed >= required
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = cs.surface
+    ) {
+        Column(
+            modifier = Modifier.padding(BNBULayout.CardPadding),
+            verticalArrangement = Arrangement.spacedBy(BNBULayout.Space16)
+        ) {
+            CardTitle(
+                icon = {
+                    Icon(
+                        imageVector = Icons.Filled.CheckCircle,
+                        contentDescription = null,
+                        tint = cs.primary,
+                        modifier = Modifier.size(21.dp)
+                    )
+                },
+                title = interfaceText("打卡学时", "Check-in hours"),
+                supportingText = if (isComplete) {
+                    interfaceText("已完成本学期打卡要求", "Semester check-in requirement complete")
+                } else {
+                    interfaceText("还需 ${formatHours(remaining)} 小时", "${formatHours(remaining)} hours remaining")
+                }
+            )
+
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    text = formatHours(completed),
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.SemiBold
                 )
-                Spacer(Modifier.weight(1f))
-                StatusBadge(text = component.weightText)
+                Text(
+                    text = interfaceText(
+                        " / ${formatHours(required)} 小时",
+                        " / ${formatHours(required)} hours"
+                    ),
+                    modifier = Modifier.padding(start = BNBULayout.Space4, bottom = 3.dp),
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyLarge
+                )
             }
 
-            Text(
-                text = component.title,
-                color = cs.onSurface,
-                style = MaterialTheme.typography.titleSmall
-            )
+            if (required > 0.0) {
+                LinearProgressIndicator(
+                    progress = { (completed / required).toFloat().coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                    color = cs.primary,
+                    trackColor = cs.surfaceVariant,
+                    drawStopIndicator = {}
+                )
+            }
 
-            Text(
-                text = component.score.toString(),
-                color = cs.onSurface,
-                fontSize = 40.sp,
-                fontWeight = FontWeight.Medium,
-                lineHeight = 40.sp
-            )
-
-            HourProgressBar(value = component.score.toDouble(), total = 100.0)
-
-            Text(
-                text = component.note,
-                color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall
-            )
+            Row(modifier = Modifier.fillMaxWidth()) {
+                HourBreakdown(
+                    modifier = Modifier.weight(1f),
+                    label = interfaceText("课程相关", "Course-related"),
+                    completed = progress.course,
+                    required = rule.courseRequired
+                )
+                Spacer(Modifier.width(BNBULayout.Space16))
+                HourBreakdown(
+                    modifier = Modifier.weight(1f),
+                    label = interfaceText("其他运动", "Other exercise"),
+                    completed = progress.general,
+                    required = rule.generalRequired
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun FormulaPanel(
-    grades: GradeRow,
-    components: List<GradeComponentSummary>
+private fun CardTitle(
+    icon: @Composable () -> Unit,
+    title: String,
+    supportingText: String
 ) {
     val cs = MaterialTheme.colorScheme
-    SwissPanel {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "总分计算",
-                color = cs.onSurface,
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(Modifier.weight(1f))
-            StatusBadge(text = "透明预估")
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Surface(
+            modifier = Modifier.size(40.dp),
+            shape = MaterialTheme.shapes.small,
+            color = cs.surfaceVariant
+        ) {
+            Box(contentAlignment = Alignment.Center) { icon() }
         }
-
-        Spacer(Modifier.height(14.dp))
-
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            components.forEach { component ->
-                GradeContributionRow(component)
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(cs.outline)
-        )
-        Spacer(Modifier.height(12.dp))
-
-        DetailFactRow(label = "加权合计", value = "%.1f".format(components.sumOf { it.contribution }))
-        DetailFactRow(label = "四舍五入", value = grades.total.toString())
-    }
-}
-
-@Composable
-private fun GradeContributionRow(component: GradeComponentSummary) {
-    val cs = MaterialTheme.colorScheme
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = component.title,
-                color = cs.onSurface,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f)
-            )
-            Text(
-                text = "${component.score} x ${component.weightText} = ${component.contributionText}",
-                color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-        HourProgressBar(value = component.contribution, total = 30.0)
-    }
-}
-
-@Composable
-private fun MissingPanel(grades: GradeRow) {
-    val cs = MaterialTheme.colorScheme
-    SwissPanel {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "缺失项 / 风险",
-                color = cs.onSurface,
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(Modifier.weight(1f))
-            StatusBadge(
-                text = if (grades.missingItems.isEmpty()) "无缺失" else "${grades.missingItems.size} 项",
-                filled = grades.missingItems.isEmpty()
-            )
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        if (grades.missingItems.isEmpty()) {
-            Text(
-                text = "当前没有阻塞项。",
-                color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium
-            )
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                grades.missingItems.forEach { item ->
-                    MissingItemRow(item)
-                }
-            }
+        Spacer(Modifier.width(BNBULayout.Space12))
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(text = title, color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
+            Text(text = supportingText, color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
 
 @Composable
-private fun MissingItemRow(item: String) {
+private fun HourBreakdown(
+    modifier: Modifier = Modifier,
+    label: String,
+    completed: Double,
+    required: Double
+) {
     val cs = MaterialTheme.colorScheme
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(cs.errorContainer, MaterialTheme.shapes.small)
-            .padding(12.dp),
-        verticalAlignment = Alignment.Top
-    ) {
-        Icon(
-            imageVector = Icons.Filled.Error,
-            contentDescription = null,
-            tint = cs.error,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(Modifier.width(8.dp))
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(text = label, color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
         Text(
-            text = item,
-            color = cs.onErrorContainer,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
-
-@Composable
-private fun TracePanel(grades: GradeRow) {
-    val cs = MaterialTheme.colorScheme
-    SwissPanel {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Filled.TrackChanges,
-                contentDescription = null,
-                tint = cs.primary,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = "来源追溯",
-                color = cs.onSurface,
-                style = MaterialTheme.typography.titleMedium
-            )
-        }
-
-        Spacer(Modifier.height(10.dp))
-
-        Text(
-            text = grades.sourceTrace,
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.bodyMedium
-        )
-    }
-}
-
-@Composable
-private fun DetailFactRow(label: String, value: String) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = label,
+            text = interfaceText(
+                "${formatHours(completed)} / ${formatHours(required)} 小时",
+                "${formatHours(completed)} / ${formatHours(required)} hours"
+            ),
             color = cs.onSurface,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(
-            text = value,
-            color = cs.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f)
+            fontWeight = FontWeight.Medium
         )
     }
 }
 
-private data class GradeComponentSummary(
-    val title: String,
-    val score: Int,
-    val weight: Double,
-    val icon: ImageVector,
-    val note: String
-) {
-    val weightText: String
-        get() = "${(weight * 100).toInt()}%"
-
-    val contribution: Double
-        get() = score * weight
-
-    val contributionText: String
-        get() = "%.1f".format(contribution)
+private fun formatRunTime(totalSeconds: Int): String {
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%d′%02d″".format(AppLanguagePreferences.currentLocale, minutes, seconds)
 }
 
-private fun GradeRow.gradeComponents(): List<GradeComponentSummary> {
-    return listOf(
-        GradeComponentSummary(
-            title = "体育打卡",
-            score = checkinScore,
-            weight = 0.25,
-            icon = Icons.Filled.AssignmentTurnedIn,
-            note = "打卡与组织认证学时以教务汇总为准"
-        ),
-        GradeComponentSummary(
-            title = "专项考试",
-            score = exam,
-            weight = 0.30,
-            icon = Icons.AutoMirrored.Filled.DirectionsRun,
-            note = "由任课老师录入专项成绩"
-        ),
-        GradeComponentSummary(
-            title = "平时表现 / 签到",
-            score = attendance,
-            weight = 0.20,
-            icon = Icons.Filled.CheckCircle,
-            note = "课堂签到与平时表现"
-        ),
-        GradeComponentSummary(
-            title = "体测",
-            score = physical,
-            weight = 0.25,
-            icon = Icons.Filled.BarChart,
-            note = "体测数据录入后参与计算"
-        )
-    )
+private fun formatHours(value: Double): String = if (value % 1.0 == 0.0) {
+    value.toInt().toString()
+} else {
+    "%.1f".format(AppLanguagePreferences.currentLocale, value)
+}
+
+private fun formatCompactTime(raw: String): String {
+    val normalized = raw.trim().replace('T', ' ')
+    return when {
+        normalized.length >= 16 -> normalized.take(16)
+        normalized.length >= 10 -> normalized.take(10)
+        else -> normalized
+    }
 }

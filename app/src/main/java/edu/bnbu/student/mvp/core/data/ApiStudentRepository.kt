@@ -1,30 +1,29 @@
 package edu.bnbu.student.mvp.core.data
 
 import edu.bnbu.student.mvp.core.model.CheckInRecord
-import edu.bnbu.student.mvp.core.model.AiReviewStatus
-import edu.bnbu.student.mvp.core.model.AiRiskLevel
+import edu.bnbu.student.mvp.core.model.CheckInTimeWindow
 import edu.bnbu.student.mvp.core.model.Course
-import edu.bnbu.student.mvp.core.model.CourseTask
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.EnduranceConversionRequest
 import edu.bnbu.student.mvp.core.model.EnduranceScoreResult
+import edu.bnbu.student.mvp.core.model.EnduranceRunStatus
 import edu.bnbu.student.mvp.core.model.Exemption
 import edu.bnbu.student.mvp.core.model.ExemptionApplication
+import edu.bnbu.student.mvp.core.model.GradeBlock
 import edu.bnbu.student.mvp.core.model.GradeRow
+import edu.bnbu.student.mvp.core.model.GradeSubItem
 import edu.bnbu.student.mvp.core.model.Membership
 import edu.bnbu.student.mvp.core.model.NoticeCategory
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
 import edu.bnbu.student.mvp.core.model.ProofUploadRule
-import edu.bnbu.student.mvp.core.model.ReviewStatus
 import edu.bnbu.student.mvp.core.model.StudentNotice
 import edu.bnbu.student.mvp.core.model.StudentProgress
 import edu.bnbu.student.mvp.core.model.StudentProfile
-import edu.bnbu.student.mvp.core.model.StudentTaskItem
-import edu.bnbu.student.mvp.core.model.TaskStatus
-import edu.bnbu.student.mvp.core.model.StudentTaskList
+import edu.bnbu.student.mvp.core.model.SportHourRule
 import edu.bnbu.student.mvp.core.model.TeacherInfo
 import edu.bnbu.student.mvp.core.model.StudentWorkspace
+import edu.bnbu.student.mvp.core.model.AppLanguage
 import edu.bnbu.student.mvp.core.network.LoginResponse
 import edu.bnbu.student.mvp.core.network.MembershipResponse
 import edu.bnbu.student.mvp.core.network.MarkReadResponse
@@ -38,8 +37,6 @@ import edu.bnbu.student.mvp.core.network.StudentEndpoint
 import edu.bnbu.student.mvp.core.network.StudentLoginRequest
 import edu.bnbu.student.mvp.core.network.SubmitRecordResponse
 import edu.bnbu.student.mvp.core.network.SubmitSportRecordRequest
-import edu.bnbu.student.mvp.core.network.SupplementResponse
-import edu.bnbu.student.mvp.core.network.SupplementSportRecordRequest
 import edu.bnbu.student.mvp.core.network.UploadProofResponse
 import edu.bnbu.student.mvp.core.network.UploadedProofFile
 import edu.bnbu.student.mvp.core.network.UserDto
@@ -49,11 +46,20 @@ import edu.bnbu.student.mvp.core.network.ExemptionSubmitResponse
 import edu.bnbu.student.mvp.core.network.ExemptionSupplementRequest
 import edu.bnbu.student.mvp.core.network.StudentProfileResponse
 import edu.bnbu.student.mvp.core.network.StudentProfileUpdateRequest
-import edu.bnbu.student.mvp.core.network.StudentTaskListResponse
-import edu.bnbu.student.mvp.core.network.StudentTaskItemResponse
 import edu.bnbu.student.mvp.core.network.StudentCourseDetailResponse
 import edu.bnbu.student.mvp.core.network.StudentCoursesResponse
+import edu.bnbu.student.mvp.core.network.CheckInTimeWindowResponse
 import edu.bnbu.student.mvp.core.network.StudentGradesResponse
+import edu.bnbu.student.mvp.core.network.SendEmailContactCodeRequest
+import edu.bnbu.student.mvp.core.network.VerifyEmailContactCodeRequest
+import edu.bnbu.student.mvp.core.network.SendPhoneContactCodeRequest
+import edu.bnbu.student.mvp.core.network.VerifyPhoneContactCodeRequest
+import edu.bnbu.student.mvp.core.network.FeedbackTicketListResponse
+import edu.bnbu.student.mvp.core.network.FeedbackTicketResponse
+import edu.bnbu.student.mvp.core.network.HelpArticleResponse
+import edu.bnbu.student.mvp.core.network.SubmitFeedbackRequest
+import edu.bnbu.student.mvp.core.network.LanguagePreferenceResponse
+import edu.bnbu.student.mvp.core.network.UpdateLanguagePreferenceRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -96,8 +102,15 @@ class ApiStudentRepository(
     // ── Core loading ────────────────────────────────────────────
 
     override fun loadWorkspace(): StudentWorkspace {
-        // Synchronous path returns an empty workspace — real callers use loadWorkspaceAsync.
         return StudentWorkspace.empty()
+    }
+
+    /** Fetches only the current server-authoritative check-in admission policy. */
+    suspend fun fetchCheckInTimeWindow(): CheckInTimeWindow = withContext(Dispatchers.IO) {
+        apiClient.executeAndParseCancellable(
+            apiClient.request(StudentEndpoint.CheckInTimeWindow),
+            CheckInTimeWindowResponse::class.java
+        ).toDomain()
     }
 
     /**
@@ -122,6 +135,7 @@ class ApiStudentRepository(
             val notices: List<NotificationResponse> = apiClient.executeAndParseCancellable(
                 notificationsRequest(), Array<NotificationResponse>::class.java
             ).toList()
+            val checkInTimeWindow = fetchCheckInTimeWindow()
             val profileResult: Result<StudentProfileResponse> = try {
                 Result.success(fetchProfile())
             } catch (e: CancellationException) {
@@ -130,26 +144,6 @@ class ApiStudentRepository(
                 if (e.isUnauthorizedResponse()) throw e
                 Result.failure(e)
             }
-            // Also fetch tasks from the backend — they are a separate API call.
-            // AND-004: surface task fetch errors visibly instead of silently
-            // returning an empty list (which would show "暂无近期任务" misleadingly).
-            val tasksResult: Result<StudentTaskListResponse> = try {
-                Result.success(
-                    apiClient.executeAndParseCancellable(
-                        apiClient.request(StudentEndpoint.StudentTasks),
-                        StudentTaskListResponse::class.java
-                    )
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (e.isUnauthorizedResponse()) throw e
-                Result.failure(e)
-            }
-            val tasksResponse = tasksResult.getOrElse {
-                StudentTaskListResponse(emptyList(), emptyList())
-            }
-            val allTasks = tasksResponse.pending + tasksResponse.completed
             // Week2 course contract is optional during the transition from the
             // shared port 96 API. A 404 falls back to summary.courses below.
             val coursesResult: Result<StudentCoursesResponse> = try {
@@ -188,10 +182,10 @@ class ApiStudentRepository(
                 memberships = memberships,
                 notices = notices,
                 courseItems = courseItems,
-                taskItems = allTasks,
                 gradesResponse = gradesResponse,
                 gradesLoadError = gradesLoadError,
-                remoteProfile = profileResult.getOrNull()
+                remoteProfile = profileResult.getOrNull(),
+                checkInTimeWindow = checkInTimeWindow
             )
             workspace
         } catch (e: CancellationException) {
@@ -236,24 +230,6 @@ class ApiStudentRepository(
         }
     }
 
-    override suspend fun supplementRecord(
-        recordId: String,
-        payload: SupplementSportRecordRequest
-    ): Result<SupplementResponse> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val request = supplementSportRecordRequest(recordId, payload)
-                Result.success(
-                    apiClient.executeAndParseCancellable(request, SupplementResponse::class.java)
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
-        }
-    }
-
     override suspend fun markNotificationRead(id: String): Result<MarkReadResponse> {
         return withContext(Dispatchers.IO) {
             try {
@@ -277,10 +253,10 @@ class ApiStudentRepository(
         memberships: List<MembershipResponse>,
         notices: List<NotificationResponse>,
         courseItems: List<StudentCourseDetailResponse> = emptyList(),
-        taskItems: List<StudentTaskItemResponse> = emptyList(),
         gradesResponse: StudentGradesResponse? = null,
         gradesLoadError: String? = null,
-        remoteProfile: StudentProfileResponse? = null
+        remoteProfile: StudentProfileResponse? = null,
+        checkInTimeWindow: CheckInTimeWindow = CheckInTimeWindow.unavailable()
     ): StudentWorkspace {
         // Student identity comes from the login response (userProfile), with
         // fallback defaults when not available (e.g. synchronous loadWorkspace).
@@ -303,7 +279,10 @@ class ApiStudentRepository(
                 ?: "",
             admissionYear = remoteProfile?.admissionYear,
             currentAcademicYear = remoteProfile?.currentAcademicYear.orEmpty(),
-            gradeCalculatedAt = remoteProfile?.gradeCalculatedAt.orEmpty()
+            gradeCalculatedAt = remoteProfile?.gradeCalculatedAt.orEmpty(),
+            accountStatus = remoteProfile?.accountStatus?.takeIf { it.isNotBlank() }
+                ?: profile?.accountStatus?.takeIf { it.isNotBlank() }
+                ?: "ACTIVE"
         )
 
         val orgCredit = memberships.firstOrNull { it.status == "认证有效" && it.offset == "可抵扣" }
@@ -315,6 +294,9 @@ class ApiStudentRepository(
             className = student.className,
             course = summary.courseHours,
             general = summary.generalHours,
+            // The current summary endpoint exposes only totals. This fallback keeps the
+            // breakdown honest until its raw course/general fields are available.
+            rawCourse = summary.courseHours,
             rawGeneral = summary.generalHours,
             exam = 0,
             attendance = 0,
@@ -345,8 +327,11 @@ class ApiStudentRepository(
                     academicYear = c.semester.academicYear,
                     term = c.semester.term,
                     semesterStatus = c.semester.status,
+                    status = c.status,
                     enrollmentStatus = c.enrollmentStatus,
-                    isCurrent = c.isCurrent
+                    isCurrent = c.isCurrent,
+                    finalGrade = c.finalGrade,
+                    gradeStatus = c.gradeStatus
                 )
             }
         } else {
@@ -364,109 +349,160 @@ class ApiStudentRepository(
                     deadline = "",
                     teacher = c.teacherName,
                     teacherId = c.teacherId,
+                    // Summary responses do not carry course lifecycle state, so they
+                    // cannot authorize check-in when /student/courses is unavailable.
+                    status = "unavailable",
                     isCurrent = true
                 )
             }
         }
-
-        // Map task items from the task API to domain CourseTask objects
-        val tasks: List<CourseTask> = taskItems.map { t ->
-            CourseTask(
-                id = t.id,
-                courseId = t.courseId,
-                creditType = when (t.creditType) {
-                    "课程相关" -> CreditType.CourseRelated
-                    "其他运动" -> CreditType.General
-                    else -> CreditType.General
-                },
-                title = t.title,
-                hours = t.requiredHours,
-                deadline = t.deadline,
-                proof = "",
-                status = when (t.status) {
-                    "进行中" -> TaskStatus.Active
-                    "草稿" -> TaskStatus.Draft
-                    "已关闭" -> TaskStatus.Closed
-                    else -> TaskStatus.Active
-                },
-                updatedAt = t.deadline
-            )
-        }
-
-        val studentTaskList = StudentTaskList(
-            pending = taskItems.filter { it.completedAt == null }.map { t ->
-                StudentTaskItem(
-                    id = t.id, courseId = t.courseId,
-                    courseCode = t.courseCode, courseSection = t.courseSection,
-                    courseName = t.courseName, title = t.title,
-                    description = t.description, creditType = t.creditType,
-                    requiredHours = t.requiredHours, deadline = t.deadline,
-                    status = t.status, completedAt = t.completedAt
-                )
-            },
-            completed = taskItems.filter { it.completedAt != null }.map { t ->
-                StudentTaskItem(
-                    id = t.id, courseId = t.courseId,
-                    courseCode = t.courseCode, courseSection = t.courseSection,
-                    courseName = t.courseName, title = t.title,
-                    description = t.description, creditType = t.creditType,
-                    requiredHours = t.requiredHours, deadline = t.deadline,
-                    status = t.status, completedAt = t.completedAt
-                )
-            }
-        )
 
         // Teachers are returned directly from the summary API
         val teachers: List<TeacherInfo> = summary.teachers.map { t ->
             TeacherInfo(teacherId = t.teacherId, teacherName = t.teacherName)
         }
 
-        // Grade scores (exam, attendance, physical) are managed by teacher/admin
-        // endpoints. Try to fetch from the student-facing grades endpoint;
-        // fall back to zeros if not yet available.
+        // Grade scores are managed by teacher/admin endpoints. Prefer configured
+        // blocks, while retaining the legacy flat check-in/physical fields used
+        // by the current student API.
         val studentGrade = gradesResponse?.grades
             ?.firstOrNull { it.studentId == student.id }
             ?: gradesResponse?.grades?.firstOrNull()
 
         val grades = if (studentGrade != null) {
+            val configuredBlocks = studentGrade.visibleBlocks.map { block ->
+                GradeBlock(
+                    id = block.id,
+                    name = block.name,
+                    weight = block.weight,
+                    score = block.score,
+                    scoreDisplay = block.scoreDisplay,
+                    isVisible = block.isVisible,
+                    displayOrder = block.displayOrder,
+                    blockType = block.blockType,
+                    description = block.description,
+                    subItems = block.subItems?.map { subItem ->
+                        GradeSubItem(
+                            name = subItem.name,
+                            score = subItem.score,
+                            scoreDisplay = subItem.scoreDisplay
+                        )
+                    }
+                )
+            }
+            val configuredIdentity = configuredBlocks.filter(GradeBlock::isVisible).joinToString(" ") {
+                "${it.id} ${it.name} ${it.blockType}"
+            }.lowercase()
+            val hasConfiguredCheckIn = listOf("checkin", "check_in", "打卡", "学时")
+                .any(configuredIdentity::contains)
+            val hasConfiguredEndurance = listOf(
+                "physical",
+                "endurance",
+                "800m",
+                "800米",
+                "1000m",
+                "1000米",
+                "耐力跑",
+                "体测"
+            ).any(configuredIdentity::contains)
+            val legacyFocusedBlocks = buildList {
+                if (!hasConfiguredEndurance) {
+                    val distance = when (student.gender) {
+                        "male" -> "1000 米"
+                        "female" -> "800 米"
+                        else -> "800 / 1000 米"
+                    }
+                    add(
+                        GradeBlock(
+                            id = "physical",
+                            name = "$distance 跑步",
+                            weight = 0.0,
+                            score = studentGrade.physical,
+                            scoreDisplay = studentGrade.physical.toString(),
+                            isVisible = true,
+                            displayOrder = 10,
+                            blockType = "physical_test",
+                            description = "耐力跑测试成绩",
+                            subItems = null
+                        )
+                    )
+                }
+                if (!hasConfiguredCheckIn) {
+                    add(
+                        GradeBlock(
+                            id = "checkin",
+                            name = "打卡成绩",
+                            weight = 0.0,
+                            score = studentGrade.resolvedCheckinScore,
+                            scoreDisplay = studentGrade.resolvedCheckinScore.toString(),
+                            isVisible = true,
+                            displayOrder = 20,
+                            blockType = "checkin",
+                            description = "根据有效运动打卡换算",
+                            subItems = null
+                        )
+                    )
+                }
+            }
             GradeRow(
                 studentId = studentGrade.studentId,
                 studentName = studentGrade.studentName,
-                checkinScore = studentGrade.resolvedCheckinScore,
-                exam = studentGrade.exam,
-                attendance = studentGrade.attendance,
-                physical = studentGrade.physical,
-                total = studentGrade.resolvedTotal,
+                visibleBlocks = configuredBlocks + legacyFocusedBlocks,
+                totalScore = studentGrade.totalScore,
+                totalDisplay = studentGrade.totalDisplay,
+                isPassed = studentGrade.isPassed,
+                courseGradeStatus = studentGrade.courseGradeStatus,
+                displayConfigVersion = studentGrade.displayConfigVersion,
                 sourceTrace = studentGrade.sourceTrace.orEmpty().ifBlank { "API: /student/grades" },
-                missingItems = buildMissingItems(summary)
+                enduranceRunTimeSeconds = studentGrade.enduranceRunTimeSeconds,
+                enduranceRunStatus = EnduranceRunStatus.fromApi(
+                    studentGrade.enduranceRunStatus,
+                    studentGrade.enduranceRunTimeSeconds
+                ),
+                enduranceRunScore = studentGrade.enduranceRunScore
             )
         } else GradeRow(
             studentId = student.id,
             studentName = student.name,
-            checkinScore = 0,
-            exam = 0,
-            attendance = 0,
-            physical = 0,
-            total = 0,
+            visibleBlocks = emptyList(),
+            totalScore = null,
+            totalDisplay = "未开放",
+            isPassed = null,
+            courseGradeStatus = "rules_not_published",
+            displayConfigVersion = 0,
             sourceTrace = if (gradesLoadError != null) {
                 "API: grade data not yet available — $gradesLoadError"
             } else {
                 "API: grade data not yet available from summary endpoint"
-            },
-            missingItems = buildMissingItems(summary)
+            }
         )
 
         return StudentWorkspace(
             student = student,
             courses = courses,
             progress = progress,
-            tasks = tasks,
+            hourRule = summary.toSportHourRule(),
             records = records.map { recordResponseToRecord(it) },
             grades = grades,
             memberships = memberships.map { membershipToMembership(it) },
             notices = notices.map { noticeResponseToNotice(it) },
             teachers = teachers,
-            studentTasks = studentTaskList
+            checkInTimeWindow = checkInTimeWindow
+        )
+    }
+
+    /**
+     * Hour targets are teacher-configured and must come from the summary API.
+     * The standard rule is only a compatibility fallback for older servers that
+     * do not return the optional `rule` object.
+     */
+    private fun SportSummaryResponse.toSportHourRule(): SportHourRule {
+        val serverRule = rule ?: return SportHourRule.Standard
+        return SportHourRule(
+            total = serverRule.total,
+            courseRequired = serverRule.courseRequired,
+            generalRequired = serverRule.generalRequired,
+            dailyLimit = serverRule.dailyLimit
         )
     }
 
@@ -486,14 +522,6 @@ class ApiStudentRepository(
     }
 
     private fun recordResponseToRecord(r: SportRecordResponse): CheckInRecord {
-        val status = when (r.status) {
-            "待审核" -> ReviewStatus.Pending
-            "已通过" -> ReviewStatus.Approved
-            "已驳回" -> ReviewStatus.Rejected
-            "补材料" -> ReviewStatus.Supplement
-            "系统抵扣" -> ReviewStatus.Offset
-            else -> ReviewStatus.Pending
-        }
         val creditType = when (r.creditType) {
             "课程相关" -> CreditType.CourseRelated
             "其他运动" -> CreditType.General
@@ -503,11 +531,10 @@ class ApiStudentRepository(
         return CheckInRecord(
             id = r.id,
             courseId = r.courseId,
-            taskTitle = r.taskTitle ?: r.taskId ?: "自主打卡",
+            taskTitle = r.taskTitle ?: "运动打卡",
             creditType = creditType,
             hours = r.hours,
             submittedAt = r.submittedAt ?: "",
-            status = status,
             proofSummary = "${r.proofFiles.size} 个凭证",
             proofPhotoCount = r.proofFiles.count { it.mediaType == "image" },
             proofVideoCount = r.proofFiles.count { it.mediaType == "video" },
@@ -520,26 +547,14 @@ class ApiStudentRepository(
                     source = proof.url.ifBlank { "api" }
                 )
             },
-            teacherFeedback = r.reviewComment ?: "",
+            teacherPublicFeedback = r.teacherPublicFeedback,
+            teacherInternalNote = r.teacherInternalNote,
             note = r.description ?: "",
+            remark = r.remark ?: "",
             sportType = r.sportType,
-            aiReviewStatus = when (r.aiReviewStatus) {
-                "normal" -> AiReviewStatus.Normal
-                "abnormal" -> AiReviewStatus.Abnormal
-                "manual_review" -> AiReviewStatus.ManualReview
-                "pending" -> AiReviewStatus.Pending
-                else -> null
-            },
-            aiRiskLevel = when (r.aiRiskLevel) {
-                "low" -> AiRiskLevel.Low
-                "medium" -> AiRiskLevel.Medium
-                "high" -> AiRiskLevel.High
-                else -> null
-            },
-            aiRiskCodes = r.aiRiskCodes,
-            aiReviewMessage = r.aiReviewMessage,
-            aiConfidence = r.aiConfidence,
-            aiReviewedAt = r.aiReviewedAt
+            startTime = r.startTime,
+            endTime = r.endTime,
+            actualDurationSeconds = r.actualDurationSeconds
         )
     }
 
@@ -594,13 +609,6 @@ class ApiStudentRepository(
 
     fun recordsListRequest(): StudentApiRequest {
         return apiClient.request(StudentEndpoint.SportRecordsList)
-    }
-
-    fun supplementSportRecordRequest(
-        recordId: String,
-        payload: SupplementSportRecordRequest
-    ): StudentApiRequest {
-        return apiClient.request(StudentEndpoint.SupplementSportRecord(recordId), payload)
     }
 
     fun sportIdentityRequest(): StudentApiRequest {
@@ -674,15 +682,6 @@ class ApiStudentRepository(
     }
 
     // ── New: Tasks ────────────────────────────────────────────────
-
-    suspend fun listTasks(): StudentTaskListResponse {
-        return withContext(Dispatchers.IO) {
-            apiClient.executeAndParseCancellable(
-                apiClient.request(StudentEndpoint.StudentTasks),
-                StudentTaskListResponse::class.java
-            )
-        }
-    }
 
     // ── File upload ────────────────────────────────────────────────
 
@@ -879,6 +878,91 @@ class ApiStudentRepository(
         }
     }
 
+    /**
+     * Stores the student's UI language on the backend so email and other
+     * server-originated communication can use the same language.
+     */
+    suspend fun updateLanguagePreference(language: AppLanguage): LanguagePreferenceResponse {
+        return withContext(Dispatchers.IO) {
+            apiClient.executeAndParseCancellable(
+                apiClient.request(
+                    StudentEndpoint.UpdateLanguagePreference,
+                    UpdateLanguagePreferenceRequest(language.languageTag)
+                ),
+                LanguagePreferenceResponse::class.java
+            )
+        }
+    }
+
+    /** Loads only the articles currently published by an administrator. */
+    suspend fun fetchHelpArticles(): List<HelpArticleResponse> {
+        return withContext(Dispatchers.IO) {
+            apiClient.executeAndParseCancellable(
+                apiClient.request(StudentEndpoint.HelpArticles),
+                Array<HelpArticleResponse>::class.java
+            ).toList()
+        }
+    }
+
+    // Feedback API contract is isolated here while the backend endpoint is being finalized.
+    suspend fun submitFeedback(payload: SubmitFeedbackRequest): FeedbackTicketResponse {
+        return withContext(Dispatchers.IO) {
+            apiClient.executeAndParseCancellable(
+                apiClient.request(StudentEndpoint.SubmitFeedback, payload),
+                FeedbackTicketResponse::class.java
+            )
+        }
+    }
+
+    suspend fun listFeedbackTickets(): List<FeedbackTicketResponse> {
+        return withContext(Dispatchers.IO) {
+            apiClient.executeAndParseCancellable(
+                apiClient.request(StudentEndpoint.FeedbackTickets),
+                FeedbackTicketListResponse::class.java
+            ).tickets
+        }
+    }
+
+    suspend fun sendEmailContactCode(email: String) {
+        withContext(Dispatchers.IO) {
+            apiClient.executeCancellable(
+                apiClient.request(StudentEndpoint.SendEmailContactCode, SendEmailContactCodeRequest(email))
+            )
+        }
+    }
+
+    suspend fun verifyEmailContactCode(email: String, code: String): StudentProfileResponse {
+        return withContext(Dispatchers.IO) {
+            apiClient.executeAndParseCancellable(
+                apiClient.request(
+                    StudentEndpoint.VerifyEmailContactCode,
+                    VerifyEmailContactCodeRequest(email, code)
+                ),
+                StudentProfileResponse::class.java
+            )
+        }
+    }
+
+    suspend fun sendPhoneContactCode(phone: String) {
+        withContext(Dispatchers.IO) {
+            apiClient.executeCancellable(
+                apiClient.request(StudentEndpoint.SendPhoneContactCode, SendPhoneContactCodeRequest(phone))
+            )
+        }
+    }
+
+    suspend fun verifyPhoneContactCode(phone: String, code: String): StudentProfileResponse {
+        return withContext(Dispatchers.IO) {
+            apiClient.executeAndParseCancellable(
+                apiClient.request(
+                    StudentEndpoint.VerifyPhoneContactCode,
+                    VerifyPhoneContactCodeRequest(phone, code)
+                ),
+                StudentProfileResponse::class.java
+            )
+        }
+    }
+
     // ── Context access for content:// URIs ─────────────────────────
 
     companion object {
@@ -898,3 +982,13 @@ class ApiStudentRepository(
 private fun Throwable.isUnauthorizedResponse(): Boolean {
     return this is ApiHttpException && statusCode == 401
 }
+
+private fun CheckInTimeWindowResponse.toDomain(): CheckInTimeWindow = CheckInTimeWindow(
+    windowMode = windowMode,
+    dateRangeStart = dateRangeStart,
+    dateRangeEnd = dateRangeEnd,
+    dailyStartTime = dailyStartTime,
+    dailyEndTime = dailyEndTime,
+    excludedDates = excludedDates,
+    semesterDeadline = semesterDeadline
+)

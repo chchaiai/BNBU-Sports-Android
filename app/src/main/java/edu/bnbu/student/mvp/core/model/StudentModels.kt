@@ -23,7 +23,9 @@ data class StudentProfile(
     val gradeLevel: String = "",
     val admissionYear: Int? = null,
     val currentAcademicYear: String = "",
-    val gradeCalculatedAt: String = ""
+    val gradeCalculatedAt: String = "",
+    /** Server-side account lifecycle state, e.g. PENDING_CONTACT_BINDING or ACTIVE. */
+    val accountStatus: String = AccountStatus.ACTIVE.name
 ) {
     val genderLabel: String
         get() = when (gender) {
@@ -49,16 +51,53 @@ data class StudentProfile(
         }
 }
 
+enum class AccountStatus {
+    PENDING_CONTACT_BINDING,
+    ACTIVE;
+
+    companion object {
+        fun from(value: String?): AccountStatus = entries.firstOrNull {
+            it.name.equals(value?.trim(), ignoreCase = true)
+        } ?: ACTIVE
+    }
+}
+
 data class TeacherInfo(
     val teacherId: String,
     val teacherName: String
 )
 
+/** A student's most recent request to join a course through an invitation. */
+data class CourseJoinRequest(
+    val id: String,
+    val inviteCode: String,
+    val courseName: String,
+    val courseCode: String,
+    val section: String,
+    val teacherName: String,
+    val semester: String,
+    val studentName: String,
+    val studentNumber: String,
+    val email: String,
+    val status: JoinRequestStatus,
+    val reviewComment: String,
+    val submittedAt: String,
+    val reviewedAt: String?
+)
+
+enum class JoinRequestStatus(val label: String) {
+    PENDING("待审核"),
+    ACTIVE("已通过"),
+    REJECTED("已拒绝"),
+    NEEDS_CORRECTION("需补正")
+}
+
 data class StudentWorkspace(
     val student: StudentProfile,
     val courses: List<Course>,
     val progress: StudentProgress,
-    val tasks: List<CourseTask>,
+    /** Server-owned hour targets for the student's current course and term. */
+    val hourRule: SportHourRule = SportHourRule.Standard,
     val records: List<CheckInRecord>,
     val grades: GradeRow,
     val memberships: List<Membership>,
@@ -66,29 +105,41 @@ data class StudentWorkspace(
     val teachers: List<TeacherInfo> = emptyList(),
     val syncOperations: List<SyncOperation> = emptyList(),
     val exemptions: List<Exemption> = emptyList(),
-    val studentTasks: StudentTaskList = StudentTaskList(emptyList(), emptyList())
+    /** Server-owned policy used to decide whether a new exercise session may start. */
+    val checkInTimeWindow: CheckInTimeWindow = CheckInTimeWindow.unavailable(),
+    /** Null when the student has no invitation-based course join request. */
+    val courseJoinRequest: CourseJoinRequest? = null
 ) {
     companion object {
         fun empty(): StudentWorkspace = StudentWorkspace(
             student = StudentProfile(id = "", name = "", email = "", college = "", className = "", status = "未登录"),
             courses = emptyList(),
-            progress = StudentProgress(id = "", name = "", college = "", className = "", course = 0.0, general = 0.0, rawGeneral = 0.0, exam = 0, attendance = 0, physical = 0, status = "请先登录", source = "empty", organizationCredit = null),
-            tasks = emptyList(),
+            progress = StudentProgress(id = "", name = "", college = "", className = "", course = 0.0, general = 0.0, rawCourse = 0.0, rawGeneral = 0.0, exam = 0, attendance = 0, physical = 0, status = "请先登录", source = "empty", organizationCredit = null),
             records = emptyList(),
-            grades = GradeRow(studentId = "", studentName = "", checkinScore = 0, exam = 0, attendance = 0, physical = 0, total = 0, sourceTrace = "", missingItems = emptyList()),
+            grades = GradeRow(
+                studentId = "",
+                studentName = "",
+                visibleBlocks = emptyList(),
+                totalScore = null,
+                totalDisplay = "未开放",
+                isPassed = null,
+                courseGradeStatus = "rules_not_published",
+                displayConfigVersion = 0,
+                sourceTrace = ""
+            ),
             memberships = emptyList(),
             notices = emptyList(),
             teachers = emptyList(),
             syncOperations = emptyList(),
             exemptions = emptyList(),
-            studentTasks = StudentTaskList(emptyList(), emptyList())
+            checkInTimeWindow = CheckInTimeWindow.unavailable(),
+            courseJoinRequest = null
         )
     }
 }
 
 enum class SyncOperationType(val label: String) {
     SubmitRecord("提交打卡"),
-    SupplementRecord("补交材料"),
     MarkNoticeRead("通知已读"),
     ResetLocalData("重置数据")
 }
@@ -125,12 +176,32 @@ data class Course(
     val academicYear: String = "",
     val term: String = "",
     val semesterStatus: String = "current",
+    /** Course lifecycle state supplied by the server, for example "active" or "closed". */
+    val status: String = "active",
     val enrollmentStatus: String = "enrolled",
-    val isCurrent: Boolean = true
+    val isCurrent: Boolean = true,
+    /** Final result supplied for an archived course; absent until the backend publishes it. */
+    val finalGrade: Int? = null,
+    /** Backend result status for an archived course: "pass", "fail", or absent. */
+    val gradeStatus: String? = null
 ) {
     val displayTitle: String
         get() = "$code / Section $section"
+
+    val isOpenForCheckIn: Boolean
+        get() = status.trim().lowercase() in setOf("active", "open", "enabled")
 }
+
+/**
+ * A student may start only one course enrollment flow in the current semester.
+ *
+ * The server remains authoritative when it receives the join request.  This
+ * client-side policy keeps every UI entry point consistent and prevents a
+ * second request while the first one is pending.
+ */
+fun StudentWorkspace.canStartNewCourseJoin(): Boolean =
+    courses.none { it.isCurrent && it.enrollmentStatus == "enrolled" } &&
+        courseJoinRequest?.status !in setOf(JoinRequestStatus.PENDING, JoinRequestStatus.ACTIVE)
 
 data class StudentProgress(
     val id: String,
@@ -139,6 +210,8 @@ data class StudentProgress(
     val className: String,
     val course: Double,
     val general: Double,
+    /** Course-related check-in hours before organization offsets are applied. */
+    val rawCourse: Double,
     val rawGeneral: Double,
     val exam: Int,
     val attendance: Int,
@@ -148,49 +221,33 @@ data class StudentProgress(
     val organizationCredit: Membership?
 )
 
+/**
+ * Applies a newly accepted exercise check-in to the local progress snapshot.
+ * Organization offsets are managed separately and must not be changed by a
+ * student check-in submission.
+ */
+fun StudentProgress.withRecordedCheckIn(
+    creditType: CreditType,
+    hours: Double
+): StudentProgress {
+    val recordedHours = hours.coerceAtLeast(0.0)
+    return when (creditType) {
+        CreditType.CourseRelated -> copy(
+            course = course + recordedHours,
+            rawCourse = rawCourse + recordedHours
+        )
+        CreditType.General -> copy(
+            general = general + recordedHours,
+            rawGeneral = rawGeneral + recordedHours
+        )
+        CreditType.OrganizationOffset -> this
+    }
+}
+
 enum class CreditType(val label: String) {
     CourseRelated("课程相关"),
     General("其他运动"),
     OrganizationOffset("系统抵扣")
-}
-
-enum class TaskStatus(val label: String) {
-    Draft("草稿"),
-    Active("进行中"),
-    Closed("已关闭")
-}
-
-data class CourseTask(
-    val id: String,
-    val courseId: String,
-    val creditType: CreditType,
-    val title: String,
-    val hours: Double,
-    val deadline: String,
-    val proof: String,
-    val status: TaskStatus,
-    val updatedAt: String
-)
-
-enum class ReviewStatus(val label: String) {
-    Pending("待审核"),
-    Approved("已通过"),
-    Rejected("被驳回"),
-    Supplement("需补材料"),
-    Offset("系统抵扣")
-}
-
-enum class AiReviewStatus(val label: String) {
-    Pending("AI 审核中"),
-    Normal("AI 初审正常"),
-    Abnormal("AI 发现异常"),
-    ManualReview("等待人工复核")
-}
-
-enum class AiRiskLevel(val label: String) {
-    Low("低风险"),
-    Medium("中风险"),
-    High("高风险")
 }
 
 data class CheckInRecord(
@@ -200,21 +257,49 @@ data class CheckInRecord(
     val creditType: CreditType,
     val hours: Double,
     val submittedAt: String,
-    val status: ReviewStatus,
     val proofSummary: String,
     val proofPhotoCount: Int,
     val proofVideoCount: Int,
     val proofFiles: List<ProofAttachment>,
-    val teacherFeedback: String,
+    val teacherPublicFeedback: String?,
+    val teacherInternalNote: String?,
     val note: String,
+    /** Optional student-authored note, separate from the required exercise description. */
+    val remark: String = "",
     val sportType: String? = null,
-    val aiReviewStatus: AiReviewStatus? = null,
-    val aiRiskLevel: AiRiskLevel? = null,
-    val aiRiskCodes: List<String> = emptyList(),
-    val aiReviewMessage: String? = null,
-    val aiConfidence: Double? = null,
-    val aiReviewedAt: String? = null
+    /** ISO-8601 timestamps and active duration captured by the exercise session. */
+    val startTime: String? = null,
+    val endTime: String? = null,
+    val actualDurationSeconds: Long? = null
 )
+
+/** The period in which a student may start an exercise check-in session. */
+data class CheckInTimeWindow(
+    val windowMode: String,
+    val dateRangeStart: String?,
+    val dateRangeEnd: String?,
+    val dailyStartTime: String,
+    val dailyEndTime: String,
+    val excludedDates: List<String>,
+    val semesterDeadline: String?
+) {
+    companion object {
+        /** Blocks new sessions until the server has supplied an authoritative policy. */
+        fun unavailable() = CheckInTimeWindow(
+            windowMode = "unavailable",
+            dateRangeStart = null,
+            dateRangeEnd = null,
+            dailyStartTime = "",
+            dailyEndTime = "",
+            excludedDates = emptyList(),
+            semesterDeadline = null
+        )
+
+        /** @deprecated The app must obtain its policy from the server. */
+        @Deprecated("Use unavailable() until the server policy is loaded")
+        fun default() = unavailable()
+    }
+}
 
 enum class ProofMediaType(val label: String) {
     Image("图片"),
@@ -299,17 +384,6 @@ data class ProofAttachment(
     override fun hashCode(): Int = id.hashCode()
 }
 
-data class CheckInDraft(
-    val id: String,
-    val taskId: String,
-    val hours: Double,
-    val note: String,
-    val proofAttachments: List<ProofAttachment>,
-    val updatedAt: String,
-    val sportType: String? = null,
-    val customSportType: String? = null
-)
-
 data class Membership(
     val id: String,
     val type: String,
@@ -327,16 +401,66 @@ data class Membership(
         get() = if (type == "team") "校队" else "社团"
 }
 
+data class GradeBlock(
+    val id: String,
+    val name: String,
+    val weight: Double,
+    val score: Int?,
+    val scoreDisplay: String,
+    val isVisible: Boolean,
+    val displayOrder: Int,
+    val blockType: String,
+    val description: String?,
+    val subItems: List<GradeSubItem>?
+)
+
+data class GradeSubItem(
+    val name: String,
+    val score: Int?,
+    val scoreDisplay: String
+)
+
+/**
+ * Server-authoritative outcome for the endurance-run grade item.  A duration
+ * alone cannot tell an unrecorded result from an approved exemption or an
+ * absence, so the grade API supplies this value independently.
+ */
+enum class EnduranceRunStatus {
+    Recorded,
+    Exempt,
+    Absent,
+    NotRecorded;
+
+    companion object {
+        fun fromApi(value: String?, timeSeconds: Int?): EnduranceRunStatus {
+            return when (value?.trim()?.lowercase()) {
+                "recorded", "completed", "measured" -> Recorded
+                "exempt", "exempted", "免测" -> Exempt
+                "absent", "missing", "缺考" -> Absent
+                "not_recorded", "unrecorded", "pending", "" -> NotRecorded
+                null -> if ((timeSeconds ?: 0) > 0) Recorded else NotRecorded
+                else -> if ((timeSeconds ?: 0) > 0) Recorded else NotRecorded
+            }
+        }
+    }
+}
+
 data class GradeRow(
     val studentId: String,
     val studentName: String,
-    val checkinScore: Int,
-    val exam: Int,
-    val attendance: Int,
-    val physical: Int,
-    val total: Int,
+    val visibleBlocks: List<GradeBlock>,
+    val totalScore: Int?,
+    val totalDisplay: String,
+    val isPassed: Boolean?,
+    val courseGradeStatus: String,
+    val displayConfigVersion: Int,
     val sourceTrace: String,
-    val missingItems: List<String>
+    /** Measured 800m/1000m endurance-run duration supplied by the teaching system. */
+    val enduranceRunTimeSeconds: Int? = null,
+    /** Distinguishes a measured result from an exemption, absence, or no entry. */
+    val enduranceRunStatus: EnduranceRunStatus = EnduranceRunStatus.NotRecorded,
+    /** Teacher-assigned score for this item; an absence is always displayed as zero. */
+    val enduranceRunScore: Int? = null
 )
 
 enum class NoticeCategory(val label: String) {
@@ -477,34 +601,4 @@ data class ExemptionApplication(
     val proofFiles: List<String>,
     val organization: String? = null
 )
-
 // ── Student Tasks ──────────────────────────────────────────────────
-
-data class StudentTaskList(
-    val pending: List<StudentTaskItem>,
-    val completed: List<StudentTaskItem>
-)
-
-data class StudentTaskItem(
-    val id: String,
-    val courseId: String,
-    val courseCode: String = "",
-    val courseSection: String = "",
-    val courseName: String = "",
-    val title: String,
-    val description: String = "",
-    val creditType: String,
-    val requiredHours: Double = 0.0,
-    val deadline: String,
-    val status: String,
-    val completedAt: String? = null
-) {
-    val isActive: Boolean get() = status == "进行中"
-
-    val creditTypeLabel: String
-        get() = when (creditType) {
-            "课程相关" -> "课程"
-            "其他运动" -> "其他"
-            else -> creditType
-        }
-}

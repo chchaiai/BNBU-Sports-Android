@@ -2,6 +2,12 @@ services:
   mysql:
     image: mysql:8.4
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "7"
+        compress: "true"
     environment:
       MYSQL_DATABASE: bnbu_kuan_week2
       MYSQL_USER: bnbu_app
@@ -21,6 +27,12 @@ services:
   api:
     build: .
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "7"
+        compress: "true"
     depends_on:
       mysql:
         condition: service_healthy

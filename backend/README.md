@@ -19,6 +19,7 @@
 - 图片/视频真实文件签名校验、本地开发存储、腾讯云 COS 生产存储
 - 私有 COS 文件按每次查询重新生成签名 URL
 - 请求 ID、Helmet、CORS 白名单、账号维度登录限流、校园 NAT 友好的全局限流
+- 首次加入课程后的邮箱/手机号验证激活，以及服务端强制的教学功能访问控制
 - 请求体稳定哈希幂等、上传并发阀、统一 JSON 的 403/413/429 错误
 - 带校验和及数据库咨询锁的迁移、受控演示种子、Docker、PM2、Nginx、OpenAPI
 
@@ -49,6 +50,7 @@ npm run dev
 | `CORS_ORIGINS` | 空 | 逗号分隔；生产至少包含一个 HTTPS 来源 |
 | `GLOBAL_RATE_LIMIT_PER_15_MIN` | `60000` | 每 IP 全局额度；为校园共享 NAT 预留空间 |
 | `LOGIN_RATE_LIMIT_PER_15_MIN` | `20` | 每个规范化账号的登录额度，不按校园出口 IP 计数 |
+| `CONTACT_CODE_DELIVERY_WEBHOOK_URL` | 空（仅开发） | 校内通知服务的 HTTPS 地址，接收验证码并发送邮件或短信；生产环境必填 |
 | `STORAGE_DRIVER` | `local` | 生产环境强制为 `cos` |
 | `UPLOAD_MAX_REQUEST_BYTES` | `120000000` | 单次 multipart 总请求上限 |
 | `UPLOAD_MAX_CONCURRENT` | `2` | 单进程同时进入内存上传流程的请求数 |
@@ -56,7 +58,7 @@ npm run dev
 | `UNCLAIMED_UPLOAD_CLEANUP_BATCH` | `100` | 单次清理最多处理的对象数，范围 2–500，保证新对象与重试队列均有处理名额 |
 | `COS_SIGNED_URL_TTL_SECONDS` | `900` | 私有对象临时 URL 有效期 |
 
-完整示例见 `.env.example`。正式环境还必须配置 `COS_SECRET_ID`、`COS_SECRET_KEY`、`COS_BUCKET`、`COS_REGION`。
+完整示例见 `.env.example`。正式环境还必须配置 `COS_SECRET_ID`、`COS_SECRET_KEY`、`COS_BUCKET`、`COS_REGION` 和 `CONTACT_CODE_DELIVERY_WEBHOOK_URL`。通知服务接收 `channel`、`to`、`code`、`expiresInSeconds` 四个字段；验证码仅在开发环境输出到本地日志，生产环境绝不记录。
 
 ## 数据库迁移安全
 
@@ -126,6 +128,7 @@ COS_SECRET_ID=...
 COS_SECRET_KEY=...
 COS_BUCKET=...
 COS_REGION=ap-guangzhou
+CONTACT_CODE_DELIVERY_WEBHOOK_URL=https://notify.example.edu.cn/contact-codes
 ```
 
 `MYSQL_PASSWORD` 是 MySQL 容器初始化所需的原始密码；`MYSQL_PASSWORD_URLENCODED` 必须是同一密码在 URL 中的百分号编码形式。例如原始密码中的 `#` 应写成 `%23`。两者必须一致，根密码应另设。
@@ -135,10 +138,24 @@ COS_REGION=ap-guangzhou
 ```text
 docker compose build
 docker compose run --rm api node dist/src/db/migrate.js
-docker compose up -d
+docker compose up -d --force-recreate
 ```
 
 API 只映射到宿主机 `127.0.0.1:3005`，由 Nginx 提供公网 TLS。镜像已预建并授权 `/app/uploads`，避免非 root 的 `node` 用户挂载卷后无写权限。
+
+## 日志轮转
+
+Docker Compose 的 `api` 和 `mysql` 均使用 `json-file` 日志驱动，每个容器最多保留 7 个、每个最大 10 MB 的日志文件，并压缩已轮转的文件。`docker compose up -d --force-recreate` 会创建使用该策略的新容器；Docker 不会把新的日志配置补应用到已存在的容器。
+
+使用 PM2 部署时，先执行以下命令（需要已全局安装 `pm2`）：
+
+```text
+npm run pm2:configure-logrotate
+pm2 startOrReload ecosystem.config.cjs --update-env
+pm2 save
+```
+
+该命令会在尚未安装时安装 `pm2-logrotate`，然后将 PM2 的 stdout、stderr 及模块日志设置为：单文件 10 MB、保留 7 个已轮转文件、gzip 压缩、每 30 秒检查一次并在每天 UTC 00:00 强制轮转。短时高峰期间，文件可能在下一次检查前略超过 10 MB。
 
 ## 生产部署检查
 
@@ -146,7 +163,7 @@ API 只映射到宿主机 `127.0.0.1:3005`，由 Nginx 提供公网 TLS。镜像
 2. 使用独立、最小权限 MySQL 用户；备份后执行迁移。
 3. COS 桶保持私有，密钥只放在服务端环境；不要记录 Authorization、Cookie 或 COS 密钥。
 4. 执行 `npm ci && npm run check && npm audit --omit=dev`。
-5. 使用 Docker Compose 或 `pm2 start ecosystem.config.cjs && pm2 save` 启动。
+5. 使用 Docker Compose 启动，或依次执行 `npm run pm2:configure-logrotate`、`pm2 startOrReload ecosystem.config.cjs --update-env` 和 `pm2 save`。
 6. 关闭公网 3005/3334，只开放 80/443；Android Release 地址使用 `https://正式域名/api`。
 7. 用真实临时 MySQL 和测试 COS 桶完成登录、上传、提交、查询、幂等重试及补偿删除验收。
 

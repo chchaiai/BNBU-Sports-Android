@@ -4,9 +4,9 @@ import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
 import edu.bnbu.student.mvp.core.model.Exemption
 import edu.bnbu.student.mvp.core.model.ExemptionApplication
+import edu.bnbu.student.mvp.core.model.AppLanguage
 import edu.bnbu.student.mvp.core.network.StudentApiClient
 import edu.bnbu.student.mvp.core.network.SubmitSportRecordRequest
-import edu.bnbu.student.mvp.core.network.SupplementSportRecordRequest
 import edu.bnbu.student.mvp.core.network.UserDto
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
@@ -48,7 +48,6 @@ class ApiStudentRepositoryTest {
                 "{\"id\":\"record-1\",\"status\":\"待审核\",\"submittedAt\":\"2026-07-14T00:00:00Z\"}"
             )
         )
-        server.enqueue(MockResponse().setBody("{\"id\":\"record-1\",\"status\":\"待审核\"}"))
         server.enqueue(MockResponse().setBody("{\"id\":\"notice-1\",\"read\":true}"))
 
         val networkThreads = CopyOnWriteArrayList<String>()
@@ -66,38 +65,36 @@ class ApiStudentRepositoryTest {
             SubmitSportRecordRequest(
                 creditType = "其他运动",
                 courseId = null,
-                taskId = null,
                 hours = 1.0,
                 description = "run",
-                proofFiles = emptyList()
-            )
-        )
-        val supplement = repository.supplementRecord(
-            "record-1",
-            SupplementSportRecordRequest(
-                hours = 1.0,
-                description = "more proof",
                 proofFiles = emptyList()
             )
         )
         val markRead = repository.markNotificationRead("notice-1")
 
         assertTrue(submit.isSuccess)
-        assertTrue(supplement.isSuccess)
         assertTrue(markRead.isSuccess)
-        assertEquals(3, networkThreads.size)
+        assertEquals(2, networkThreads.size)
         networkThreads.forEach { assertNotEquals(callerThread, it) }
-        assertEquals("POST", server.takeRequest().method)
         assertEquals("POST", server.takeRequest().method)
         assertEquals("PUT", server.takeRequest().method)
     }
 
     @Test
     fun workspaceUsesRemoteProfileAndReportsGradesFailure() = runBlocking {
-        server.enqueue(MockResponse().setBody("{}"))
+        server.enqueue(
+            MockResponse().setBody(
+                """{"rule":{"total":36.0,"courseRequired":14.0,"generalRequired":22.0,"dailyLimit":3.0}}"""
+            )
+        )
         server.enqueue(MockResponse().setBody("[]"))
         server.enqueue(MockResponse().setBody("[]"))
         server.enqueue(MockResponse().setBody("[]"))
+        server.enqueue(
+            MockResponse().setBody(
+                """{"windowMode":"semester_wide","dailyStartTime":"06:00","dailyEndTime":"22:00","excludedDates":[]}"""
+            )
+        )
         server.enqueue(
             MockResponse().setBody(
                 """
@@ -113,7 +110,6 @@ class ApiStudentRepositoryTest {
                 """.trimIndent()
             )
         )
-        server.enqueue(MockResponse().setBody("{\"pending\":[],\"completed\":[]}"))
         server.enqueue(MockResponse().setBody("{\"courses\":[],\"scope\":\"all\"}"))
         server.enqueue(MockResponse().setResponseCode(503).setBody("{\"message\":\"grades unavailable\"}"))
 
@@ -132,6 +128,10 @@ class ApiStudentRepositoryTest {
         assertEquals("remote@bnbu.edu.cn", workspace.student.email)
         assertEquals("Remote College", workspace.student.college)
         assertEquals("Remote Class", workspace.student.className)
+        assertEquals(36.0, workspace.hourRule.total, 0.0)
+        assertEquals(14.0, workspace.hourRule.courseRequired, 0.0)
+        assertEquals(22.0, workspace.hourRule.generalRequired, 0.0)
+        assertEquals(3.0, workspace.hourRule.dailyLimit, 0.0)
         assertTrue(workspace.grades.sourceTrace.contains("HTTP 503"))
     }
 
@@ -204,6 +204,19 @@ class ApiStudentRepositoryTest {
         val body = request.body.readUtf8()
         assertTrue(body.contains("\"reason\":\"new supporting document\""))
         assertFalse(body.contains("\"type\""))
+    }
+
+    @Test
+    fun languagePreferenceUsesDedicatedServerContract() = runBlocking {
+        server.enqueue(MockResponse().setBody("{\"language\":\"en\"}"))
+
+        val response = repository().updateLanguagePreference(AppLanguage.English)
+
+        val request = server.takeRequest()
+        assertEquals("PUT", request.method)
+        assertEquals("/api/v1/student/preferences/language", request.path)
+        assertTrue(request.body.readUtf8().contains("\"language\":\"en\""))
+        assertEquals("en", response.language)
     }
 
     private fun imageAttachment(file: File): ProofAttachment {

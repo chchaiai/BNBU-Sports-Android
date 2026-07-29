@@ -4,7 +4,6 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
@@ -23,21 +22,26 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.PlayCircle
-import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,98 +50,287 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.ImageLoader
 import coil3.compose.SubcomposeAsyncImage
 import coil3.request.ImageRequest
 import coil3.video.VideoFrameDecoder
-import edu.bnbu.student.mvp.core.designsystem.ActionButton
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
-import edu.bnbu.student.mvp.core.designsystem.StatusBadge
-import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.designsystem.ValidationPanel
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
+import edu.bnbu.student.mvp.core.designsystem.interfaceText
+import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.model.CheckInRecord
+import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
-import edu.bnbu.student.mvp.core.model.ReviewStatus
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.state.StudentAppState
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 
 @Composable
-internal fun RecordListIntro() {
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        SectionTitle(eyebrow = "Records", title = "打卡记录")
+internal fun RecordListIntro(records: List<CheckInRecord>) {
+    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            SectionTitle(
+                eyebrow = interfaceText("记录", "Records"),
+                title = interfaceText("打卡记录", "Check-in records")
+            )
+            Text(
+                text = interfaceText("查看每次运动的学时与记录详情", "View the hours and details of every exercise."),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+        if (records.isNotEmpty()) {
+            RecordOverview(
+                totalCount = records.size,
+                recordedHours = records.sumOf { it.hours }
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecordOverview(
+    totalCount: Int,
+    recordedHours: Double
+) {
+    val cs = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = cs.surface,
+        shape = MaterialTheme.shapes.large
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Text(
+                    text = interfaceText("打卡时长", "Recorded hours"),
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Text(
+                    text = recordedHours.hourText(),
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = interfaceText("共 $totalCount 条记录", "$totalCount records"),
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = interfaceText("运动记录汇总", "Exercise record summary"),
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun RecordListSectionTitle(count: Int) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = interfaceText("全部记录", "All records"),
+            modifier = Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.titleMedium
+        )
+        Text(
+            text = interfaceText("$count 条", "$count records"),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelMedium
+        )
     }
 }
 
 @Composable
 internal fun RecordCard(
     record: CheckInRecord,
-    imageLoader: ImageLoader,
+    courseDisplayName: String,
     onOpenDetail: () -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
-    SwissPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .bnbuClickable(
+                onClickLabel = interfaceText("查看${record.sportDisplayName()}打卡详情", "View ${record.sportDisplayName()} check-in details"),
+                onClick = onOpenDetail
+            ),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = cs.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 17.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top
+            ) {
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Text(
-                        text = record.taskTitle,
+                        text = record.sportDisplayName(),
                         color = cs.onSurface,
-                        style = MaterialTheme.typography.titleMedium
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = record.submittedAt,
+                        text = record.submittedDate(),
                         color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelMedium
+                        style = MaterialTheme.typography.bodySmall
                     )
                 }
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusBadge(text = record.creditType.label)
-                Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.height(14.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
                     text = record.hours.hourText(),
                     color = cs.onSurface,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Medium
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = interfaceText("打卡时长", "Recorded hours"),
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = record.creditType.recordDisplayLabel(),
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium
                 )
             }
-
-            record.sportType?.takeIf { it.isNotBlank() }?.let { sportType ->
-                Text(
-                    text = "运动项目：${sportType.displaySportType()}",
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-
-            Text(
-                text = "打卡照片 / 视频",
-                color = cs.onSurface,
-                style = MaterialTheme.typography.titleMedium
-            )
-            RecordMediaGrid(
-                proofs = record.proofFiles,
-                imageLoader = imageLoader,
-                onClick = onOpenDetail
-            )
-            if (record.note.isNotBlank()) {
-                Text(
-                    text = "备注：${record.note}",
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium
+            Spacer(Modifier.height(14.dp))
+            HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.55f))
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    CompactMetadata(
+                        icon = Icons.Filled.School,
+                        text = courseDisplayName
+                    )
+                    CompactMetadata(
+                        icon = Icons.Filled.AttachFile,
+                        text = record.proofSummaryText()
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }
     }
+}
+
+@Composable
+private fun CompactMetadata(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(17.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = text,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+private fun CheckInRecord.submittedDate(): String =
+    submittedAt.substringBefore(' ').ifBlank { interfaceText("未提供", "Not available") }
+
+private fun CheckInRecord.courseDisplayName(appState: StudentAppState): String {
+    val matchedCourse = courseId?.let { id ->
+        appState.workspace.courses.firstOrNull { it.id == id }
+    }
+    return matchedCourse?.name?.takeIf { it.isNotBlank() } ?: interfaceText("自主运动", "Independent exercise")
+}
+
+private fun CheckInRecord.sportDisplayName(): String =
+    sportType?.takeIf { it.isNotBlank() }?.recordSportDisplayName()
+        ?: taskTitle.localizedCheckInTaskTitle()
+
+private fun String.localizedCheckInTaskTitle(): String = when (trim()) {
+    "", "运动打卡", "Exercise check-in" -> interfaceText("运动打卡", "Exercise check-in")
+    else -> this
+}
+
+private fun String.recordSportDisplayName(): String = when (lowercase()) {
+    "running", "跑步" -> interfaceText("跑步", "Running")
+    "basketball", "篮球" -> interfaceText("篮球", "Basketball")
+    "football", "足球" -> interfaceText("足球", "Football")
+    "badminton", "羽毛球" -> interfaceText("羽毛球", "Badminton")
+    "table_tennis", "乒乓球" -> interfaceText("乒乓球", "Table tennis")
+    "swimming", "游泳" -> interfaceText("游泳", "Swimming")
+    "fitness", "健身" -> interfaceText("健身", "Fitness")
+    "cycling", "骑行" -> interfaceText("骑行", "Cycling")
+    "yoga", "瑜伽" -> interfaceText("瑜伽", "Yoga")
+    else -> this
+}
+
+private fun CheckInRecord.proofSummaryText(): String {
+    val images = proofPhotoCount
+    val videos = proofVideoCount
+    if (images == 0 && videos == 0) return proofSummary
+    return buildList {
+        if (images > 0) add(interfaceText("$images 张图片", "$images ${if (images == 1) "photo" else "photos"}"))
+        if (videos > 0) add(interfaceText("$videos 个短视频", "$videos ${if (videos == 1) "video" else "videos"}"))
+    }.joinToString(interfaceText("，", ", "))
 }
 
 @Composable
@@ -150,7 +343,7 @@ private fun RecordMediaGrid(
         proofs.isEmpty() -> {
             MediaPlaceholder(
                 mediaType = ProofMediaType.Image,
-                message = "暂无打卡照片或视频",
+                message = interfaceText("暂无打卡照片或视频", "No check-in photos or videos"),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(96.dp)
@@ -264,7 +457,7 @@ private fun ProofThumbnail(
             SubcomposeAsyncImage(
                 model = imageRequest,
                 imageLoader = imageLoader,
-                contentDescription = "${proof.type.label}：${proof.fileName}",
+                contentDescription = "${proof.type.recordDisplayLabel()}: ${proof.fileName}",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
                 loading = {
@@ -275,7 +468,7 @@ private fun ProofThumbnail(
                 error = {
                     MediaPlaceholder(
                         mediaType = proof.type,
-                        message = "暂时无法加载",
+                        message = interfaceText("暂时无法加载", "Unable to load"),
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -283,7 +476,7 @@ private fun ProofThumbnail(
         } else {
             MediaPlaceholder(
                 mediaType = proof.type,
-                message = proof.fileName.ifBlank { "媒体文件" },
+                message = proof.fileName.ifBlank { interfaceText("媒体文件", "Media file") },
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -297,13 +490,13 @@ private fun ProofThumbnail(
             ) {
                 Icon(
                     imageVector = Icons.Filled.PlayCircle,
-                    contentDescription = "视频",
+                    contentDescription = interfaceText("视频", "Video"),
                     tint = Color.White,
                     modifier = Modifier.size(30.dp)
                 )
             }
             Text(
-                text = "视频",
+                text = interfaceText("视频", "Video"),
                 color = Color.White,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier
@@ -356,81 +549,128 @@ internal fun CheckInRecordDetail(
     val context = LocalContext.current
     val cs = MaterialTheme.colorScheme
     var openError by remember { mutableStateOf<String?>(null) }
-    var supplementHours by remember(record.id) {
-        mutableDoubleStateOf(if (record.hours >= 2.0) 2.0 else 1.0)
-    }
-    var supplementNote by remember(record.id) { mutableStateOf("") }
-    var supplementProofs by remember(record.id) {
-        mutableStateOf<List<ProofAttachment>>(emptyList())
-    }
-    var isSupplementSubmitting by remember(record.id) { mutableStateOf(false) }
-    val latestSupplementProofs by rememberUpdatedState(supplementProofs)
-    val canSupplement = record.status == ReviewStatus.Supplement ||
-        record.status == ReviewStatus.Rejected
-
-    DisposableEffect(record.id) {
-        onDispose {
-            latestSupplementProofs.forEach {
-                it.deleteOwnedCameraFile(context, "proof_")
-                it.releasePersistableReadPermissionIfPossible(context)
-            }
-        }
-    }
-
-    BackHandler {
-        if (isSupplementSubmitting) {
-            openError = "补充材料正在提交，请等待完成后再返回"
-        } else {
-            onBack()
-        }
-    }
-
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp)
+                    .height(52.dp)
                     .bnbuClickable(
-                        enabled = !isSupplementSubmitting,
-                        onClickLabel = "返回打卡记录",
+                        onClickLabel = interfaceText("返回打卡记录", "Back to check-in records"),
                         onClick = onBack
                     ),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                    contentDescription = "返回打卡记录",
-                    tint = cs.onSurface
+                    contentDescription = interfaceText("返回打卡记录", "Back to check-in records"),
+                    tint = cs.primary,
+                    modifier = Modifier.size(28.dp)
                 )
-                Spacer(Modifier.width(6.dp))
-                Text("返回打卡记录", color = cs.onSurface, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = interfaceText("打卡详情", "Check-in details"),
+                    color = cs.onSurface,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
-        item { SectionTitle(eyebrow = "Check-In Detail", title = "打卡记录详情") }
         item {
-            SwissPanel {
-                Text(record.taskTitle, color = cs.onSurface, style = MaterialTheme.typography.titleLarge)
-                Spacer(Modifier.height(10.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    StatusBadge(text = record.creditType.label)
-                    Spacer(Modifier.width(8.dp))
-                    StatusBadge(text = record.status.label, filled = canSupplement)
-                    Spacer(Modifier.width(8.dp))
-                    Text(record.hours.hourText(), color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
+            RecordResultCard(record = record)
+        }
+        item {
+            DetailSectionHeader(title = interfaceText("记录信息", "Record information"))
+        }
+        item {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = cs.surface,
+                shape = MaterialTheme.shapes.large
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp)) {
+                    DetailInfoRow(
+                        icon = Icons.Filled.Timer,
+                        label = interfaceText("提交时间", "Submitted"),
+                        value = record.submittedAt
+                    )
+                    HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                    DetailInfoRow(
+                        icon = Icons.Filled.Timer,
+                        label = interfaceText("开始时间", "Started"),
+                        value = record.startTime.recordDetailTimeText()
+                    )
+                    HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                    DetailInfoRow(
+                        icon = Icons.Filled.Timer,
+                        label = interfaceText("结束时间", "Ended"),
+                        value = record.endTime.recordDetailTimeText()
+                    )
+                    HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                    DetailInfoRow(
+                        icon = Icons.Filled.Timer,
+                        label = interfaceText("实际运动时长", "Active duration"),
+                        value = record.actualDurationDetailText()
+                    )
+                    HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                    DetailInfoRow(
+                        icon = Icons.Filled.School,
+                        label = interfaceText("关联课程", "Course"),
+                        value = record.courseDisplayName(appState)
+                    )
+                    HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                    DetailInfoRow(
+                        icon = Icons.Filled.Info,
+                        label = interfaceText("打卡类别", "Check-in category"),
+                        value = record.creditType.recordDisplayLabel()
+                    )
+                    HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                    DetailInfoRow(
+                        icon = Icons.Filled.AttachFile,
+                        label = interfaceText("凭证", "Proof"),
+                        value = record.proofSummaryText()
+                    )
                 }
-                Spacer(Modifier.height(10.dp))
-                Text("提交时间：${record.submittedAt}", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
-                record.sportType?.takeIf { it.isNotBlank() }?.let {
-                    Spacer(Modifier.height(8.dp))
-                    Text("运动项目：${it.displaySportType()}", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        if (record.note.isNotBlank()) {
+            item {
+                DetailSectionHeader(title = interfaceText("运动说明", "Exercise notes"))
+            }
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = cs.surface,
+                    shape = MaterialTheme.shapes.large
+                ) {
+                    Text(
+                        text = record.note,
+                        modifier = Modifier.padding(18.dp),
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
-                if (record.note.isNotBlank()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text("备注：${record.note}", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        if (record.remark.isNotBlank()) {
+            item {
+                DetailSectionHeader(title = interfaceText("补充备注", "Additional note"))
+            }
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = cs.surface,
+                    shape = MaterialTheme.shapes.large
+                ) {
+                    Text(
+                        text = record.remark,
+                        modifier = Modifier.padding(18.dp),
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
         }
@@ -438,136 +678,239 @@ internal fun CheckInRecordDetail(
             item { ValidationPanel(message = message) }
         }
         item {
-            SectionTitle(
-                eyebrow = "Media",
-                title = "打卡照片 / 视频 (${record.proofFiles.size})"
+            DetailSectionHeader(
+                title = interfaceText("照片与视频", "Photos & videos"),
+                trailing = interfaceText("${record.proofFiles.size} 个", "${record.proofFiles.size} items")
             )
         }
         if (record.proofFiles.isEmpty()) {
             item {
-                EmptyPlaceholder(title = "暂无照片或视频", message = "这条记录没有可展示的媒体文件。")
+                EmptyPlaceholder(
+                    title = interfaceText("暂无照片或视频", "No photos or videos"),
+                    message = interfaceText("这条记录没有可展示的媒体文件。", "This record has no media files to display.")
+                )
             }
         } else {
             items(record.proofFiles, key = { it.id }) { proof ->
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ProofThumbnail(
-                        proof = proof,
-                        imageLoader = imageLoader,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
-                        onClick = {
-                            openError = context.openProofInSystemApp(proof)
-                        }
-                    )
-                    Text(
-                        text = buildList {
-                            add(proof.type.label)
-                            add(proof.fileName)
-                            proof.displayDuration?.let { add(it) }
-                        }.joinToString(" · "),
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                }
-            }
-        }
-        if (canSupplement) {
-            item {
-                SectionTitle(eyebrow = "Supplement", title = "补交打卡材料")
-            }
-            item {
-                SwissPanel {
-                    record.teacherFeedback.takeIf { it.isNotBlank() }?.let { feedback ->
-                        Text(
-                            text = "审核反馈：$feedback",
-                            color = cs.primary,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(Modifier.height(16.dp))
+                ProofCard(
+                    proof = proof,
+                    imageLoader = imageLoader,
+                    onClick = {
+                        openError = context.openProofInSystemApp(proof)
                     }
-                    Text(
-                        text = "补交学时",
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    HoursControl(
-                        value = supplementHours,
-                        maxHours = minOf(record.hours, appState.hourRule.dailyLimit),
-                        enabled = !isSupplementSubmitting,
-                        onChange = {
-                            if (!isSupplementSubmitting) supplementHours = it
-                        }
-                    )
-                    Spacer(Modifier.height(18.dp))
-                    Text(
-                        text = "补充说明",
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    NoteEditor(
-                        value = supplementNote,
-                        placeholder = "请说明本次新增材料以及对审核反馈的补充。",
-                        enabled = !isSupplementSubmitting,
-                        onValueChange = {
-                            if (!isSupplementSubmitting) {
-                                supplementNote = it.take(MaxCheckInNoteLength)
-                            }
-                        }
-                    )
-                    Spacer(Modifier.height(18.dp))
-                    ProofAttachmentPanel(
-                        proofAttachments = supplementProofs,
-                        existingProofs = record.proofFiles,
-                        totalProofCount = record.proofFiles.size + supplementProofs.size,
-                        enabled = !isSupplementSubmitting,
-                        onProofAttachmentsChanged = {
-                            if (!isSupplementSubmitting) supplementProofs = it
-                        }
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    ActionButton(
-                        title = if (isSupplementSubmitting) "提交中..." else "提交补充材料",
-                        icon = Icons.Filled.UploadFile,
-                        filled = true,
-                        enabled = !isSupplementSubmitting && supplementProofs.isNotEmpty(),
-                        onClick = {
-                            if (isSupplementSubmitting) return@ActionButton
-                            val proofSnapshot = supplementProofs.toList()
-                            if (proofSnapshot.isEmpty()) {
-                                openError = "请至少添加 1 个新的图片或视频凭证"
-                                return@ActionButton
-                            }
-                            isSupplementSubmitting = true
-                            openError = null
-                            appState.submitSupplement(
-                                record = record,
-                                hours = supplementHours,
-                                note = supplementNote.trim(),
-                                proofAttachments = proofSnapshot,
-                                onResult = { result ->
-                                    result.fold(
-                                        onSuccess = {
-                                            proofSnapshot.forEach {
-                                                it.deleteOwnedCameraFile(context, "proof_")
-                                                it.releasePersistableReadPermissionIfPossible(context)
-                                            }
-                                            supplementProofs = emptyList()
-                                            supplementNote = ""
-                                        },
-                                        onFailure = {
-                                            openError = it.message ?: "补充材料提交失败，请重试"
-                                        }
-                                    )
-                                    isSupplementSubmitting = false
-                                }
-                            )
-                        }
-                    )
-                }
+                )
             }
         }
         item { Spacer(Modifier.height(28.dp)) }
+    }
+}
+
+@Composable
+private fun DetailInfoRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    value: String
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 9.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = cs.onSurfaceVariant,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = label,
+            modifier = Modifier.width(68.dp),
+            color = cs.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Text(
+            text = value,
+            modifier = Modifier.weight(1f),
+            color = cs.onSurface,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+private fun DetailSectionHeader(title: String, trailing: String? = null) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            modifier = Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        trailing?.let {
+            Text(
+                text = it,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecordResultCard(record: CheckInRecord) {
+    val cs = MaterialTheme.colorScheme
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = cs.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = record.submittedDate(),
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Spacer(Modifier.height(18.dp))
+            Text(
+                text = record.sportDisplayName(),
+                color = cs.onSurface,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = record.taskTitle.localizedCheckInTaskTitle(),
+                color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(Modifier.height(20.dp))
+            HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.55f))
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = record.hours.hourText(),
+                color = cs.onSurface,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = interfaceText("打卡时长", "Recorded hours"),
+                color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium
+            )
+        }
+    }
+}
+
+private fun String?.recordDetailTimeText(): String {
+    val value = this?.takeIf { it.isNotBlank() } ?: return interfaceText("未提供", "Not available")
+    return runCatching {
+        Instant.parse(value)
+            .atZone(ZoneId.systemDefault())
+            .format(
+                DateTimeFormatter
+                    .ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
+                    .withLocale(AppLanguagePreferences.currentLocale)
+            )
+    }.getOrDefault(value)
+}
+
+private fun CheckInRecord.actualDurationDetailText(): String {
+    val totalSeconds = actualDurationSeconds ?: return interfaceText("未提供", "Not available")
+    val hours = totalSeconds / 3_600
+    val minutes = (totalSeconds % 3_600) / 60
+    val seconds = totalSeconds % 60
+    return buildString {
+        if (hours > 0) append(interfaceText("${hours}小时", "${hours}h"))
+        if (minutes > 0 || (hours == 0L && seconds == 0L)) append(interfaceText("${minutes}分钟", "${minutes}m"))
+        if (seconds > 0) append(interfaceText("${seconds}秒", "${seconds}s"))
+    }
+}
+
+@Composable
+private fun ProofCard(
+    proof: ProofAttachment,
+    imageLoader: ImageLoader,
+    onClick: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .bnbuClickable(
+                onClickLabel = interfaceText(
+                    "打开${proof.type.recordDisplayLabel()}${proof.fileName}",
+                    "Open ${proof.type.recordDisplayLabel()} ${proof.fileName}"
+                ),
+                onClick = onClick
+            ),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = cs.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        ProofThumbnail(
+            proof = proof,
+            imageLoader = imageLoader,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f),
+            onClick = onClick
+        )
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (proof.type == ProofMediaType.Video) {
+                    Icons.Filled.Videocam
+                } else {
+                    Icons.Filled.Photo
+                },
+                contentDescription = null,
+                tint = cs.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = proof.fileName,
+                modifier = Modifier.weight(1f),
+                color = cs.onSurface,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            proof.displayDuration?.let {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = it,
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = cs.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
     }
 }
 
@@ -580,17 +923,36 @@ private fun String.isDisplayableMediaSource(): Boolean {
 }
 
 private fun Context.openProofInSystemApp(proof: ProofAttachment): String? {
-    if (!proof.source.isDisplayableMediaSource()) return "该媒体文件没有可用的预览地址。"
+    if (!proof.source.isDisplayableMediaSource()) {
+        return interfaceText("该媒体文件没有可用的预览地址。", "This media file has no usable preview address.")
+    }
     val mimeType = if (proof.type == ProofMediaType.Video) "video/*" else "image/*"
     val intent = Intent(Intent.ACTION_VIEW)
         .setDataAndType(Uri.parse(proof.source), mimeType)
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     return try {
-        startActivity(Intent.createChooser(intent, "打开${proof.type.label}"))
+        startActivity(Intent.createChooser(intent, interfaceText("打开${proof.type.recordDisplayLabel()}", "Open ${proof.type.recordDisplayLabel()}")))
         null
     } catch (_: ActivityNotFoundException) {
-        "设备上没有可以打开该${proof.type.label}的应用。"
+        interfaceText(
+            "设备上没有可以打开该${proof.type.recordDisplayLabel()}的应用。",
+            "No app on this device can open this ${proof.type.recordDisplayLabel()}."
+        )
     } catch (_: Exception) {
-        "暂时无法打开该${proof.type.label}，请稍后重试。"
+        interfaceText(
+            "暂时无法打开该${proof.type.recordDisplayLabel()}，请稍后重试。",
+            "Unable to open this ${proof.type.recordDisplayLabel()} right now. Please try again later."
+        )
     }
+}
+
+private fun CreditType.recordDisplayLabel(): String = when (this) {
+    CreditType.CourseRelated -> interfaceText("课程相关", "Course-related")
+    CreditType.General -> interfaceText("其他运动", "Other exercise")
+    CreditType.OrganizationOffset -> interfaceText("系统抵扣", "System offset")
+}
+
+private fun ProofMediaType.recordDisplayLabel(): String = when (this) {
+    ProofMediaType.Image -> interfaceText("图片", "Image")
+    ProofMediaType.Video -> interfaceText("视频", "Video")
 }

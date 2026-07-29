@@ -24,12 +24,14 @@ tags:
     description: Physical-test and check-in exemption workflows.
   - name: Upload
     description: Proof file upload and registration.
+  - name: Feedback
+    description: Student problem reports and follow-up tickets.
 paths:
   /health:
     get:
       tags: [Health]
       security: []
-      summary: Check service dependencies
+      summary: Check service dependencies without consuming rate-limit quota
       operationId: health
       responses:
         "200":
@@ -38,7 +40,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Health" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
-        "429": { $ref: "#/components/responses/RateLimited" }
   /auth/login:
     post:
       tags: [Auth]
@@ -77,7 +78,6 @@ paths:
       summary: List sport records
       operationId: listSportRecords
       parameters:
-        - { in: query, name: status, schema: { type: string } }
         - { in: query, name: courseId, schema: { type: string } }
         - { $ref: "#/components/parameters/PageLimit" }
         - { $ref: "#/components/parameters/PageOffset" }
@@ -123,27 +123,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SportRecord" }
         "404": { $ref: "#/components/responses/NotFound" }
-  /sport/records/{id}/supplements:
-    parameters:
-      - { $ref: "#/components/parameters/ResourceId" }
-      - { $ref: "#/components/parameters/IdempotencyKey" }
-    post:
-      tags: [Sport]
-      summary: Supplement a sport record
-      operationId: supplementSportRecord
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/SupplementSportRecord" }
-      responses:
-        "201":
-          description: Supplement accepted
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/SupplementResult" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
   /sport/identity:
     get:
       tags: [Sport]
@@ -191,6 +170,65 @@ paths:
                   id: { type: string }
                   read: { type: boolean, const: true }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/student/push-devices:
+    post:
+      tags: [Notifications]
+      summary: Register the current Android device for generic FCM alerts
+      operationId: registerPushDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PushDeviceRegistration" }
+      responses:
+        "204": { description: Device token registered }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    delete:
+      tags: [Notifications]
+      summary: Remove the current Android device from FCM delivery
+      operationId: unregisterPushDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PushDeviceRegistration" }
+      responses:
+        "204": { description: Device token removed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /v1/student/feedback:
+    get:
+      tags: [Feedback]
+      summary: List the current student's problem-feedback tickets
+      operationId: listFeedbackTickets
+      responses:
+        "200":
+          description: Tickets submitted by the authenticated student
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeedbackTicketList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Feedback]
+      summary: Submit a problem report
+      operationId: createFeedbackTicket
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateFeedbackTicket" }
+      responses:
+        "201":
+          description: Problem report accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeedbackTicket" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
   /student/profile:
     get:
       tags: [Student]
@@ -224,6 +262,88 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/StudentProfile" }
         "422": { $ref: "#/components/responses/ValidationError" }
+  /v1/student/contacts/email/send-code:
+    post:
+      tags: [Student]
+      summary: Send an email contact-verification code
+      operationId: sendEmailContactCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmailContactRequest" }
+      responses:
+        "204": { description: Code accepted for delivery }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /v1/student/contacts/email/verify:
+    post:
+      tags: [Student]
+      summary: Verify and bind an email contact
+      operationId: verifyEmailContactCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VerifyEmailContactRequest" }
+      responses:
+        "200":
+          description: Updated profile; activation may now be complete
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StudentProfile" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /v1/student/contacts/phone/send-code:
+    post:
+      tags: [Student]
+      summary: Send a mobile contact-verification code
+      operationId: sendPhoneContactCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PhoneContactRequest" }
+      responses:
+        "204": { description: Code accepted for delivery }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /v1/student/contacts/phone/verify:
+    post:
+      tags: [Student]
+      summary: Verify and bind a mobile contact
+      operationId: verifyPhoneContactCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VerifyPhoneContactRequest" }
+      responses:
+        "200":
+          description: Updated profile; activation may now be complete
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StudentProfile" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /v1/student/preferences/language:
+    put:
+      tags: [Student]
+      summary: Store the language used for server-originated communication
+      operationId: updateStudentLanguagePreference
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LanguagePreference" }
+      responses:
+        "200":
+          description: Stored language preference
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LanguagePreference" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
   /student/courses:
     get:
       tags: [Student]
@@ -240,6 +360,18 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CourseList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /student/checkin-time-window:
+    get:
+      tags: [Student]
+      summary: Get the server-authoritative check-in date and daily time policy
+      operationId: getCheckInTimeWindow
+      responses:
+        "200":
+          description: Check-in policy for the current semester; unavailable when not configured
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckInTimeWindow" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /student/tasks:
     get:
@@ -417,6 +549,67 @@ paths:
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "415": { $ref: "#/components/responses/ValidationError" }
         "429": { $ref: "#/components/responses/RateLimited" }
+  /common/help-articles:
+    get:
+      tags: [Student]
+      summary: List published help articles
+      operationId: listPublishedHelpArticles
+      responses:
+        "200":
+          description: Administrator-published help content
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/HelpArticle" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/help-articles:
+    get:
+      tags: [Student]
+      summary: List all help articles for administration
+      operationId: listHelpArticles
+      responses:
+        "200":
+          description: Complete help content lifecycle list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AdminHelpArticle" }
+    post:
+      tags: [Student]
+      summary: Create a help article
+      operationId: createHelpArticle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HelpArticleInput" }
+      responses:
+        "201":
+          description: Article created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminHelpArticle" }
+  /admin/help-articles/{id}:
+    put:
+      tags: [Student]
+      summary: Update, publish, or take a help article offline
+      operationId: updateHelpArticle
+      parameters:
+        - { $ref: "#/components/parameters/ResourceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HelpArticleInput" }
+      responses:
+        "200":
+          description: Article updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminHelpArticle" }
+        "404": { $ref: "#/components/responses/NotFound" }
 components:
   securitySchemes:
     bearerAuth:
@@ -536,9 +729,18 @@ components:
         token: { type: string }
         defaultRoute: { type: string }
         user: { $ref: "#/components/schemas/User" }
+    PushDeviceRegistration:
+      description: Opaque FCM device address. It must never carry notification text or student data.
+      type: object
+      additionalProperties: false
+      required: [token, platform, appVersion]
+      properties:
+        token: { type: string, minLength: 20, maxLength: 4096 }
+        platform: { type: string, const: android }
+        appVersion: { type: string, minLength: 1, maxLength: 64 }
     User:
       type: object
-      required: [id, name, email, role, college, scope, status, className]
+      required: [id, name, email, role, college, scope, status, className, account_status, contacts]
       properties:
         id: { type: string }
         name: { type: string }
@@ -550,9 +752,49 @@ components:
         gender: { type: [string, "null"], enum: [male, female, null] }
         gradeLevel: { type: [string, "null"], enum: [freshman, sophomore, junior, senior, null] }
         className: { type: string }
+        account_status: { type: string, enum: [PENDING_CONTACT_BINDING, ACTIVE] }
+        contacts: { $ref: "#/components/schemas/ContactStatus" }
+    ContactStatus:
+      type: object
+      required: [email, phone]
+      properties:
+        email: { $ref: "#/components/schemas/ContactMethod" }
+        phone: { $ref: "#/components/schemas/ContactMethod" }
+    ContactMethod:
+      type: object
+      required: [masked, verified]
+      properties:
+        masked: { type: [string, "null"], description: Masked after verification; the raw value is never returned. }
+        verified: { type: boolean }
+    EmailContactRequest:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+    PhoneContactRequest:
+      type: object
+      additionalProperties: false
+      required: [phone]
+      properties:
+        phone: { type: string, pattern: '^\\+[1-9]\\d{6,30}$', description: E.164 format }
+    VerifyEmailContactRequest:
+      allOf:
+        - { $ref: "#/components/schemas/EmailContactRequest" }
+        - type: object
+          required: [code]
+          properties:
+            code: { type: string, pattern: '^\\d{6}$' }
+    VerifyPhoneContactRequest:
+      allOf:
+        - { $ref: "#/components/schemas/PhoneContactRequest" }
+        - type: object
+          required: [code]
+          properties:
+            code: { type: string, pattern: '^\\d{6}$' }
     SportSummary:
       type: object
-      required: [courseHours, generalHours, totalCompleted, totalRequired, totalRemaining, courseRemaining, generalRemaining, completed, pendingCount, rule, teachers, courses]
+      required: [courseHours, generalHours, totalCompleted, totalRequired, totalRemaining, courseRemaining, generalRemaining, completed, rule, teachers, courses]
       properties:
         courseHours: { type: number }
         generalHours: { type: number }
@@ -562,7 +804,6 @@ components:
         courseRemaining: { type: number }
         generalRemaining: { type: number }
         completed: { type: boolean }
-        pendingCount: { type: integer }
         rule:
           type: object
           properties:
@@ -572,6 +813,35 @@ components:
             dailyLimit: { type: number }
         teachers: { type: array, items: { type: object, additionalProperties: true } }
         courses: { type: array, items: { type: object, additionalProperties: true } }
+    HelpArticle:
+      type: object
+      required: [id, title, category, content, sortOrder]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        category: { type: string }
+        content: { type: string }
+        sortOrder: { type: integer, minimum: 0 }
+        updatedAt: { type: [string, "null"], format: date-time }
+    HelpArticleInput:
+      type: object
+      additionalProperties: false
+      required: [title, content, status]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 255 }
+        category: { type: string, maxLength: 100 }
+        content: { type: string, minLength: 1, maxLength: 20000 }
+        sortOrder: { type: integer, minimum: 0, maximum: 1000000 }
+        status: { type: string, enum: [draft, published, offline] }
+    AdminHelpArticle:
+      allOf:
+        - $ref: "#/components/schemas/HelpArticle"
+        - type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [draft, published, offline] }
+            updatedBy: { type: [string, "null"], format: uuid }
+            createdAt: { type: [string, "null"], format: date-time }
     ProofFile:
       type: object
       required: [url, cosKey, mediaType, mimeType, size]
@@ -590,64 +860,94 @@ components:
         mediaType: { type: string, enum: [image, video] }
         mimeType: { type: string }
         size: { type: integer, minimum: 0 }
+    CreateFeedbackTicket:
+      type: object
+      additionalProperties: false
+      required: [category, description, currentPage, clientVersion, screenshots, email, phone]
+      properties:
+        category: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, minLength: 1, maxLength: 2000 }
+        currentPage: { type: string, minLength: 1, maxLength: 256 }
+        clientVersion: { type: string, minLength: 1, maxLength: 64 }
+        screenshots:
+          type: array
+          maxItems: 3
+          items: { type: string, minLength: 1, maxLength: 1024 }
+        email: { type: string, format: email, maxLength: 254 }
+        phone: { type: string, minLength: 5, maxLength: 32 }
+    FeedbackTicket:
+      type: object
+      required: [id, ticketNumber, category, description, currentPage, status, createdAt, screenshots]
+      properties:
+        id: { type: string, format: uuid }
+        ticketNumber: { type: string }
+        category: { type: string }
+        description: { type: string }
+        currentPage: { type: string }
+        status: { type: string, enum: [pending, processing, resolved, closed] }
+        reply: { type: [string, "null"] }
+        email: { type: [string, "null"], format: email }
+        phone: { type: [string, "null"] }
+        screenshots: { type: array, items: { $ref: "#/components/schemas/ProofFile" } }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: [string, "null"], format: date-time }
+    FeedbackTicketList:
+      type: object
+      required: [tickets]
+      properties:
+        tickets: { type: array, items: { $ref: "#/components/schemas/FeedbackTicket" } }
+    LanguagePreference:
+      type: object
+      additionalProperties: false
+      required: [language]
+      properties:
+        language: { type: string, enum: [zh-CN, en] }
     CreateSportRecord:
       type: object
       additionalProperties: false
-      required: [creditType, hours, description, proofFiles]
+      required: [creditType, hours, startTime, endTime, actualDurationSeconds, description, proofFiles]
       properties:
         creditType: { type: string, enum: [课程相关, 其他运动] }
         courseId: { type: [string, "null"] }
         taskId: { type: [string, "null"] }
         hours: { type: number, enum: [1, 2] }
+        startTime: { type: string, format: date-time, description: "实际运动开始时间" }
+        endTime: { type: string, format: date-time, description: "实际运动结束时间" }
+        actualDurationSeconds: { type: integer, minimum: 1, maximum: 7200, description: "实际运动时长（秒），暂停时段不计入" }
         description: { type: string, maxLength: 2000 }
+        remark: { type: string, maxLength: 200, description: "学生补充备注（选填）" }
         proofFiles: { type: array, minItems: 1, maxItems: 7, items: { $ref: "#/components/schemas/ProofReference" } }
         sportType: { type: [string, "null"] }
-    SupplementSportRecord:
-      type: object
-      additionalProperties: false
-      required: [hours, description, proofFiles]
-      properties:
-        hours: { type: number, enum: [1, 2] }
-        description: { type: string }
-        proofFiles: { type: array, minItems: 1, maxItems: 7, items: { $ref: "#/components/schemas/ProofReference" } }
     SportRecord:
       type: object
-      required: [id, creditType, hours, approvedHours, proofFiles, aiRiskCodes, status]
+      required: [id, creditType, hours, proofFiles, aiRiskCodes]
       properties:
         id: { type: string }
         courseId: { type: [string, "null"] }
         taskId: { type: [string, "null"] }
         creditType: { type: string, enum: [课程相关, 其他运动, 系统抵扣] }
         hours: { type: number }
-        approvedHours: { type: number }
         description: { type: [string, "null"] }
+        remark: { type: [string, "null"] }
         proofFiles: { type: array, items: { $ref: "#/components/schemas/ProofFile" } }
         sportType: { type: [string, "null"] }
+        startTime: { type: [string, "null"], format: date-time }
+        endTime: { type: [string, "null"], format: date-time }
+        actualDurationSeconds: { type: [integer, "null"], minimum: 1 }
         aiReviewStatus: { type: [string, "null"], enum: [pending, normal, abnormal, manual_review, null] }
         aiRiskLevel: { type: [string, "null"], enum: [low, medium, high, null] }
         aiRiskCodes: { type: array, items: { type: string } }
         aiReviewMessage: { type: [string, "null"] }
         aiConfidence: { type: [number, "null"] }
         aiReviewedAt: { type: [string, "null"], format: date-time }
-        status: { type: string, enum: [待审核, 已通过, 已驳回, 补材料, 系统抵扣] }
-        reviewComment: { type: [string, "null"] }
         submittedAt: { type: [string, "null"], format: date-time }
-        reviewedAt: { type: [string, "null"], format: date-time }
     MutationResult:
       type: object
-      required: [id, status]
+      required: [id]
       properties:
         id: { type: string }
-        status: { type: string }
         submittedAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
-    SupplementResult:
-      type: object
-      required: [id, status, message]
-      properties:
-        id: { type: string }
-        status: { type: string }
-        message: { type: string }
     Membership:
       type: object
       required: [id, type, organization, studentId, studentName, status, offset]
@@ -677,7 +977,7 @@ components:
         targetId: { type: [string, "null"] }
     StudentProfile:
       type: object
-      required: [id, name, email, role, college, status, enrolledCourses]
+      required: [id, name, email, role, college, status, enrolledCourses, account_status, contacts]
       properties:
         id: { type: string }
         name: { type: string }
@@ -685,6 +985,7 @@ components:
         role: { type: string }
         college: { type: string }
         gender: { type: [string, "null"] }
+        preferredLanguage: { type: string, enum: [zh-CN, en] }
         gradeLevel: { type: [string, "null"] }
         admissionYear: { type: [integer, "null"] }
         currentGradeLevel: { type: string }
@@ -692,12 +993,25 @@ components:
         gradeCalculatedAt: { type: string }
         status: { type: string }
         enrolledCourses: { type: integer }
+        account_status: { type: string, enum: [PENDING_CONTACT_BINDING, ACTIVE] }
+        contacts: { $ref: "#/components/schemas/ContactStatus" }
     CourseList:
       type: object
       required: [courses, scope]
       properties:
         courses: { type: array, items: { type: object, additionalProperties: true } }
         scope: { type: string, enum: [all, current, history] }
+    CheckInTimeWindow:
+      type: object
+      required: [windowMode, dateRangeStart, dateRangeEnd, dailyStartTime, dailyEndTime, excludedDates]
+      properties:
+        windowMode: { type: string, enum: [semester_wide, specified_range, unavailable] }
+        dateRangeStart: { type: [string, "null"], format: date, description: Effective first check-in date; defaults to the current semester start. }
+        dateRangeEnd: { type: [string, "null"], format: date, description: Effective last check-in date; defaults to the current semester end. }
+        dailyStartTime: { type: string, pattern: '^$|^[0-2][0-9]:[0-5][0-9]$' }
+        dailyEndTime: { type: string, pattern: '^$|^[0-2][0-9]:[0-5][0-9]$' }
+        excludedDates: { type: array, items: { type: string, format: date } }
+        semesterDeadline: { type: [string, "null"], format: date }
     TaskList:
       type: object
       required: [pending, completed]
@@ -708,8 +1022,26 @@ components:
       type: object
       required: [grades, summary]
       properties:
-        grades: { type: array, items: { type: object, additionalProperties: true } }
+        grades: { type: array, items: { $ref: "#/components/schemas/StudentGrade" } }
         summary: { type: object, additionalProperties: true }
+    StudentGrade:
+      type: object
+      additionalProperties: true
+      properties:
+        enduranceRunTimeSeconds:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 3600
+          description: Measured 800m/1000m duration. Null for exempt, absent, or unrecorded results.
+        enduranceRunStatus:
+          type: string
+          enum: [recorded, exempt, absent, not_recorded]
+          description: Exempt means the physical-test exemption was approved; absent is scored as zero.
+        enduranceRunScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Teacher-assigned score for the endurance-run item. An absent result is zero.
     PhysicalExemptionRequest:
       type: object
       additionalProperties: false

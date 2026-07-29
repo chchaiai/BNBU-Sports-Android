@@ -3,15 +3,17 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("OpenAPI contract", () => {
-  it("documents every Android endpoint and both exemption supplement routes", async () => {
+  it("documents every Android endpoint and the exemption supplement routes", async () => {
     const specification = await readFile(path.resolve(process.cwd(), "openapi/openapi.yaml"), "utf8");
     for (const route of [
       "/auth/login:", "/sport/summary:", "/sport/records:", "/sport/records/{id}:",
-      "/sport/records/{id}/supplements:", "/sport/identity:", "/common/notifications:",
+      "/sport/identity:", "/common/notifications:", "/common/help-articles:",
       "/common/notifications/{id}/read:", "/student/profile:", "/student/courses:",
+      "/v1/student/push-devices:", "/v1/student/feedback:", "/v1/student/preferences/language:",
       "/student/tasks:", "/student/grades:", "/student/physical-test-exemptions:",
       "/student/physical-test-exemptions/{id}/supplements:", "/student/checkin-exemptions:",
-      "/student/checkin-exemptions/{id}/supplements:", "/scoring/convert-endurance:", "/upload/proof:"
+      "/student/checkin-exemptions/{id}/supplements:", "/scoring/convert-endurance:", "/upload/proof:",
+      "/admin/help-articles:", "/admin/help-articles/{id}:"
     ]) expect(specification).toContain(route);
     expect(specification).toContain("IDEMPOTENCY_KEY_REUSED");
     expect(specification).toContain("#/components/requestBodies/PhysicalExemption");

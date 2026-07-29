@@ -18,10 +18,21 @@ export interface UserRecord {
   college: string;
   className: string;
   gender: Gender | null;
+  preferredLanguage: "zh-CN" | "en";
   gradeLevel: GradeLevel | null;
   admissionYear: number | null;
   status: string;
   tokenVersion: number;
+}
+
+export type ContactChannel = "email" | "phone";
+
+export interface ContactBindingStatus {
+  accountStatus: "PENDING_CONTACT_BINDING" | "ACTIVE";
+  contacts: {
+    email: { masked: string | null; verified: boolean };
+    phone: { masked: string | null; verified: boolean };
+  };
 }
 
 export interface ProofFile {
@@ -30,6 +41,22 @@ export interface ProofFile {
   mediaType: "image" | "video";
   mimeType: string;
   size: number;
+}
+
+/** Opaque device address used exclusively by the FCM delivery service. */
+export interface PushDeviceRegistration {
+  token: string;
+  platform: "android";
+  appVersion: string;
+}
+
+/** Server-managed help content. Only published records are visible to students. */
+export interface HelpArticleInput {
+  title: string;
+  category: string;
+  content: string;
+  sortOrder: number;
+  status: "draft" | "published" | "offline";
 }
 
 export interface StoredUpload extends ProofFile {
@@ -42,16 +69,12 @@ export interface CreateRecordInput {
   taskId: string | null;
   hours: number;
   description: string;
+  remark: string;
   proofFiles: Array<Omit<ProofFile, "url"> & { url?: string }>;
   sportType: string | null;
-  idempotencyKey?: string;
-  idempotencyHash?: string;
-}
-
-export interface SupplementRecordInput {
-  hours: number;
-  description: string;
-  proofFiles: Array<Omit<ProofFile, "url"> & { url?: string }>;
+  startTime: string;
+  endTime: string;
+  actualDurationSeconds: number;
   idempotencyKey?: string;
   idempotencyHash?: string;
 }
@@ -69,6 +92,19 @@ export interface SupplementExemptionInput {
   reason: string;
   proofFiles: string[];
   organization: string | null;
+  idempotencyKey?: string;
+  idempotencyHash?: string;
+}
+
+/** A student-reported problem. Contact details are ticket-scoped. */
+export interface CreateFeedbackInput {
+  category: string;
+  description: string;
+  currentPage: string;
+  clientVersion: string;
+  screenshots: string[];
+  email: string;
+  phone: string;
   idempotencyKey?: string;
   idempotencyHash?: string;
 }

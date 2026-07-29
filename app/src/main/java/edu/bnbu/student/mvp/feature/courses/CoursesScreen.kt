@@ -1,8 +1,11 @@
 package edu.bnbu.student.mvp.feature.courses
 
-import androidx.compose.foundation.background
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -10,65 +13,88 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AssignmentTurnedIn
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.automirrored.filled.DirectionsRun
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.RadioButtonUnchecked
-import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material.icons.filled.PersonOutline
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.Timer
+import edu.bnbu.student.mvp.core.designsystem.AppleButton as Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import edu.bnbu.student.mvp.core.designsystem.AppleOutlinedButton as OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
-import edu.bnbu.student.mvp.core.designsystem.HourProgressBar
-import edu.bnbu.student.mvp.core.designsystem.SectionTitle
-import edu.bnbu.student.mvp.core.designsystem.StatusBadge
-import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
+import edu.bnbu.student.mvp.core.designsystem.interfaceText
+import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.model.CheckInRecord
 import edu.bnbu.student.mvp.core.model.Course
-import edu.bnbu.student.mvp.core.model.CourseTask
+import edu.bnbu.student.mvp.core.model.CourseJoinRequest
 import edu.bnbu.student.mvp.core.model.CreditType
-import edu.bnbu.student.mvp.core.model.TaskStatus
+import edu.bnbu.student.mvp.core.model.JoinRequestStatus
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.state.StudentAppState
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+
+private val CourseCardShape = RoundedCornerShape(18.dp)
+private val CourseControlShape = RoundedCornerShape(14.dp)
 
 @Composable
-fun CoursesScreen(appState: StudentAppState) {
+fun CoursesScreen(
+    appState: StudentAppState,
+    onScanJoin: () -> Unit = {},
+    onEnterCode: () -> Unit = {},
+    onOpenJoinRequest: () -> Unit = {}
+) {
     var selectedCourseId by rememberSaveable { mutableStateOf<String?>(null) }
+
+    BackHandler(enabled = selectedCourseId != null) {
+        selectedCourseId = null
+    }
 
     AnimatedContent(
         targetState = selectedCourseId,
@@ -96,7 +122,10 @@ fun CoursesScreen(appState: StudentAppState) {
         if (selectedCourse == null) {
             CourseList(
                 appState = appState,
-                onCourseSelected = { selectedCourseId = it.id }
+                onCourseSelected = { selectedCourseId = it.id },
+                onScanJoin = onScanJoin,
+                onEnterCode = onEnterCode,
+                onOpenJoinRequest = onOpenJoinRequest
             )
         } else {
             CourseDetail(
@@ -109,51 +138,74 @@ fun CoursesScreen(appState: StudentAppState) {
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun CourseList(
     appState: StudentAppState,
-    onCourseSelected: (Course) -> Unit
+    onCourseSelected: (Course) -> Unit,
+    onScanJoin: () -> Unit,
+    onEnterCode: () -> Unit,
+    onOpenJoinRequest: () -> Unit
 ) {
     var historyExpanded by rememberSaveable { mutableStateOf(false) }
     val courses = appState.workspace.courses
-    val historyCourses = courses.filter {
-        it.semesterStatus == "archived" || it.enrollmentStatus in setOf("completed", "withdrawn")
-    }
+    val historyCourses = courses.filter { it.isHistorical() }
     val currentCourses = courses.filterNot { it in historyCourses }
+    val subtitle = when {
+        courses.isEmpty() -> interfaceText("课程同步后将在这里显示", "Your courses will appear here after syncing.")
+        historyCourses.isEmpty() -> interfaceText("${currentCourses.size} 门课程正在修读", "${currentCourses.size} courses in progress")
+        else -> interfaceText("${currentCourses.size} 门正在修读 · ${historyCourses.size} 门历史课程", "${currentCourses.size} in progress · ${historyCourses.size} past courses")
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        contentPadding = PaddingValues(top = 8.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         item {
-            SectionTitle(eyebrow = "My Courses", title = "我的课程")
-        }
-        item {
-            Text(
-                text = "教学班以课程代码 + Section 区分；同一课程代码的不同 Section 会作为不同教学班展示。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium
+            CourseLargeHeader(
+                title = interfaceText("我的课程", "My courses"),
+                subtitle = subtitle,
+                supportingText = interfaceText("每学期仅可选择一门课程", "You may select one course per semester.")
             )
         }
 
+        appState.workspace.courseJoinRequest
+            ?.takeIf { appState.hasPendingJoinRequest }
+            ?.let { request ->
+                item(key = "join-request") {
+                    CourseJoinRequestCard(request = request, onOpen = onOpenJoinRequest)
+                }
+            }
+
         if (courses.isEmpty()) {
             item {
-                EmptyPlaceholder(
-                    title = "暂无课程",
-                    message = "当前账号还没有可展示的体育教学班；课程同步后会按课程代码和 Section 显示。"
-                )
+                EmptyCoursesPanel()
             }
         } else {
-            item { SectionTitle(eyebrow = "Current", title = "当前学期课程") }
+            item {
+                CourseSectionHeader(
+                    title = interfaceText("本学期", "This semester"),
+                    count = currentCourses.size
+                )
+            }
+
             if (currentCourses.isEmpty()) {
                 item {
-                    EmptyPlaceholder(
-                        title = "当前学期暂无课程",
-                        message = "历史课程仍可在下方展开查看。"
+                    QuietMessagePanel(
+                        title = interfaceText("本学期暂无课程", "No courses this semester"),
+                        message = interfaceText("你仍可以在下方查看历史课程。", "You can still view past courses below.")
                     )
                 }
             } else {
                 items(currentCourses, key = { "current-${it.id}" }) { course ->
-                    CourseCard(course = course, onClick = { onCourseSelected(course) })
+                    CourseCard(
+                        course = course,
+                        historical = false,
+                        modifier = Modifier.animateItemPlacement(
+                            animationSpec = tween(BNBUMotion.Standard, easing = FastOutSlowInEasing)
+                        ),
+                        onClick = { onCourseSelected(course) }
+                    )
                 }
             }
 
@@ -168,21 +220,243 @@ private fun CourseList(
                         AnimatedVisibility(
                             visible = historyExpanded,
                             enter = fadeIn(tween(BNBUMotion.Standard)) + expandVertically(
-                                animationSpec = tween(BNBUMotion.Emphasized, easing = FastOutSlowInEasing)
+                                animationSpec = tween(
+                                    BNBUMotion.Emphasized,
+                                    easing = FastOutSlowInEasing
+                                )
                             ),
                             exit = fadeOut(tween(BNBUMotion.Quick)) + shrinkVertically(
-                                animationSpec = tween(BNBUMotion.Standard, easing = FastOutSlowInEasing)
+                                animationSpec = tween(
+                                    BNBUMotion.Standard,
+                                    easing = FastOutSlowInEasing
+                                )
                             )
                         ) {
                             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 historyCourses.forEach { course ->
-                                    CourseCard(course = course, onClick = { onCourseSelected(course) })
+                                    CourseCard(
+                                        course = course,
+                                        historical = true,
+                                        onClick = { onCourseSelected(course) }
+                                    )
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+
+        if (appState.canStartNewCourseJoin) {
+            item(key = "join-course-actions") {
+                JoinCourseActions(onScanJoin = onScanJoin, onEnterCode = onEnterCode)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CourseLargeHeader(
+    title: String,
+    subtitle: String,
+    supportingText: String
+) {
+    val colors = MaterialTheme.colorScheme
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text(
+            text = title,
+            color = colors.onBackground,
+            fontSize = 34.sp,
+            lineHeight = 41.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = (-0.4).sp
+        )
+        Text(
+            text = subtitle,
+            color = colors.onSurface,
+            fontSize = 17.sp,
+            lineHeight = 23.sp
+        )
+        Text(
+            text = supportingText,
+            color = colors.onSurfaceVariant,
+            fontSize = 13.sp,
+            lineHeight = 18.sp
+        )
+    }
+}
+
+@Composable
+private fun CourseSectionHeader(title: String, count: Int, unit: String = interfaceText("门", "courses")) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            modifier = Modifier.weight(1f),
+            color = colors.onBackground,
+            fontSize = 20.sp,
+            lineHeight = 25.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = "$count $unit",
+            color = colors.onSurfaceVariant,
+            fontSize = 15.sp,
+            lineHeight = 20.sp
+        )
+    }
+}
+
+@Composable
+private fun CourseJoinRequestCard(
+    request: CourseJoinRequest,
+    onOpen: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .bnbuClickable(onClickLabel = interfaceText("查看加入申请", "View join request"), onClick = onOpen),
+        shape = CourseCardShape,
+        color = colors.surface
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text(
+                    text = interfaceText("课程加入申请", "Course join request"),
+                    color = colors.onSurface,
+                    fontSize = 17.sp,
+                    lineHeight = 22.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "${request.courseCode} · Section ${request.section}",
+                    color = colors.onSurfaceVariant,
+                    fontSize = 14.sp,
+                    lineHeight = 19.sp
+                )
+            }
+            CourseStatusPill(
+                text = request.status.label,
+                emphasized = request.status == JoinRequestStatus.PENDING
+            )
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = colors.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyCoursesPanel() {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = CourseCardShape,
+        color = colors.surface
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Text(
+                text = interfaceText("还没有课程", "No courses yet"),
+                color = colors.onSurface,
+                fontSize = 20.sp,
+                lineHeight = 25.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = interfaceText("扫描教师提供的二维码或输入邀请码，加入体育教学班。", "Scan your instructor's QR code or enter an invitation code to join a class."),
+                color = colors.onSurfaceVariant,
+                fontSize = 15.sp,
+                lineHeight = 22.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun JoinCourseActions(
+    onScanJoin: () -> Unit,
+    onEnterCode: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Button(
+            onClick = onScanJoin,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 52.dp),
+            shape = CourseControlShape
+        ) {
+            Icon(
+                imageVector = Icons.Filled.QrCodeScanner,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(text = interfaceText("扫描二维码", "Scan QR code"), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+        OutlinedButton(
+            onClick = onEnterCode,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 52.dp),
+            shape = CourseControlShape
+        ) {
+            Icon(
+                imageVector = Icons.Filled.TextFields,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(text = interfaceText("输入邀请码", "Enter invitation code"), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun QuietMessagePanel(title: String, message: String) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = CourseCardShape,
+        color = colors.surface
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Text(
+                text = title,
+                color = colors.onSurface,
+                fontSize = 17.sp,
+                lineHeight = 22.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = message,
+                color = colors.onSurfaceVariant,
+                fontSize = 14.sp,
+                lineHeight = 20.sp
+            )
         }
     }
 }
@@ -193,111 +467,194 @@ private fun HistoryCourseHeader(
     expanded: Boolean,
     onClick: () -> Unit
 ) {
-    val cs = MaterialTheme.colorScheme
+    val colors = MaterialTheme.colorScheme
     val arrowRotation by animateFloatAsState(
         targetValue = if (expanded) 180f else 0f,
         animationSpec = tween(BNBUMotion.Standard, easing = FastOutSlowInEasing),
         label = "historyArrow"
     )
-    Row(
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .background(cs.surfaceVariant, MaterialTheme.shapes.small)
-            .bnbuClickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 13.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .bnbuClickable(
+                onClickLabel = if (expanded) interfaceText("收起历史课程", "Collapse past courses") else interfaceText("展开历史课程", "Expand past courses"),
+                onClick = onClick
+            ),
+        shape = CourseControlShape,
+        color = colors.surface
     ) {
-        Icon(
-            imageVector = Icons.Filled.History,
-            contentDescription = null,
-            tint = cs.primary,
-            modifier = Modifier.size(22.dp)
-        )
-        Spacer(Modifier.width(10.dp))
-        Text(
-            text = "历史课程（$count）",
-            color = cs.onSurface,
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.weight(1f)
-        )
-        Icon(
-            imageVector = Icons.Filled.ExpandMore,
-            contentDescription = if (expanded) "收起历史课程" else "展开历史课程",
-            tint = cs.onSurfaceVariant,
-            modifier = Modifier.graphicsLayer { rotationZ = arrowRotation }
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 56.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Filled.History,
+                contentDescription = null,
+                tint = colors.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = interfaceText("历史课程", "Past courses"),
+                color = colors.onSurface,
+                fontSize = 17.sp,
+                lineHeight = 22.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = interfaceText("$count 门", "$count courses"),
+                color = colors.onSurfaceVariant,
+                fontSize = 15.sp,
+                lineHeight = 20.sp
+            )
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                imageVector = Icons.Filled.ExpandMore,
+                contentDescription = null,
+                tint = colors.onSurfaceVariant,
+                modifier = Modifier
+                    .size(22.dp)
+                    .graphicsLayer { rotationZ = arrowRotation }
+            )
+        }
     }
 }
 
 @Composable
 private fun CourseCard(
     course: Course,
+    historical: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    val cs = MaterialTheme.colorScheme
-    SwissPanel(
-        modifier = Modifier.bnbuClickable(onClick = onClick)
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .bnbuClickable(
+                onClickLabel = interfaceText("查看${course.name}详情", "View ${course.name} details"),
+                onClick = onClick
+            ),
+        shape = CourseCardShape,
+        color = colors.surface
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 17.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
             Row(verticalAlignment = Alignment.Top) {
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
                     Text(
-                        text = course.displayTitle,
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.titleLarge
+                        text = course.name,
+                        color = colors.onSurface,
+                        fontSize = 20.sp,
+                        lineHeight = 26.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = course.name,
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium
+                        text = course.displayTitle,
+                        color = colors.onSurfaceVariant,
+                        fontSize = 14.sp,
+                        lineHeight = 19.sp
                     )
                 }
-                StatusBadge(text = course.semester.ifBlank { "学期待定" })
-            }
-
-            val facts = listOf(
-                CourseFact("任课老师", course.teacher.ifBlank { "待公布" }),
-                CourseFact("学年", course.academicYear.ifBlank { "待设置" }),
-                CourseFact("学期", course.term.ifBlank { "待设置" }),
-                CourseFact("选课状态", course.enrollmentStatus.enrollmentStatusLabel())
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                facts.chunked(2).forEach { rowFacts ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        rowFacts.forEach { fact ->
-                            CourseFactCell(fact = fact, modifier = Modifier.weight(1f))
-                        }
-                        if (rowFacts.size == 1) Spacer(Modifier.weight(1f))
-                    }
-                }
-            }
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = if (course.isCurrent) "当前教学班" else course.semesterStatus.semesterStatusLabel(),
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = "查看课程详情",
-                    color = cs.primary,
-                    style = MaterialTheme.typography.labelMedium
-                )
+                Spacer(Modifier.width(10.dp))
                 Icon(
                     imageVector = Icons.Filled.ChevronRight,
                     contentDescription = null,
-                    tint = cs.primary,
-                    modifier = Modifier.size(16.dp)
+                    tint = colors.onSurfaceVariant,
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .size(22.dp)
                 )
             }
+
+            HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.55f))
+
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                CourseMetaLine(
+                    icon = Icons.Filled.PersonOutline,
+                    text = course.teacher.ifBlank { interfaceText("任课教师待公布", "Instructor to be announced") }
+                )
+                CourseMetaLine(
+                    icon = Icons.Filled.CalendarMonth,
+                    text = listOf(
+                        course.academicYear.ifBlank { interfaceText("学年待设置", "Academic year pending") },
+                        course.term.ifBlank { interfaceText("学期待设置", "Term pending") }
+                    ).joinToString(" · ")
+                )
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CourseStatusPill(
+                    text = if (historical) {
+                        course.semesterStatus.semesterStatusLabel()
+                    } else {
+                        course.enrollmentStatus.enrollmentStatusLabel()
+                    },
+                    emphasized = !historical && course.enrollmentStatus == "enrolled"
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = course.semester.ifBlank { interfaceText("学期待定", "Semester pending") },
+                    modifier = Modifier.weight(1f),
+                    color = colors.onSurfaceVariant,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            if (historical && course.finalGrade != null) {
+                HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.55f))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = interfaceText("最终成绩", "Final grade"),
+                        modifier = Modifier.weight(1f),
+                        color = colors.onSurfaceVariant,
+                        fontSize = 14.sp,
+                        lineHeight = 19.sp
+                    )
+                    Text(
+                        text = interfaceText("${course.finalGrade} 分", "${course.finalGrade} points"),
+                        color = colors.onSurface,
+                        fontSize = 17.sp,
+                        lineHeight = 22.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun CourseMetaLine(icon: ImageVector, text: String) {
+    val colors = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = colors.onSurfaceVariant,
+            modifier = Modifier.size(19.dp)
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = text,
+            color = colors.onSurface,
+            fontSize = 15.sp,
+            lineHeight = 20.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -307,249 +664,451 @@ private fun CourseDetail(
     course: Course,
     onBack: () -> Unit
 ) {
-    val cs = MaterialTheme.colorScheme
+    val records = appState.recordsFor(course)
+    val isHistoricalCourse = course.isHistorical()
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        contentPadding = PaddingValues(top = 2.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .bnbuClickable(onClick = onBack),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                    contentDescription = null,
-                    tint = cs.onSurface
-                )
-                Text(
-                    text = "返回我的课程",
-                    color = cs.onSurface,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
+            CourseDetailNavigation(onBack = onBack)
         }
-
         item {
-            SectionTitle(eyebrow = course.semester, title = course.displayTitle)
+            CourseDetailHeader(course = course, historical = isHistoricalCourse)
         }
-
         item {
-            SwissPanel {
-                DetailFactRow(label = "课程名称", value = course.name)
-                DetailFactRow(label = "Section", value = "Section ${course.section}")
-                DetailFactRow(label = "任课老师", value = course.teacher)
-                DetailFactRow(label = "下一截止", value = course.deadline)
-            }
+            CourseInformationPanel(course = course)
         }
-
-        item {
-            SwissPanel {
-                Text(
-                    text = "我的课程相关进度",
-                    color = cs.onSurface,
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Spacer(Modifier.height(14.dp))
-                HourProgressBar(
-                    value = appState.workspace.progress.course,
-                    total = appState.hourRule.courseRequired
-                )
-                Spacer(Modifier.height(14.dp))
-                DetailFactRow(label = "已完成", value = appState.workspace.progress.course.hourText())
-                DetailFactRow(label = "仍缺口", value = appState.courseRemaining.hourText())
-            }
-        }
-
-        item {
-            SectionTitle(eyebrow = "Class Tasks", title = "本教学班任务")
-        }
-
-        val tasks = appState.tasksFor(course)
-        if (tasks.isEmpty()) {
+        if (isHistoricalCourse) {
             item {
-                EmptyPlaceholder(
-                    title = "暂无教学班任务",
-                    message = "当前教学班还没有可展示任务。老师发布后会在这里同步。"
+                FinalGradePanel(course = course)
+            }
+        }
+        item {
+            CourseSectionHeader(
+                title = if (isHistoricalCourse) interfaceText("打卡记录", "Check-in records") else interfaceText("相关记录", "Related records"),
+                count = records.size,
+                unit = interfaceText("条", "records")
+            )
+        }
+        if (isHistoricalCourse) {
+            item {
+                Text(
+                    text = interfaceText("历史课程记录仅供查看", "Past-course records are view only."),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
                 )
             }
-        } else {
-            items(tasks) { task ->
-                TaskRow(task = task, course = course)
-            }
         }
-
-        item {
-            SectionTitle(eyebrow = "Trace", title = "相关记录")
-        }
-
-        val records = appState.recordsFor(course)
         if (records.isEmpty()) {
             item {
-                EmptyPlaceholder(
-                    title = "暂无相关记录",
-                    message = "当前教学班还没有课程相关打卡记录。"
+                QuietMessagePanel(
+                    title = interfaceText("暂无相关记录", "No related records"),
+                    message = interfaceText("当前教学班还没有课程相关打卡记录。", "There are no course-related check-in records for this class yet.")
                 )
             }
         } else {
-            items(records) { record ->
-                RecordCard(record)
+            items(records, key = { it.id }) { record ->
+                RecordCard(record = record, courseDisplayName = course.displayTitle)
             }
         }
     }
 }
 
 @Composable
-private fun CourseFactCell(fact: CourseFact, modifier: Modifier = Modifier) {
-    val cs = MaterialTheme.colorScheme
-    Column(
-        modifier = modifier
+private fun CourseDetailNavigation(onBack: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
             .fillMaxWidth()
-            .background(cs.surfaceVariant, MaterialTheme.shapes.small)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+            .heightIn(min = 48.dp)
+            .bnbuClickable(onClickLabel = interfaceText("返回我的课程", "Back to my courses"), onClick = onBack),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = fact.label.uppercase(),
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.labelSmall
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = interfaceText("返回", "Back"),
+            tint = colors.primary,
+            modifier = Modifier
+                .padding(horizontal = 10.dp)
+                .size(24.dp)
         )
         Text(
-            text = fact.value,
-            color = cs.onSurface,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1
+            text = interfaceText("我的课程", "My courses"),
+            color = colors.primary,
+            fontSize = 17.sp,
+            lineHeight = 22.sp
+        )
+    }
+}
+
+@Composable
+private fun CourseDetailHeader(course: Course, historical: Boolean) {
+    val colors = MaterialTheme.colorScheme
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = course.name,
+            color = colors.onBackground,
+            fontSize = 30.sp,
+            lineHeight = 37.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = (-0.25).sp
+        )
+        Text(
+            text = course.displayTitle,
+            color = colors.onSurfaceVariant,
+            fontSize = 16.sp,
+            lineHeight = 22.sp
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CourseStatusPill(
+                text = if (historical) {
+                    course.semesterStatus.semesterStatusLabel()
+                } else {
+                    course.enrollmentStatus.enrollmentStatusLabel()
+                },
+                emphasized = !historical && course.enrollmentStatus == "enrolled"
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = course.semester.ifBlank { interfaceText("学期待定", "Semester pending") },
+                modifier = Modifier.weight(1f),
+                color = colors.onSurfaceVariant,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun CourseInformationPanel(course: Course) {
+    val facts = listOf(
+        CourseFact(interfaceText("课程代码", "Course code"), course.code.ifBlank { interfaceText("待设置", "Pending") }),
+        CourseFact(interfaceText("教学班", "Section"), "Section ${course.section.ifBlank { interfaceText("待设置", "Pending") }}"),
+        CourseFact(interfaceText("任课教师", "Instructor"), course.teacher.ifBlank { interfaceText("待公布", "To be announced") }),
+        CourseFact(
+            interfaceText("开课学期", "Teaching term"),
+            listOf(
+                course.academicYear.ifBlank { interfaceText("学年待设置", "Academic year pending") },
+                course.term.ifBlank { interfaceText("学期待设置", "Term pending") }
+            ).joinToString(" · ")
+        )
+    )
+    CourseGroupedPanel {
+        facts.forEachIndexed { index, fact ->
+            DetailFactRow(label = fact.label, value = fact.value)
+            if (index != facts.lastIndex) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(start = 92.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FinalGradePanel(course: Course) {
+    val colors = MaterialTheme.colorScheme
+    CourseGroupedPanel {
+        Text(
+            text = interfaceText("最终成绩", "Final grade"),
+            color = colors.onSurfaceVariant,
+            fontSize = 14.sp,
+            lineHeight = 19.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        val finalGrade = course.finalGrade
+        if (finalGrade == null) {
+            Text(
+                text = interfaceText("暂未发布", "Not published"),
+                color = colors.onSurface,
+                fontSize = 20.sp,
+                lineHeight = 26.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = interfaceText("$finalGrade 分", "$finalGrade points"),
+                    modifier = Modifier.weight(1f),
+                    color = colors.onSurface,
+                    fontSize = 30.sp,
+                    lineHeight = 35.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                CourseStatusPill(
+                    text = course.gradeStatus.gradeStatusLabel(finalGrade),
+                    emphasized = course.gradeStatus != "fail" && finalGrade >= 60,
+                    destructive = course.gradeStatus == "fail" || finalGrade < 60
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CourseGroupedPanel(content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = CourseCardShape,
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+            content = content
         )
     }
 }
 
 @Composable
 private fun DetailFactRow(label: String, value: String) {
-    val cs = MaterialTheme.colorScheme
+    val colors = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 5.dp),
+            .heightIn(min = 48.dp)
+            .padding(vertical = 12.dp),
         verticalAlignment = Alignment.Top
     ) {
         Text(
             text = label,
-            color = cs.onSurface,
-            style = MaterialTheme.typography.bodyMedium
+            modifier = Modifier.width(80.dp),
+            color = colors.onSurfaceVariant,
+            fontSize = 14.sp,
+            lineHeight = 20.sp
         )
         Spacer(Modifier.width(12.dp))
         Text(
             text = value,
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            color = colors.onSurface,
+            fontSize = 15.sp,
+            lineHeight = 20.sp
         )
     }
 }
 
 @Composable
-private fun TaskRow(task: CourseTask, course: Course?) {
-    val cs = MaterialTheme.colorScheme
-    SwissPanel {
-        Row(
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+private fun RecordCard(record: CheckInRecord, courseDisplayName: String) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = CourseCardShape,
+        color = colors.surface
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 17.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Icon(
-                imageVector = task.creditType.courseIcon,
-                contentDescription = null,
-                tint = cs.primary,
-                modifier = Modifier.size(32.dp)
-            )
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.Top) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Text(
-                        text = task.title,
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f)
+                        text = record.taskTitle.localizedCheckInTaskTitle(),
+                        color = colors.onSurface,
+                        fontSize = 17.sp,
+                        lineHeight = 23.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
-                    StatusBadge(text = task.status.label, filled = task.status == TaskStatus.Active)
+                    Text(
+                        text = "${record.sportType?.takeIf { it.isNotBlank() } ?: interfaceText("运动", "Exercise")} · ${record.submittedDate()}",
+                        color = colors.onSurfaceVariant,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp
+                    )
                 }
+                Spacer(Modifier.width(10.dp))
                 Text(
-                    text = "${task.creditType.label} · ${task.hours.hourText()} · 截止 ${task.deadline}",
-                    color = cs.onSurface,
-                    style = MaterialTheme.typography.bodyMedium
+                    text = record.hours.hourText(),
+                    color = colors.primary,
+                    fontSize = 20.sp,
+                    lineHeight = 25.sp,
+                    fontWeight = FontWeight.SemiBold
                 )
+            }
+
+            Text(
+                text = record.creditType.localizedRecordLabel(),
+                color = colors.onSurfaceVariant,
+                fontSize = 13.sp,
+                lineHeight = 18.sp
+            )
+
+            HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.55f))
+
+            RecordTimeInfo(record = record)
+            RecordDetailLine(
+                icon = Icons.Filled.CheckCircleOutline,
+                label = interfaceText("关联课程", "Course"),
+                value = courseDisplayName
+            )
+            RecordDetailLine(
+                icon = Icons.Filled.AttachFile,
+                label = interfaceText("运动凭证", "Exercise proof"),
+                value = record.localizedProofSummary()
+            )
+
+            if (record.note.isNotBlank()) {
                 Text(
-                    text = "证明要求：${task.proof}",
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall
+                    text = interfaceText("运动说明：${record.note}", "Exercise notes: ${record.note}"),
+                    color = colors.onSurfaceVariant,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
                 )
-                if (course != null) {
-                    StatusBadge(text = course.displayTitle)
-                }
             }
         }
     }
 }
 
 @Composable
-private fun RecordCard(record: CheckInRecord) {
-    val cs = MaterialTheme.colorScheme
-    SwissPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = record.taskTitle,
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        text = record.submittedAt,
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                }
-            }
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusBadge(text = record.creditType.label)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = record.hours.hourText(),
-                    color = cs.onSurface,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
-            record.sportType?.takeIf { it.isNotBlank() }?.let { sportType ->
-                Text(
-                    text = "运动项目：$sportType",
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-
-            Text(
-                text = "凭证：${record.proofSummary}",
-                color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium
+private fun RecordTimeInfo(record: CheckInRecord) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            RecordMetric(
+                icon = Icons.Filled.CalendarMonth,
+                label = interfaceText("开始时间", "Start time"),
+                value = record.startTime.recordTimeText(),
+                modifier = Modifier.weight(1f)
             )
-            if (record.note.isNotBlank()) {
-                Text(
-                    text = "备注：${record.note}",
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
+            RecordMetric(
+                icon = Icons.Filled.Timer,
+                label = interfaceText("结束时间", "End time"),
+                value = record.endTime.recordTimeText(),
+                modifier = Modifier.weight(1f)
+            )
         }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            RecordMetric(
+                icon = Icons.Filled.Timer,
+                label = interfaceText("实际运动时长", "Active duration"),
+                value = record.actualDurationText(),
+                modifier = Modifier.weight(1f)
+            )
+            RecordMetric(
+                icon = Icons.Filled.CheckCircleOutline,
+                label = interfaceText("计入学时", "Credited hours"),
+                value = record.hours.hourText(),
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecordMetric(
+    icon: ImageVector,
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier
+) {
+    val colors = MaterialTheme.colorScheme
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = colors.onSurfaceVariant,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                text = label,
+                color = colors.onSurfaceVariant,
+                fontSize = 12.sp,
+                lineHeight = 16.sp
+            )
+            Text(
+                text = value,
+                color = colors.onSurface,
+                fontSize = 14.sp,
+                lineHeight = 19.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecordDetailLine(icon: ImageVector, label: String, value: String) {
+    val colors = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.Top) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = colors.onSurfaceVariant,
+            modifier = Modifier
+                .padding(top = 1.dp)
+                .size(18.dp)
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = label,
+            modifier = Modifier.width(68.dp),
+            color = colors.onSurfaceVariant,
+            fontSize = 13.sp,
+            lineHeight = 19.sp
+        )
+        Text(
+            text = value,
+            modifier = Modifier.weight(1f),
+            color = colors.onSurface,
+            fontSize = 13.sp,
+            lineHeight = 19.sp
+        )
+    }
+}
+
+@Composable
+private fun CourseStatusPill(
+    text: String,
+    emphasized: Boolean = false,
+    destructive: Boolean = false
+) {
+    val colors = MaterialTheme.colorScheme
+    val background: Color
+    val foreground: Color
+    when {
+        destructive -> {
+            background = colors.errorContainer
+            foreground = colors.onErrorContainer
+        }
+        emphasized -> {
+            background = colors.primaryContainer.copy(alpha = 0.82f)
+            foreground = colors.onPrimaryContainer
+        }
+        else -> {
+            background = colors.surfaceVariant
+            foreground = colors.onSurfaceVariant
+        }
+    }
+    Surface(shape = RoundedCornerShape(999.dp), color = background) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            color = foreground,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -558,23 +1117,77 @@ private data class CourseFact(
     val value: String
 )
 
+private fun Course.isHistorical(): Boolean =
+    !isCurrent ||
+        semesterStatus == "archived" ||
+        enrollmentStatus in setOf("completed", "withdrawn")
+
+private fun CheckInRecord.submittedDate(): String =
+    submittedAt.substringBefore(' ').ifBlank { interfaceText("未提供", "Not available") }
+
+private fun String.localizedCheckInTaskTitle(): String = when (trim()) {
+    "", "运动打卡", "Exercise check-in" -> interfaceText("运动打卡", "Exercise check-in")
+    else -> this
+}
+
+private fun CreditType.localizedRecordLabel(): String = when (this) {
+    CreditType.CourseRelated -> interfaceText("课程相关", "Course-related")
+    CreditType.General -> interfaceText("其他运动", "Other exercise")
+    CreditType.OrganizationOffset -> interfaceText("系统抵扣", "System offset")
+}
+
+private fun CheckInRecord.localizedProofSummary(): String {
+    if (proofPhotoCount == 0 && proofVideoCount == 0) return proofSummary
+    return buildList {
+        if (proofPhotoCount > 0) {
+            add(interfaceText("$proofPhotoCount 张图片", "$proofPhotoCount ${if (proofPhotoCount == 1) "photo" else "photos"}"))
+        }
+        if (proofVideoCount > 0) {
+            add(interfaceText("$proofVideoCount 个短视频", "$proofVideoCount ${if (proofVideoCount == 1) "video" else "videos"}"))
+        }
+    }.joinToString(interfaceText("，", ", "))
+}
+
+private fun String?.recordTimeText(): String {
+    val value = this?.takeIf { it.isNotBlank() } ?: return interfaceText("未提供", "Not available")
+    return runCatching {
+        Instant.parse(value)
+            .atZone(ZoneId.systemDefault())
+            .format(
+                DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
+                    .withLocale(AppLanguagePreferences.currentLocale)
+            )
+    }.getOrElse { value.substringAfter('T').substringBeforeLast('Z').take(5).ifBlank { value } }
+}
+
+private fun CheckInRecord.actualDurationText(): String {
+    val totalSeconds = actualDurationSeconds ?: return interfaceText("未提供", "Not available")
+    val hours = totalSeconds / 3_600
+    val minutes = (totalSeconds % 3_600) / 60
+    val seconds = totalSeconds % 60
+    return buildString {
+        if (hours > 0) append(interfaceText("${hours}小时", "${hours}h"))
+        if (minutes > 0 || (hours == 0L && seconds == 0L)) append(interfaceText("${minutes}分钟", "${minutes}m"))
+        if (seconds > 0) append(interfaceText("${seconds}秒", "${seconds}s"))
+    }
+}
+
 private fun String.enrollmentStatusLabel(): String = when (this) {
-    "enrolled" -> "修读中"
-    "completed" -> "已完成"
-    "withdrawn" -> "已退课"
-    else -> ifBlank { "待确认" }
+    "enrolled" -> interfaceText("修读中", "In progress")
+    "completed" -> interfaceText("已完成", "Complete")
+    "withdrawn" -> interfaceText("已退课", "Withdrawn")
+    else -> ifBlank { interfaceText("待确认", "Pending") }
 }
 
 private fun String.semesterStatusLabel(): String = when (this) {
-    "upcoming" -> "即将开始"
-    "current" -> "当前学期"
-    "archived" -> "历史学期"
-    else -> ifBlank { "学期待定" }
+    "upcoming" -> interfaceText("即将开始", "Upcoming")
+    "current" -> interfaceText("当前学期", "Current semester")
+    "archived" -> interfaceText("历史学期", "Past semester")
+    else -> ifBlank { interfaceText("学期待定", "Semester pending") }
 }
 
-private val CreditType.courseIcon: ImageVector
-    get() = when (this) {
-        CreditType.CourseRelated -> Icons.Filled.AssignmentTurnedIn
-        CreditType.General -> Icons.AutoMirrored.Filled.DirectionsRun
-        CreditType.OrganizationOffset -> Icons.Filled.CheckCircle
-    }
+private fun String?.gradeStatusLabel(finalGrade: Int): String = when (this) {
+    "pass" -> interfaceText("及格", "Pass")
+    "fail" -> interfaceText("不及格", "Fail")
+    else -> if (finalGrade >= 60) interfaceText("及格", "Pass") else interfaceText("不及格", "Fail")
+}

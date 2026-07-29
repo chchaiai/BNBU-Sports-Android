@@ -5,35 +5,44 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import edu.bnbu.student.mvp.core.data.ApiStudentRepository
+import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
-import edu.bnbu.student.mvp.core.model.CheckInDraft
+import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
+import edu.bnbu.student.mvp.core.mock.MockStudentWorkspace
 import edu.bnbu.student.mvp.core.model.CheckInRecord
-import edu.bnbu.student.mvp.core.model.AiReviewStatus
+import edu.bnbu.student.mvp.core.model.CheckInTimeWindow
 import edu.bnbu.student.mvp.core.model.AppThemeMode
+import edu.bnbu.student.mvp.core.model.AppLanguage
+import edu.bnbu.student.mvp.core.model.AccountStatus
 import edu.bnbu.student.mvp.core.model.Course
-import edu.bnbu.student.mvp.core.model.CourseTask
 import edu.bnbu.student.mvp.core.model.CreditType
+import edu.bnbu.student.mvp.core.model.JoinRequestStatus
 import edu.bnbu.student.mvp.core.model.Membership
 import edu.bnbu.student.mvp.core.model.NoticeCategory
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
 import edu.bnbu.student.mvp.core.model.ProofUploadRule
-import edu.bnbu.student.mvp.core.model.ReviewStatus
 import edu.bnbu.student.mvp.core.model.SportHourRule
 import edu.bnbu.student.mvp.core.model.StudentNotice
 import edu.bnbu.student.mvp.core.model.StudentWorkspace
+import edu.bnbu.student.mvp.core.model.StudentProfile
+import edu.bnbu.student.mvp.core.model.SystemMode
+import edu.bnbu.student.mvp.core.model.SystemModeStatus
+import edu.bnbu.student.mvp.core.model.canStartNewCourseJoin
 import edu.bnbu.student.mvp.core.model.SyncOperation
 import edu.bnbu.student.mvp.core.model.SyncOperationStatus
 import edu.bnbu.student.mvp.core.model.SyncOperationType
-import edu.bnbu.student.mvp.core.model.TaskStatus
 import edu.bnbu.student.mvp.core.model.hourText
+import edu.bnbu.student.mvp.core.model.withRecordedCheckIn
 import edu.bnbu.student.mvp.core.network.StudentApiClient
 import edu.bnbu.student.mvp.core.network.ApiHttpException
+import edu.bnbu.student.mvp.core.push.FcmPushRegistrar
 import edu.bnbu.student.mvp.core.network.StudentLoginRequest
 import edu.bnbu.student.mvp.core.network.ProofFileReference
 import edu.bnbu.student.mvp.core.network.SubmitSportRecordRequest
-import edu.bnbu.student.mvp.core.network.SupplementSportRecordRequest
 import edu.bnbu.student.mvp.core.network.UserDto
+import edu.bnbu.student.mvp.core.network.ContactStatusResponse
+import edu.bnbu.student.mvp.core.network.StudentProfileResponse
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -54,13 +63,20 @@ import java.util.UUID
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonParser
 
+private const val MaxOtherExerciseDescriptionLength = 200
+
+internal fun hasAcademicYearChanged(cachedAcademicYear: String, serverAcademicYear: String): Boolean {
+    val cached = cachedAcademicYear.trim()
+    val server = serverAcademicYear.trim()
+    return cached.isNotEmpty() && server.isNotEmpty() && cached != server
+}
+
 class StudentAppState(
     private val localStore: AndroidAppLocalStore? = null,
     var cacheDir: File? = null
 ) {
     private data class InitialLocalState(
         val workspace: StudentWorkspace? = null,
-        val draft: CheckInDraft? = null,
         val lastSyncTimestamp: String? = null,
         val authToken: String? = null,
         val userProfileJson: String? = null
@@ -83,7 +99,6 @@ class StudentAppState(
             try {
                 val loaded = InitialLocalState(
                     workspace = store.readWorkspace().value,
-                    draft = store.readDraft().value,
                     lastSyncTimestamp = store.loadLastSyncTime(),
                     authToken = store.loadAuthToken(),
                     userProfileJson = store.loadUserProfileJson()
@@ -108,10 +123,33 @@ class StudentAppState(
     var isAuthenticated by mutableStateOf(false)
         private set
 
+    /** True only for the explicit, local-only Mock-user login. */
+    var isUsingMockUser by mutableStateOf(false)
+        private set
+
     var workspace by mutableStateOf(
         StudentWorkspace.empty()
     )
         private set
+
+    /** Server-authoritative, masked state used by the activation and contact-management UI. */
+    var contactStatus by mutableStateOf(ContactStatusResponse())
+        private set
+
+    /** Keeps the activation screen visible until the newly active workspace is ready. */
+    var isPreparingActivatedWorkspace by mutableStateOf(false)
+        private set
+
+    /** A retryable workspace-loading error shown in the activation flow only. */
+    var contactActivationLoadError by mutableStateOf<String?>(null)
+        private set
+
+    /** A pending account may hold a token, but it must not enter the workspace. */
+    val requiresContactBinding: Boolean
+        get() = isAuthenticated && (
+            isPreparingActivatedWorkspace ||
+                AccountStatus.from(workspace.student.accountStatus) == AccountStatus.PENDING_CONTACT_BINDING
+            )
 
     var isShowingCachedData by mutableStateOf(false)
         private set
@@ -119,8 +157,9 @@ class StudentAppState(
     var lastSyncTimestamp: String? by mutableStateOf(null)
         private set
 
-    var draft by mutableStateOf<CheckInDraft?>(null)
-        private set
+    /** Last server-supplied policy, persisted with the workspace for offline display. */
+    val checkInTimeWindow: CheckInTimeWindow
+        get() = workspace.checkInTimeWindow
 
     var isLoading by mutableStateOf(false)
         private set
@@ -128,18 +167,121 @@ class StudentAppState(
     var lastError by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * Non-null only for the session in which the server confirms that the
+     * student's academic year has changed. The dashboard uses it to introduce
+     * the new semester before offering the course-join entry point.
+     */
+    var newSemesterWelcomeAcademicYear by mutableStateOf<String?>(null)
+        private set
+
+    /** Availability policy obtained from the public health endpoint at app startup. */
+    var systemModeStatus by mutableStateOf(SystemModeStatus())
+        private set
+
+    val systemMode: SystemMode
+        get() = systemModeStatus.mode
+
+    val isWriteAllowed: Boolean
+        get() = !systemMode.blocksWrites
+
     var themeMode by mutableStateOf(
         localStore?.loadThemeMode() ?: AppThemeMode.Light
     )
         private set
 
-    val hourRule: SportHourRule = SportHourRule.Standard
+    var appLanguage by mutableStateOf(
+        localStore?.loadAppLanguage() ?: AppLanguage.Chinese
+    )
+        private set
+
+    /** Teacher-configured targets returned in the latest student workspace. */
+    val hourRule: SportHourRule
+        get() = workspace.hourRule
+
+    /** Entry point for the future time-window API response. */
+    fun updateCheckInTimeWindow(window: CheckInTimeWindow) {
+        workspace = workspace.copy(checkInTimeWindow = window)
+    }
+
+    /** Reloads the policy whenever the student opens the check-in page. */
+    fun refreshCheckInTimeWindow() {
+        val repository = apiRepository ?: return
+        val generation = sessionGeneration
+        updateCheckInTimeWindow(CheckInTimeWindow.unavailable())
+        launchSessionRequest {
+            try {
+                val window = repository.fetchCheckInTimeWindow()
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                updateCheckInTimeWindow(window)
+                saveWorkspaceNow(event = "check-in policy refreshed", expectedGeneration = generation)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                if (isUnauthorized(e)) {
+                    expireSession(
+                        interfaceText("登录已过期，请重新登录", "Your sign-in has expired. Sign in again.")
+                    )
+                } else if (isContactBindingRequired(e)) {
+                    forceContactActivation()
+                } else {
+                    lastError = interfaceText(
+                        "无法加载最新打卡规则，请检查网络后重试",
+                        "Couldn't load the latest check-in rules. Check your connection and try again."
+                    )
+                }
+            }
+        }
+    }
+
+    /** Startup-health integration seam. Kept public so future periodic checks can reuse it. */
+    fun updateSystemMode(status: SystemModeStatus) {
+        systemModeStatus = status
+    }
 
     fun updateThemeMode(mode: AppThemeMode) {
         themeMode = mode
         persist(event = "save theme mode", expectedGeneration = null) {
             saveThemeMode(mode)
         }
+    }
+
+    fun updateAppLanguage(language: AppLanguage): Boolean {
+        if (language == appLanguage) return true
+        // Persist before exposing the new selection. Otherwise a failed write
+        // would make Settings disagree with the locale used at the next start.
+        if (localStore?.saveAppLanguage(language) != true) {
+            lastError = interfaceText(
+                "无法保存界面语言，请重试。",
+                "Couldn't save the interface language. Try again."
+            )
+            return false
+        }
+        appLanguage = AppLanguagePreferences.currentLanguage
+        // Errors are presentation copy. The Activity is recreated for the new locale, so do not
+        // carry a previously translated transient message into the rebuilt UI.
+        lastError = null
+        val repository = apiRepository ?: return true
+        launchAuthenticatedRequest {
+            try {
+                repository.updateLanguagePreference(language)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (isUnauthorized(e)) {
+                    expireSession(
+                        interfaceText("登录已过期，请重新登录", "Your sign-in has expired. Sign in again.")
+                    )
+                } else {
+                    lastError = interfaceText(
+                        "界面语言已更新，但未能同步邮件语言偏好，请稍后重试",
+                        "The interface language was updated, but the email-language preference could not be synced. Try again later."
+                    )
+                }
+            }
+        }
+        return true
     }
 
     // ── API repository (set after successful login) ───────────────
@@ -171,17 +313,6 @@ class StudentAppState(
         }
         lastSyncTimestamp = loaded.lastSyncTimestamp
 
-        val savedDraft = loaded.draft
-        if (
-            savedDraft != null &&
-            (savedDraft.taskId == "self-general" || workspace.tasks.any { it.id == savedDraft.taskId && it.status == TaskStatus.Active })
-        ) {
-            draft = savedDraft
-        } else if (savedDraft != null) {
-            persistUnit(event = "clear invalid saved draft") {
-                this.clearDraft()
-            }
-        }
         return loaded
     }
 
@@ -216,23 +347,56 @@ class StudentAppState(
         workspace.notices.filter { it.isStudentVisible }
     }
 
-    val activeTasks by derivedStateOf {
-        workspace.tasks.filter { it.status == TaskStatus.Active }
+    val hasActiveEnrollment: Boolean
+        get() = workspace.courses.any { it.isCurrent && it.enrollmentStatus == "enrolled" }
+
+    val hasOpenCurrentCourse: Boolean
+        get() = workspace.courses.any {
+            it.isCurrent && it.enrollmentStatus == "enrolled" && it.isOpenForCheckIn
+        }
+
+    val hasPendingJoinRequest: Boolean
+        get() = workspace.courseJoinRequest?.status?.let { it != JoinRequestStatus.ACTIVE } == true
+
+    /** Whether this student can start a new course request for the current semester. */
+    val canStartNewCourseJoin: Boolean
+        get() = workspace.canStartNewCourseJoin()
+
+    /**
+     * Compares the server's authoritative academic year with the workspace
+     * snapshot saved on this device. Blank values never trigger a reset: they
+     * mean the backend has not supplied enough information yet.
+     */
+    fun detectNewSemester(serverAcademicYear: String): Boolean {
+        val cachedAcademicYear = localStore?.loadCachedAcademicYear().orEmpty()
+        return hasAcademicYearChanged(cachedAcademicYear, serverAcademicYear)
     }
 
-    val selfCheckInTask = CourseTask(
-        id = "self-general",
-        courseId = "self-general",
-        creditType = CreditType.General,
-        title = "自主运动打卡",
-        hours = hourRule.dailyLimit,
-        deadline = "",
-        proof = ProofUploadRule.summaryText,
-        status = TaskStatus.Active,
-        updatedAt = ""
-    )
+    fun dismissNewSemesterWelcome() {
+        newSemesterWelcomeAcademicYear = null
+    }
 
-    // ── Auth (real API login only — no demo path) ─────────────────
+    // ── Authentication ────────────────────────────────────────────
+
+    /**
+     * Opens a complete local Mock-user session. This deliberately does not
+     * create a token or pretend to be a backend login, so restarting the app
+     * returns to the login screen and keeps the mock shortcut explicit.
+     */
+    fun loginMockUser() {
+        if (isLoading) return
+        beginSessionGeneration()
+        localSessionInvalidated = false
+        apiRepository = null
+        isUsingMockUser = true
+        workspace = MockStudentWorkspace.create()
+        isPreparingActivatedWorkspace = false
+        contactActivationLoadError = null
+        isAuthenticated = true
+        isShowingCachedData = false
+        lastError = null
+        saveWorkspace(event = "Mock 用户数据已加载")
+    }
 
     /**
      * Log in via the backend API. Returns true on success.
@@ -244,11 +408,12 @@ class StudentAppState(
     fun login(account: String, password: String, onResult: (Boolean) -> Unit = {}) {
         if (isLoading) return
         if (account.isBlank() || password.isBlank()) {
-            lastError = "请输入账号和密码"
+            lastError = interfaceText("请输入账号和密码", "Enter your account and password.")
             return
         }
         isLoading = true
         lastError = null
+        isUsingMockUser = false
         val generation = beginSessionGeneration()
 
         launchSessionRequest {
@@ -258,25 +423,55 @@ class StudentAppState(
                 val response = repo.login(StudentLoginRequest(account = account, password = password))
                 val client = StudentApiClient().withToken(response.token)
                 val apiRepo = ApiStudentRepository(apiClient = client, userProfile = response.user)
-
-                // Do not expose or persist a half-initialized session. Login is
-                // considered complete only after the required workspace calls succeed.
-                val remoteWorkspace = apiRepo.loadWorkspaceAsync()
-                if (!isCurrentSession(generation)) return@launchSessionRequest
+                val isPendingContactActivation = AccountStatus.from(response.user.accountStatus) ==
+                    AccountStatus.PENDING_CONTACT_BINDING
 
                 awaitPendingSessionClear()
                 if (!isCurrentSession(generation)) return@launchSessionRequest
                 localSessionInvalidated = false
+
+                // A pending account is an intentionally minimal session. Never load
+                // or surface an old workspace before the server confirms activation.
+                if (isPendingContactActivation) {
+                    val sessionSaved = withLocalStoreOnIo(
+                        event = "save pending contact-activation session",
+                        expectedGeneration = generation
+                    ) {
+                        clearWorkspaceCache() &&
+                            saveAuthToken(response.token) &&
+                            saveUserProfile(gson.toJson(response.user))
+                    }
+                    if (!isCurrentSession(generation)) return@launchSessionRequest
+                    if (sessionSaved == false) {
+                        android.util.Log.w("StudentAppState", "save pending contact-activation session failed")
+                    }
+                    apiRepository = apiRepo
+                    contactStatus = response.user.contacts
+                    workspace = activationWorkspace(response.user)
+                    isPreparingActivatedWorkspace = false
+                    contactActivationLoadError = null
+                    isAuthenticated = true
+                    isShowingCachedData = false
+                    lastSyncTimestamp = null
+                    onResult(true)
+                    return@launchSessionRequest
+                }
+
+                // Active accounts may now hydrate the full workspace.
+                val remoteWorkspace = apiRepo.loadWorkspaceAsync()
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                val isNewSemester = detectNewSemester(remoteWorkspace.student.currentAcademicYear)
                 val now = currentSyncTimestamp()
                 val sessionSaved = withLocalStoreOnIo(
                     event = "save authenticated session",
                     expectedGeneration = generation
                 ) {
+                    val workspaceCacheCleared = !isNewSemester || clearWorkspaceCache()
                     val tokenSaved = saveAuthToken(response.token)
                     val profileSaved = saveUserProfile(gson.toJson(response.user))
                     val workspaceSaved = saveWorkspace(remoteWorkspace)
                     val syncTimeSaved = saveLastSyncTime(now)
-                    tokenSaved && profileSaved && workspaceSaved && syncTimeSaved
+                    workspaceCacheCleared && tokenSaved && profileSaved && workspaceSaved && syncTimeSaved
                 }
                 if (!isCurrentSession(generation)) return@launchSessionRequest
                 if (sessionSaved == false) {
@@ -284,10 +479,15 @@ class StudentAppState(
                 }
 
                 apiRepository = apiRepo
+                contactStatus = response.user.contacts
                 workspace = remoteWorkspace
+                isPreparingActivatedWorkspace = false
+                contactActivationLoadError = null
+                showNewSemesterWelcomeIfNeeded(isNewSemester, remoteWorkspace)
                 isAuthenticated = true
                 isShowingCachedData = false
                 lastSyncTimestamp = now
+                syncPushToken(client)
                 onResult(true)
             } catch (e: CancellationException) {
                 throw e
@@ -312,8 +512,8 @@ class StudentAppState(
      * Try to restore a previous session using a saved bearer token.
      * Called on app start before showing login screen.
      *
-     * On network error: keeps the cached workspace and sets [isShowingCachedData]
-     * so the UI can show a stale-data banner. Does NOT clear auth.
+     * On network error: keeps credentials only. A workspace is never restored
+     * from cache until the server has confirmed the account is ACTIVE.
      * On auth error (401/403): clears stale auth data, shows login.
      *
      * @return true if the session was restored successfully (fresh data from API).
@@ -326,6 +526,7 @@ class StudentAppState(
         if (isLoading) return
         isLoading = true
         lastError = null
+        isUsingMockUser = false
         val generation = beginSessionGeneration()
         launchSessionRequest {
             try {
@@ -342,11 +543,44 @@ class StudentAppState(
                 val client = StudentApiClient().withToken(savedToken)
                 val apiRepo = ApiStudentRepository(apiClient = client, userProfile = user)
                 apiRepository = apiRepo
+                // The profile endpoint is deliberately part of the narrow
+                // pending-account allowlist. It is the authority on every
+                // restore; a cached workspace must never unlock a pending user.
+                val profile = apiRepo.fetchProfile()
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                val currentUser = user.withProfile(profile)
+                contactStatus = profile.contacts
+                if (AccountStatus.from(profile.accountStatus) == AccountStatus.PENDING_CONTACT_BINDING) {
+                    clearWorkspaceCacheNow(expectedGeneration = generation)
+                    if (!isCurrentSession(generation)) return@launchSessionRequest
+                    workspace = activationWorkspace(currentUser)
+                    isPreparingActivatedWorkspace = false
+                    contactActivationLoadError = null
+                    isAuthenticated = true
+                    isShowingCachedData = false
+                    withLocalStoreOnIo(
+                        event = "refresh pending contact-activation profile",
+                        expectedGeneration = generation
+                    ) {
+                        saveUserProfile(gson.toJson(currentUser))
+                    }
+                    onResult(true)
+                    return@launchSessionRequest
+                }
                 val remoteWorkspace = apiRepo.loadWorkspaceAsync()
                 if (!isCurrentSession(generation)) return@launchSessionRequest
+                val isNewSemester = detectNewSemester(remoteWorkspace.student.currentAcademicYear)
+                if (isNewSemester) {
+                    clearWorkspaceCacheNow(expectedGeneration = generation)
+                    if (!isCurrentSession(generation)) return@launchSessionRequest
+                }
                 workspace = remoteWorkspace
+                isPreparingActivatedWorkspace = false
+                contactActivationLoadError = null
+                showNewSemesterWelcomeIfNeeded(isNewSemester, remoteWorkspace)
                 isAuthenticated = true
                 isShowingCachedData = false
+                syncPushToken(client)
                 saveWorkspaceNow(event = "会话已恢复", expectedGeneration = generation)
                 if (!isCurrentSession(generation)) return@launchSessionRequest
                 onResult(true)
@@ -360,14 +594,19 @@ class StudentAppState(
                     onResult(false)
                 } else {
                     // Network error — enter offline mode only when usable cache exists.
-                    val hasCachedWorkspace = hasUsableCachedWorkspace()
+                    // Never unlock a workspace from a local snapshot: the
+                    // server profile above is the activation authority.
+                    val hasCachedWorkspace = false
                     isShowingCachedData = hasCachedWorkspace
                     isAuthenticated = hasCachedWorkspace
-                    if (!hasCachedWorkspace) apiRepository = null
+                    if (!hasCachedWorkspace) {
+                        apiRepository = null
+                        workspace = StudentWorkspace.empty()
+                    }
                     lastError = if (hasCachedWorkspace) {
-                        "无法连接服务器，显示缓存数据"
+                        interfaceText("无法连接服务器，显示缓存数据", "Could not connect to the server. Cached data is shown.")
                     } else {
-                        "无法连接服务器，请检查网络后重试"
+                        interfaceText("无法连接服务器，请检查网络后重试", "Could not connect to the server. Check your connection and try again.")
                     }
                     onResult(hasCachedWorkspace)
                 }
@@ -391,7 +630,13 @@ class StudentAppState(
             try {
                 val refreshedWorkspace = apiRepo.loadWorkspaceAsync()
                 if (!isCurrentSession(generation)) return@launchSessionRequest
+                val isNewSemester = detectNewSemester(refreshedWorkspace.student.currentAcademicYear)
+                if (isNewSemester) {
+                    clearWorkspaceCacheNow(expectedGeneration = generation)
+                    if (!isCurrentSession(generation)) return@launchSessionRequest
+                }
                 workspace = refreshedWorkspace
+                showNewSemesterWelcomeIfNeeded(isNewSemester, refreshedWorkspace)
                 isShowingCachedData = false
                 saveWorkspaceNow(event = "工作台已刷新", expectedGeneration = generation)
             } catch (e: CancellationException) {
@@ -399,7 +644,11 @@ class StudentAppState(
             } catch (e: Exception) {
                 if (!isCurrentSession(generation)) return@launchSessionRequest
                 if (isUnauthorized(e)) {
-                    expireSession("登录已过期，请重新登录")
+                    expireSession(
+                        interfaceText("登录已过期，请重新登录", "Your sign-in has expired. Sign in again.")
+                    )
+                } else if (isContactBindingRequired(e)) {
+                    forceContactActivation()
                 } else {
                     isShowingCachedData = hasUsableCachedWorkspace()
                     lastError = errorMessage(e)
@@ -412,6 +661,135 @@ class StudentAppState(
 
     fun refreshWorkspace() {
         retryLoadWorkspace()
+    }
+
+    /** Reflect a successful correction submission until the next server workspace refresh. */
+    fun markCourseJoinRequestResubmitted(requestId: String) {
+        if (!allowWrite("markCourseJoinRequestResubmitted")) return
+        val request = workspace.courseJoinRequest?.takeIf { it.id == requestId } ?: return
+        workspace = workspace.copy(
+            courseJoinRequest = request.copy(
+                status = JoinRequestStatus.PENDING,
+                reviewComment = "",
+                submittedAt = currentSyncTimestamp(),
+                reviewedAt = null
+            )
+        )
+        saveWorkspace(event = "课程加入申请已重新提交")
+    }
+
+    /** Stores the optimistic PENDING state after the join-request endpoint accepts a submission. */
+    fun recordCourseJoinRequestSubmitted(
+        inviteCode: String,
+        courseName: String,
+        courseCode: String,
+        section: String,
+        teacherName: String,
+        semester: String,
+        studentName: String,
+        studentNumber: String,
+        email: String
+    ) {
+        if (!allowWrite("recordCourseJoinRequestSubmitted")) return
+        workspace = workspace.copy(
+            courseJoinRequest = edu.bnbu.student.mvp.core.model.CourseJoinRequest(
+                id = "local-$inviteCode",
+                inviteCode = inviteCode,
+                courseName = courseName,
+                courseCode = courseCode,
+                section = section,
+                teacherName = teacherName,
+                semester = semester,
+                studentName = studentName,
+                studentNumber = studentNumber,
+                email = email,
+                status = JoinRequestStatus.PENDING,
+                reviewComment = "",
+                submittedAt = currentSyncTimestamp(),
+                reviewedAt = null
+            )
+        )
+        saveWorkspace(event = "课程加入申请已提交")
+    }
+
+    fun sendEmailContactBindingCode(email: String, onResult: (Result<Unit>) -> Unit) {
+        if (!allowWrite("sendEmailContactBindingCode", onResult)) return
+        runContactBindingRequest(onResult) { sendEmailContactCode(email) }
+    }
+
+    fun verifyEmailContactBindingCode(
+        email: String,
+        code: String,
+        onResult: (Result<Unit>) -> Unit
+    ) {
+        if (!allowWrite("verifyEmailContactBindingCode", onResult)) return
+        runContactVerificationRequest(onResult) {
+            verifyEmailContactCode(email, code)
+        }
+    }
+
+    fun sendPhoneContactBindingCode(phone: String, onResult: (Result<Unit>) -> Unit) {
+        if (!allowWrite("sendPhoneContactBindingCode", onResult)) return
+        runContactBindingRequest(onResult) { sendPhoneContactCode(phone) }
+    }
+
+    fun verifyPhoneContactBindingCode(
+        phone: String,
+        code: String,
+        onResult: (Result<Unit>) -> Unit
+    ) {
+        if (!allowWrite("verifyPhoneContactBindingCode", onResult)) return
+        runContactVerificationRequest(onResult) {
+            verifyPhoneContactCode(phone, code)
+        }
+    }
+
+    /** Retries only the post-verification workspace hydration, never the consumed code. */
+    fun retryContactActivationWorkspace() {
+        val repository = apiRepository ?: return
+        if (!isAuthenticated || !requiresContactBinding || isPreparingActivatedWorkspace) return
+        val generation = sessionGeneration
+        isPreparingActivatedWorkspace = true
+        contactActivationLoadError = null
+        val job = launchAuthenticatedRequest {
+            try {
+                val profile = repository.fetchProfile()
+                if (!isCurrentSession(generation)) return@launchAuthenticatedRequest
+                contactStatus = profile.contacts
+                if (AccountStatus.from(profile.accountStatus) != AccountStatus.ACTIVE) {
+                    applyContactProfile(profile)
+                    contactActivationLoadError = interfaceText(
+                        "联系方式验证尚未生效，请稍后再试。",
+                        "Contact verification is not active yet. Try again shortly."
+                    )
+                    return@launchAuthenticatedRequest
+                }
+                hydrateActivatedWorkspace(repository, profile, generation)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (!isCurrentSession(generation)) return@launchAuthenticatedRequest
+                if (isUnauthorized(error)) {
+                    expireSession(
+                        interfaceText("登录已过期，请重新登录", "Your sign-in has expired. Sign in again.")
+                    )
+                } else if (isContactBindingRequired(error)) {
+                    forceContactActivation()
+                    contactActivationLoadError = errorMessage(error)
+                } else {
+                    contactActivationLoadError = errorMessage(error)
+                }
+            } finally {
+                if (isCurrentSession(generation)) isPreparingActivatedWorkspace = false
+            }
+        }
+        if (job == null) {
+            isPreparingActivatedWorkspace = false
+            contactActivationLoadError = interfaceText(
+                "登录状态已失效，请重新登录。",
+                "Your sign-in session is no longer valid. Sign in again."
+            )
+        }
     }
 
     fun clearError() {
@@ -436,6 +814,18 @@ class StudentAppState(
     }
 
     fun logout() {
+        val pushClient = if (requiresContactBinding) {
+            null
+        } else {
+            apiRepository?.bearerToken
+                ?.takeIf { it.isNotBlank() }
+                ?.let { StudentApiClient().withToken(it) }
+        }
+        val context = ApiStudentRepository.androidAppContext()
+        if (pushClient != null && context != null) {
+            // Best effort: logout must still complete if FCM or the network is unavailable.
+            scope.launch(Dispatchers.IO) { FcmPushRegistrar.unregisterCurrentDevice(context, pushClient) }
+        }
         invalidateSessionGeneration()
         localSessionInvalidated = true
         try {
@@ -445,17 +835,23 @@ class StudentAppState(
         }
         scheduleFinalSessionClear("clear local data on logout")
         isAuthenticated = false
+        isUsingMockUser = false
         apiRepository = null
         lastError = null
         isLoading = false
         workspace = StudentWorkspace.empty()
-        draft = null
+        contactStatus = ContactStatusResponse()
+        isPreparingActivatedWorkspace = false
+        contactActivationLoadError = null
     }
 
     fun handleUnauthorized() {
         if (!isAuthenticated) return
         logout()
-        lastError = "登录已过期，请重新登录"
+        lastError = interfaceText(
+            "登录已过期，请重新登录",
+            "Your sign-in has expired. Sign in again."
+        )
     }
 
     /**
@@ -467,10 +863,6 @@ class StudentAppState(
     }
 
     // ── Query ─────────────────────────────────────────────────────
-
-    fun tasksFor(course: Course): List<CourseTask> {
-        return workspace.tasks.filter { it.courseId == course.id }
-    }
 
     fun recordsFor(course: Course): List<CheckInRecord> {
         return workspace.records.filter {
@@ -485,7 +877,10 @@ class StudentAppState(
         if (!notice.isUnread) return
 
         val repo = apiRepository ?: run {
-            lastError = "当前处于离线状态，连接服务器后再标记已读"
+            lastError = interfaceText(
+                "当前处于离线状态，连接服务器后再标记已读",
+                "You're offline. Connect to the server before marking notifications as read."
+            )
             return
         }
         val generation = sessionGeneration
@@ -500,14 +895,16 @@ class StudentAppState(
                 )
                 enqueueSyncOperation(
                     type = SyncOperationType.MarkNoticeRead,
-                    title = "标记通知已读",
+                    title = interfaceText("标记通知已读", "Mark notification as read"),
                     detail = notice.title,
                     status = SyncOperationStatus.Synced
                 )
                 saveWorkspace(event = "通知已读状态已同步")
             }.onFailure { error ->
                 if (isUnauthorized(error)) {
-                    expireSession("登录已过期，请重新登录")
+                    expireSession(
+                        interfaceText("登录已过期，请重新登录", "Your sign-in has expired. Sign in again.")
+                    )
                 } else {
                     lastError = errorMessage(error.asException())
                 }
@@ -523,7 +920,10 @@ class StudentAppState(
         val previouslyUnreadIds = visibleNotices.filter { it.isUnread }.map { it.id }
 
         val repo = apiRepository ?: run {
-            lastError = "当前处于离线状态，连接服务器后再标记已读"
+            lastError = interfaceText(
+                "当前处于离线状态，连接服务器后再标记已读",
+                "You're offline. Connect to the server before marking notifications as read."
+            )
             return
         }
         val generation = sessionGeneration
@@ -546,8 +946,11 @@ class StudentAppState(
                 )
                 enqueueSyncOperation(
                     type = SyncOperationType.MarkNoticeRead,
-                    title = "批量标记通知已读",
-                    detail = "${syncedIds.size} 条通知已同步",
+                    title = interfaceText("批量标记通知已读", "Mark notifications as read"),
+                    detail = interfaceText(
+                        "${syncedIds.size} 条通知已同步",
+                        "${syncedIds.size} notifications synced"
+                    ),
                     status = SyncOperationStatus.Synced
                 )
                 saveWorkspace(event = "批量通知已读已同步")
@@ -555,12 +958,17 @@ class StudentAppState(
 
             firstError?.let { error ->
                 if (isUnauthorized(error)) {
-                    expireSession("登录已过期，请重新登录")
+                    expireSession(
+                        interfaceText("登录已过期，请重新登录", "Your sign-in has expired. Sign in again.")
+                    )
                 } else {
                     lastError = if (syncedIds.isEmpty()) {
                         errorMessage(error.asException())
                     } else {
-                        "部分通知同步失败，请重试"
+                        interfaceText(
+                            "部分通知同步失败，请重试",
+                            "Some notifications could not be synced. Try again."
+                        )
                     }
                 }
             }
@@ -569,52 +977,135 @@ class StudentAppState(
 
     // ── Check-in submission ───────────────────────────────────────
 
-    fun submitCheckIn(
-        task: CourseTask,
+    fun submitExerciseCheckIn(
+        creditType: CreditType,
         hours: Double,
+        startedAtEpochMillis: Long,
+        endedAtEpochMillis: Long,
+        actualDurationSeconds: Long,
         note: String,
+        remark: String,
         sportType: String?,
         proofAttachments: List<ProofAttachment>,
         onResult: (Result<Unit>) -> Unit = {}
     ) {
+        if (!allowWrite("submitCheckIn", onResult)) return
         if (isLoading) {
-            failSubmission("submitCheckIn", "正在处理上一项请求，请稍候", onResult)
+            failSubmission("submitExerciseCheckIn", interfaceText("正在处理上一项请求，请稍候", "The previous request is still being processed. Please wait."), onResult)
             return
         }
         if (hasSubmittedCheckInToday()) {
-            failSubmission("submitCheckIn", "今日已打卡，每天只能提交一次", onResult)
+            failSubmission("submitExerciseCheckIn", interfaceText("今日已打卡，每天只能提交一次", "You have already checked in today. Only one submission is allowed per day."), onResult)
             return
         }
-        if (task.status != TaskStatus.Active) {
-            failSubmission("submitCheckIn", "当前任务不可提交", onResult)
+        val normalizedDescription = note.trim()
+        val normalizedRemark = remark.trim()
+        if (creditType == CreditType.General && normalizedDescription.isBlank()) {
+            failSubmission("submitExerciseCheckIn", interfaceText("请填写运动说明", "Enter exercise details."), onResult)
             return
         }
-        if (note.length > 2_000) {
-            failSubmission("submitCheckIn", "补充说明不能超过 2000 个字符", onResult)
+        if (
+            creditType == CreditType.General &&
+            normalizedDescription.length > MaxOtherExerciseDescriptionLength
+        ) {
+            failSubmission(
+                "submitExerciseCheckIn",
+                interfaceText("运动说明不能超过 $MaxOtherExerciseDescriptionLength 个字符", "Exercise details cannot exceed $MaxOtherExerciseDescriptionLength characters."),
+                onResult
+            )
+            return
+        }
+        if (normalizedRemark.length > MaxOtherExerciseDescriptionLength) {
+            failSubmission(
+                "submitExerciseCheckIn",
+                interfaceText("备注不能超过 $MaxOtherExerciseDescriptionLength 个字符", "Notes cannot exceed $MaxOtherExerciseDescriptionLength characters."),
+                onResult
+            )
             return
         }
         if (sportType != null && sportType.length > 100) {
-            failSubmission("submitCheckIn", "运动项目不能超过 100 个字符", onResult)
+            failSubmission("submitExerciseCheckIn", interfaceText("运动项目不能超过 100 个字符", "Exercise type cannot exceed 100 characters."), onResult)
             return
         }
         if (proofAttachments.isEmpty()) {
-            failSubmission("submitCheckIn", "至少需要添加 1 个凭证", onResult)
+            failSubmission("submitExerciseCheckIn", interfaceText("至少需要添加 1 个凭证", "Add at least one proof item."), onResult)
             return
         }
         if (proofAttachments.any { !it.isValidForUpload }) {
-            failSubmission("submitCheckIn", "凭证包含无效文件", onResult)
+            failSubmission("submitExerciseCheckIn", interfaceText("凭证包含无效文件", "Proof contains an invalid file."), onResult)
             return
         }
         ProofUploadRule.limitMessage(proofAttachments)?.let { message ->
-            failSubmission("submitCheckIn", message, onResult)
+            failSubmission("submitExerciseCheckIn", message, onResult)
+            return
+        }
+
+        val associatedCourseId = if (creditType == CreditType.CourseRelated) {
+            workspace.courses.firstOrNull {
+                it.isCurrent && it.enrollmentStatus == "enrolled"
+            }?.id
+        } else {
+            null
+        }
+        if (creditType == CreditType.CourseRelated && associatedCourseId == null) {
+            failSubmission(
+                "submitExerciseCheckIn",
+                interfaceText("未找到当前课程，无法提交课程相关打卡", "The current course was not found, so a course-related check-in cannot be submitted."),
+                onResult
+            )
+            return
+        }
+
+        val submittedHours = normalizedCheckInHours(hours)
+        // Course-related check-ins do not collect or submit an exercise description.
+        val submittedDescription = if (creditType == CreditType.General) normalizedDescription else ""
+        if (isUsingMockUser) {
+            val submittedAt = Instant.ofEpochMilli(endedAtEpochMillis).toString()
+            val record = CheckInRecord(
+                id = "mock-${UUID.randomUUID()}",
+                courseId = associatedCourseId,
+                taskTitle = interfaceText("运动打卡", "Exercise check-in"),
+                creditType = creditType,
+                hours = submittedHours,
+                submittedAt = submittedAt,
+                proofSummary = proofSummary(proofAttachments),
+                proofPhotoCount = proofAttachments.count { it.type == ProofMediaType.Image },
+                proofVideoCount = proofAttachments.count { it.type == ProofMediaType.Video },
+                proofFiles = proofAttachments,
+                teacherPublicFeedback = null,
+                teacherInternalNote = null,
+                note = submittedDescription,
+                remark = normalizedRemark,
+                sportType = sportType,
+                startTime = Instant.ofEpochMilli(startedAtEpochMillis).toString(),
+                endTime = submittedAt,
+                actualDurationSeconds = actualDurationSeconds
+            )
+            workspace = workspace.copy(
+                records = listOf(record) + workspace.records,
+                progress = workspace.progress.withRecordedCheckIn(
+                    creditType = creditType,
+                    hours = submittedHours
+                )
+            )
+            enqueueSyncOperation(
+                type = SyncOperationType.SubmitRecord,
+                title = interfaceText("提交打卡记录", "Submit check-in record"),
+                detail = interfaceText(
+                    "Mock 本地记录 · ${creditType.label} · ${submittedHours.hourText()}",
+                    "Mock local record · ${creditType.label} · ${submittedHours.hourText()}"
+                ),
+                status = SyncOperationStatus.LocalOnly
+            )
+            saveWorkspace(event = "Mock 打卡记录已保存")
+            onResult(Result.success(Unit))
             return
         }
 
         val repo = apiRepository ?: run {
-            failSubmission("submitCheckIn", "尚未连接服务器，请重新登录", onResult)
+            failSubmission("submitExerciseCheckIn", interfaceText("尚未连接服务器，请重新登录", "The server is not connected. Sign in again."), onResult)
             return
         }
-        val submittedHours = normalizedHours(hours, task)
         isLoading = true
         lastError = null
         val generation = sessionGeneration
@@ -627,7 +1118,7 @@ class StudentAppState(
                 ).getOrThrow()
                 if (!isCurrentSession(generation)) return@launchSessionRequest
                 check(uploadedFiles.size == proofAttachments.size) {
-                    "部分凭证上传失败，请重新选择后再试"
+                    interfaceText("部分凭证上传失败，请重新选择后再试", "Some proof files could not be uploaded. Select them again and retry.")
                 }
                 val proofFiles = uploadedFiles.map { uploaded ->
                     ProofFileReference(
@@ -638,13 +1129,16 @@ class StudentAppState(
                     )
                 }
                 val payload = SubmitSportRecordRequest(
-                    creditType = task.creditType.label,
-                    courseId = if (task.courseId == "self-general") null else task.courseId,
-                    taskId = task.id.takeUnless { it == "self-general" },
+                    creditType = creditType.label,
+                    courseId = associatedCourseId,
                     hours = submittedHours,
-                    description = note,
+                    description = submittedDescription,
+                    remark = normalizedRemark,
                     proofFiles = proofFiles,
-                    sportType = sportType
+                    sportType = sportType,
+                    startTime = Instant.ofEpochMilli(startedAtEpochMillis).toString(),
+                    endTime = Instant.ofEpochMilli(endedAtEpochMillis).toString(),
+                    actualDurationSeconds = actualDurationSeconds
                 )
                 val response = repo.submitRecord(payload).getOrThrow()
                 if (!isCurrentSession(generation)) return@launchSessionRequest
@@ -659,42 +1153,57 @@ class StudentAppState(
                 }
                 val record = CheckInRecord(
                     id = response.id,
-                    courseId = if (task.courseId == "self-general") null else task.courseId,
-                    taskTitle = task.title,
-                    creditType = task.creditType,
+                    courseId = associatedCourseId,
+                    taskTitle = interfaceText("运动打卡", "Exercise check-in"),
+                    creditType = creditType,
                     hours = submittedHours,
                     submittedAt = response.submittedAt,
-                    status = ReviewStatus.Pending,
                     proofSummary = proofSummary(serverProofs),
                     proofPhotoCount = serverProofs.count { it.type == ProofMediaType.Image },
                     proofVideoCount = serverProofs.count { it.type == ProofMediaType.Video },
                     proofFiles = serverProofs,
-                    teacherFeedback = "已提交，等待老师审核。",
-                    note = note.ifBlank { "学生未填写补充说明。" },
+                    teacherPublicFeedback = null,
+                    teacherInternalNote = null,
+                    note = submittedDescription,
+                    remark = normalizedRemark,
                     sportType = sportType,
-                    aiReviewStatus = AiReviewStatus.Pending,
-                    aiReviewMessage = "凭证已进入 AI 初审队列。"
+                    startTime = payload.startTime,
+                    endTime = payload.endTime,
+                    actualDurationSeconds = payload.actualDurationSeconds
                 )
                 workspace = workspace.copy(
-                    records = listOf(record) + workspace.records
+                    records = listOf(record) + workspace.records,
+                    // The dashboard renders this snapshot. Update it together
+                    // with the record so the submitted duration is visible
+                    // immediately, rather than waiting for a later refresh.
+                    progress = workspace.progress.withRecordedCheckIn(
+                        creditType = creditType,
+                        hours = submittedHours
+                    )
                 )
                 enqueueSyncOperation(
                     type = SyncOperationType.SubmitRecord,
-                    title = "提交打卡记录",
-                    detail = "${task.title} · ${submittedHours.hourText()} · ${serverProofs.size} 个凭证",
+                    title = interfaceText("提交打卡记录", "Submit check-in record"),
+                    detail = interfaceText(
+                        "${creditType.label} · ${submittedHours.hourText()} · ${serverProofs.size} 个凭证",
+                        "${creditType.label} · ${submittedHours.hourText()} · ${serverProofs.size} proof items"
+                    ),
                     status = SyncOperationStatus.Synced
                 )
-                clearDraft()
                 saveWorkspace(event = "打卡提交已同步")
                 onResult(Result.success(Unit))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 if (!isCurrentSession(generation)) return@launchSessionRequest
-                android.util.Log.e("StudentAppState", "submitCheckIn API failed", e)
+                android.util.Log.e("StudentAppState", "submitExerciseCheckIn API failed", e)
                 if (isUnauthorized(e)) {
-                    expireSession("登录已过期，请重新登录")
-                    onResult(Result.failure(IllegalStateException("登录已过期，请重新登录", e)))
+                    val message = interfaceText(
+                        "登录已过期，请重新登录",
+                        "Your sign-in has expired. Sign in again."
+                    )
+                    expireSession(message)
+                    onResult(Result.failure(IllegalStateException(message, e)))
                 } else {
                     val message = errorMessage(e)
                     lastError = message
@@ -704,179 +1213,6 @@ class StudentAppState(
                 if (isCurrentSession(generation)) isLoading = false
             }
         }
-    }
-
-    fun submitSupplement(
-        record: CheckInRecord,
-        hours: Double,
-        note: String,
-        proofAttachments: List<ProofAttachment>,
-        onResult: (Result<Unit>) -> Unit = {}
-    ) {
-        if (isLoading) {
-            failSubmission("submitSupplement", "正在处理上一项请求，请稍候", onResult)
-            return
-        }
-        if (record.status != ReviewStatus.Supplement && record.status != ReviewStatus.Rejected) {
-            failSubmission("submitSupplement", "记录状态不允许补交", onResult)
-            return
-        }
-        if (note.length > 2_000) {
-            failSubmission("submitSupplement", "补充说明不能超过 2000 个字符", onResult)
-            return
-        }
-        if (proofAttachments.isEmpty()) {
-            failSubmission("submitSupplement", "至少需要添加 1 个凭证", onResult)
-            return
-        }
-        if (proofAttachments.any { !it.isValidForUpload }) {
-            failSubmission("submitSupplement", "凭证包含无效文件", onResult)
-            return
-        }
-
-        val index = workspace.records.indexOfFirst { it.id == record.id }
-        if (index < 0) return
-        val mergedProofs = workspace.records[index].proofFiles + proofAttachments
-        ProofUploadRule.limitMessage(mergedProofs)?.let { message ->
-            failSubmission("submitSupplement", message, onResult)
-            return
-        }
-
-        val repo = apiRepository ?: run {
-            failSubmission("submitSupplement", "尚未连接服务器，请重新登录", onResult)
-            return
-        }
-        val supplementMaxHours = minOf(record.hours, hourRule.dailyLimit)
-        val submittedHours = if (hours >= 2.0 && supplementMaxHours >= 2.0) 2.0 else 1.0
-        isLoading = true
-        lastError = null
-        val generation = sessionGeneration
-        launchSessionRequest {
-            try {
-                val cDir = cacheDir ?: File(System.getProperty("java.io.tmpdir") ?: "/tmp")
-                val uploadedFiles = repo.uploadProofFiles(
-                    proofAttachments = proofAttachments,
-                    cacheDir = cDir
-                ).getOrThrow()
-                if (!isCurrentSession(generation)) return@launchSessionRequest
-                check(uploadedFiles.size == proofAttachments.size) {
-                    "部分凭证上传失败，请重新选择后再试"
-                }
-                val proofFiles = uploadedFiles.map { uploaded ->
-                    ProofFileReference(
-                        cosKey = uploaded.cosKey,
-                        mediaType = uploaded.mediaType,
-                        mimeType = uploaded.mimeType,
-                        size = uploaded.size
-                    )
-                }
-                val payload = SupplementSportRecordRequest(
-                    hours = submittedHours,
-                    description = note,
-                    proofFiles = proofFiles
-                )
-                repo.supplementRecord(record.id, payload).getOrThrow()
-                if (!isCurrentSession(generation)) return@launchSessionRequest
-                val serverProofs = uploadedFiles.map { uploaded ->
-                    ProofAttachment(
-                        id = uploaded.cosKey,
-                        type = if (uploaded.mediaType == "video") ProofMediaType.Video else ProofMediaType.Image,
-                        fileName = uploaded.cosKey.substringAfterLast('/'),
-                        byteCount = uploaded.size,
-                        source = uploaded.url
-                    )
-                }
-                val allProofs = workspace.records[index].proofFiles + serverProofs
-                val updatedRecord = workspace.records[index].copy(
-                    hours = submittedHours,
-                    submittedAt = Instant.now().toString(),
-                    status = ReviewStatus.Pending,
-                    proofSummary = proofSummary(allProofs),
-                    proofPhotoCount = allProofs.count { it.type == ProofMediaType.Image },
-                    proofVideoCount = allProofs.count { it.type == ProofMediaType.Video },
-                    proofFiles = allProofs,
-                    teacherFeedback = "补充材料已提交，等待老师复审。",
-                    note = note.ifBlank { "学生已按反馈补交材料。" },
-                    aiReviewStatus = AiReviewStatus.Pending,
-                    aiRiskLevel = null,
-                    aiRiskCodes = emptyList(),
-                    aiReviewMessage = "补充材料已进入 AI 复审队列。",
-                    aiConfidence = null,
-                    aiReviewedAt = null
-                )
-                val updatedRecords = workspace.records.toMutableList().also { it[index] = updatedRecord }
-                val notice = StudentNotice(
-                    id = UUID.randomUUID().toString(),
-                    title = "补充材料已提交",
-                    message = "${record.taskTitle} 的补充材料已进入复审队列。",
-                    time = "刚刚",
-                    category = NoticeCategory.Review,
-                    isUnread = true
-                )
-                workspace = workspace.copy(
-                    records = updatedRecords,
-                    notices = listOf(notice) + workspace.notices
-                )
-                enqueueSyncOperation(
-                    type = SyncOperationType.SupplementRecord,
-                    title = "提交补充材料",
-                    detail = "${record.taskTitle} · 新增 ${serverProofs.size} 个凭证",
-                    status = SyncOperationStatus.Synced
-                )
-                saveWorkspace(event = "补充材料已同步")
-                onResult(Result.success(Unit))
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (!isCurrentSession(generation)) return@launchSessionRequest
-                android.util.Log.e("StudentAppState", "submitSupplement API failed", e)
-                if (isUnauthorized(e)) {
-                    expireSession("登录已过期，请重新登录")
-                    onResult(Result.failure(IllegalStateException("登录已过期，请重新登录", e)))
-                } else {
-                    val message = errorMessage(e)
-                    lastError = message
-                    onResult(Result.failure(IllegalStateException(message, e)))
-                }
-            } finally {
-                if (isCurrentSession(generation)) isLoading = false
-            }
-        }
-    }
-
-    fun saveDraft(
-        taskId: String,
-        hours: Double,
-        note: String,
-        sportType: String?,
-        customSportType: String,
-        proofAttachments: List<ProofAttachment>
-    ) {
-        val task = if (taskId == selfCheckInTask.id) {
-            selfCheckInTask
-        } else {
-            workspace.tasks.firstOrNull { it.id == taskId && it.status == TaskStatus.Active }
-        }
-            ?: run {
-                clearDraft()
-                return
-            }
-
-        draft = CheckInDraft(
-            id = draft?.id ?: UUID.randomUUID().toString(),
-            taskId = taskId,
-            hours = normalizedHours(hours, task),
-            note = note,
-            proofAttachments = proofAttachments,
-            updatedAt = "刚刚",
-            sportType = sportType,
-            customSportType = customSportType.takeIf { it.isNotBlank() }
-        )
-        saveDraft(event = "打卡草稿已保存")
-    }
-
-    fun hourLimitFor(task: CourseTask): Double {
-        return minOf(task.hours, hourRule.dailyLimit)
     }
 
     fun hasSubmittedCheckInToday(today: LocalDate = LocalDate.now()): Boolean {
@@ -886,21 +1222,36 @@ class StudentAppState(
         }
     }
 
-    fun normalizedHours(hours: Double, task: CourseTask): Double {
-        val maxHours = hourLimitFor(task)
-        return if (hours >= 2.0 && maxHours >= 2.0) 2.0 else 1.0
+    fun normalizedCheckInHours(hours: Double): Double {
+        return if (hours >= 2.0 && hourRule.dailyLimit >= 2.0) 2.0 else 1.0
     }
 
-    fun clearDraft() {
-        draft = null
-        persistUnit(event = "clear check-in draft") {
-            this.clearDraft()
+    private fun allowWrite(
+        method: String,
+        onResult: ((Result<Unit>) -> Unit)? = null
+    ): Boolean {
+        if (isWriteAllowed) return true
+        val message = if (systemMode == SystemMode.MAINTENANCE) {
+            interfaceText("系统当前处于维护模式，暂不能提交或修改内容。", "The system is under maintenance. Content cannot be submitted or changed.")
+        } else {
+            interfaceText("系统当前处于只读模式，暂不能提交或修改内容。", "The system is read-only. Content cannot be submitted or changed.")
         }
+        lastError = message
+        android.util.Log.w("StudentAppState", "$method blocked: system mode=$systemMode")
+        onResult?.invoke(Result.failure(IllegalStateException(message)))
+        return false
     }
 
     // ── Private helpers ───────────────────────────────────────────
 
     private suspend fun errorMessage(e: Exception): String {
+        if (isContactBindingRequired(e)) {
+            forceContactActivation()
+            return interfaceText(
+                "请先验证手机号或邮箱后再继续使用。",
+                "Verify a mobile number or email address to continue."
+            )
+        }
         val msg = e.message.orEmpty()
         val serverMessage = withContext(Dispatchers.IO) {
             msg.indexOf('{').takeIf { it >= 0 }?.let { start ->
@@ -913,25 +1264,115 @@ class StudentAppState(
         }
         if (!serverMessage.isNullOrBlank()) return serverMessage
         return when {
-            msg.contains("401") -> "账号或密码错误"
-            msg.contains("400") -> "请输入账号和密码"
-            msg.contains("403") -> "没有访问权限，请联系管理员"
-            msg.contains("500") || msg.contains("DB_ERROR") -> "服务器内部错误，请联系管理员"
+            msg.contains("401") -> interfaceText("账号或密码错误", "Incorrect account or password.")
+            msg.contains("400") -> interfaceText("请输入账号和密码", "Enter your account and password.")
+            msg.contains("403") -> interfaceText("没有访问权限，请联系管理员", "You do not have access. Contact an administrator.")
+            msg.contains("500") || msg.contains("DB_ERROR") -> interfaceText("服务器内部错误，请联系管理员", "Internal server error. Contact an administrator.")
             msg.contains("Unable to resolve host") || msg.contains("UnknownHost") ->
-                "无法连接服务器，请检查网络"
+                interfaceText("无法连接服务器，请检查网络", "Could not connect to the server. Check your connection.")
             msg.contains("timeout") || msg.contains("Timeout") ->
-                "连接超时，请稍后再试"
+                interfaceText("连接超时，请稍后再试", "Connection timed out. Try again later.")
             msg.contains("502") || msg.contains("503") ->
-                "服务器维护中，请稍后再试"
+                interfaceText("服务器维护中，请稍后再试", "Server maintenance is in progress. Try again later.")
             msg.contains("ConnectException") || msg.contains("Connection refused") ->
-                "无法连接到服务器，请检查网络连接"
+                interfaceText("无法连接到服务器，请检查网络连接", "Could not connect to the server. Check your network connection.")
             msg.contains("SocketTimeoutException") ->
-                "请求超时，请检查网络后重试"
+                interfaceText("请求超时，请检查网络后重试", "Request timed out. Check your connection and try again.")
             msg.contains("Gson returned null") ->
-                "服务器返回数据异常，请联系管理员"
+                interfaceText("服务器返回数据异常，请联系管理员", "The server returned invalid data. Contact an administrator.")
             msg.contains("CLEARTEXT") || msg.contains("cleartext") ->
-                "网络安全策略错误，请联系开发人员"
-            else -> "请求失败，请稍后重试"
+                interfaceText(
+                    "网络安全策略错误，请联系开发人员",
+                    "A network security policy error occurred. Contact support."
+                )
+            else -> interfaceText("请求失败，请稍后重试", "Request failed. Try again later.")
+        }
+    }
+
+    private fun activationWorkspace(user: UserDto): StudentWorkspace {
+        return StudentWorkspace.empty().copy(
+            student = StudentProfile(
+                id = user.id,
+                name = user.name,
+                email = user.email,
+                college = user.college,
+                className = user.className,
+                status = user.status,
+                gender = user.gender.orEmpty(),
+                gradeLevel = user.gradeLevel.orEmpty(),
+                accountStatus = user.accountStatus
+            )
+        )
+    }
+
+    private fun applyContactProfile(profile: StudentProfileResponse) {
+        contactStatus = profile.contacts
+        val current = workspace.student
+        workspace = workspace.copy(
+            student = current.copy(
+                id = profile.id.ifBlank { current.id },
+                name = profile.name.ifBlank { current.name },
+                email = profile.email.ifBlank { current.email },
+                college = profile.college.ifBlank { current.college },
+                className = profile.className.ifBlank { current.className },
+                status = profile.status.ifBlank { current.status },
+                gender = profile.gender ?: current.gender,
+                gradeLevel = profile.currentGradeLevel ?: profile.gradeLevel ?: current.gradeLevel,
+                admissionYear = profile.admissionYear ?: current.admissionYear,
+                currentAcademicYear = profile.currentAcademicYear ?: current.currentAcademicYear,
+                gradeCalculatedAt = profile.gradeCalculatedAt ?: current.gradeCalculatedAt,
+                accountStatus = profile.accountStatus
+            )
+        )
+    }
+
+    private fun UserDto.withProfile(profile: StudentProfileResponse): UserDto = copy(
+        id = profile.id.ifBlank { id },
+        name = profile.name.ifBlank { name },
+        email = profile.email.ifBlank { email },
+        role = profile.role.ifBlank { role },
+        college = profile.college.ifBlank { college },
+        status = profile.status.ifBlank { status },
+        gender = profile.gender ?: gender,
+        gradeLevel = profile.gradeLevel ?: gradeLevel,
+        className = profile.className.ifBlank { className },
+        accountStatus = profile.accountStatus,
+        contacts = profile.contacts
+    )
+
+    private fun StudentProfileResponse.toUserDto(): UserDto = UserDto(
+        id = id,
+        name = name,
+        email = email,
+        role = role,
+        college = college,
+        status = status,
+        gender = gender,
+        gradeLevel = gradeLevel,
+        className = className,
+        accountStatus = accountStatus,
+        contacts = contacts
+    )
+
+    private fun isContactBindingRequired(error: Throwable): Boolean {
+        return error is ApiHttpException &&
+            error.statusCode == 403 &&
+            error.responseBody.contains("CONTACT_BINDING_REQUIRED")
+    }
+
+    /** Turns any authoritative 403 into the same minimal activation state. */
+    private fun forceContactActivation() {
+        if (!isAuthenticated) return
+        workspace = StudentWorkspace.empty().copy(
+            student = workspace.student.copy(
+                accountStatus = AccountStatus.PENDING_CONTACT_BINDING.name
+            )
+        )
+        isPreparingActivatedWorkspace = false
+        contactActivationLoadError = null
+        isShowingCachedData = false
+        persistUnit(event = "clear workspace after contact activation is required") {
+            clearWorkspaceCache()
         }
     }
 
@@ -939,6 +1380,14 @@ class StudentAppState(
         // Sync-operation metadata is added even to an empty workspace during
         // startup, so equality with StudentWorkspace.empty() is not a safe test.
         return workspace.student.id.isNotBlank()
+    }
+
+    private suspend fun syncPushToken(client: StudentApiClient) {
+        val context = ApiStudentRepository.androidAppContext() ?: return
+        FcmPushRegistrar.registerCurrentDevice(context, client)
+            .onFailure { error ->
+                android.util.Log.w("StudentAppState", "FCM token registration deferred", error)
+            }
     }
 
     private fun isUnauthorized(error: Throwable): Boolean {
@@ -984,10 +1433,13 @@ class StudentAppState(
             localSessionInvalidated = true
             apiRepository = null
             isAuthenticated = false
+            isUsingMockUser = false
             isShowingCachedData = false
             isLoading = false
             workspace = StudentWorkspace.empty()
-            draft = null
+            contactStatus = ContactStatusResponse()
+            isPreparingActivatedWorkspace = false
+            contactActivationLoadError = null
             withLocalStoreOnIo(
                 event = "clear expired session",
                 expectedGeneration = null
@@ -999,6 +1451,187 @@ class StudentAppState(
     }
 
     private fun Throwable.asException(): Exception = this as? Exception ?: Exception(this)
+
+    private fun runContactBindingRequest(
+        onResult: (Result<Unit>) -> Unit,
+        refreshAccountStatus: Boolean = false,
+        request: suspend ApiStudentRepository.() -> Unit
+    ) {
+        val repository = apiRepository
+        if (repository == null || !isAuthenticated) {
+            onResult(
+                Result.failure(
+                    IllegalStateException(
+                        interfaceText("登录状态已失效，请重新登录", "Your sign-in session is no longer valid. Sign in again.")
+                    )
+                )
+            )
+            return
+        }
+        val generation = sessionGeneration
+        val job = launchAuthenticatedRequest {
+            try {
+                repository.request()
+                if (refreshAccountStatus) {
+                    // Verification responses are intentionally not coupled to a
+                    // particular JSON envelope. The profile is the authority for
+                    // account_status after either contact is verified.
+                    val profile = repository.fetchProfile()
+                    if (!isCurrentSession(generation)) return@launchAuthenticatedRequest
+                    workspace = workspace.copy(
+                        student = workspace.student.copy(accountStatus = profile.accountStatus)
+                    )
+                    saveWorkspaceNow(
+                        event = "联系方式绑定状态已更新",
+                        expectedGeneration = generation
+                    )
+                }
+                onResult(Result.success(Unit))
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (!isCurrentSession(generation)) return@launchAuthenticatedRequest
+                if (isUnauthorized(error)) {
+                    expireSession(
+                        interfaceText("登录已过期，请重新登录", "Your sign-in has expired. Sign in again.")
+                    )
+                } else if (isContactBindingRequired(error)) {
+                    forceContactActivation()
+                }
+                onResult(Result.failure(error))
+            }
+        }
+        if (job == null) {
+            onResult(
+                Result.failure(
+                    IllegalStateException(
+                        interfaceText("登录状态已失效，请重新登录", "Your sign-in session is no longer valid. Sign in again.")
+                    )
+                )
+            )
+        }
+    }
+
+    /**
+     * A successful verification response is authoritative. Pending sessions
+     * become fully usable only after the response says ACTIVE and the complete
+     * workspace has been loaded without using local cached data.
+     */
+    private fun runContactVerificationRequest(
+        onResult: (Result<Unit>) -> Unit,
+        request: suspend ApiStudentRepository.() -> StudentProfileResponse
+    ) {
+        val repository = apiRepository
+        if (repository == null || !isAuthenticated) {
+            onResult(Result.failure(IllegalStateException("Authentication session is unavailable")))
+            return
+        }
+        val generation = sessionGeneration
+        val wasPending = requiresContactBinding
+        val job = launchAuthenticatedRequest {
+            try {
+                val profile = repository.request()
+                if (!isCurrentSession(generation)) return@launchAuthenticatedRequest
+                if (wasPending && AccountStatus.from(profile.accountStatus) == AccountStatus.ACTIVE) {
+                    contactStatus = profile.contacts
+                    isPreparingActivatedWorkspace = true
+                    contactActivationLoadError = null
+                    try {
+                        if (!hydrateActivatedWorkspace(repository, profile, generation)) {
+                            return@launchAuthenticatedRequest
+                        }
+                        onResult(Result.success(Unit))
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        if (!isCurrentSession(generation)) return@launchAuthenticatedRequest
+                        isPreparingActivatedWorkspace = false
+                        if (isUnauthorized(error)) {
+                            expireSession("Your sign-in has expired. Sign in again.")
+                            onResult(Result.failure(error))
+                            return@launchAuthenticatedRequest
+                        }
+                        if (isContactBindingRequired(error)) forceContactActivation()
+                        contactActivationLoadError = errorMessage(error)
+                        // The code was accepted even though the workspace refresh failed.
+                        // Keep the verified state visible and offer a safe hydration retry.
+                        onResult(Result.success(Unit))
+                    }
+                    return@launchAuthenticatedRequest
+                } else if (wasPending) {
+                    applyContactProfile(profile)
+                    onResult(
+                        Result.failure(
+                            IllegalStateException(
+                                interfaceText(
+                                    "验证状态尚未更新，请稍后再试。",
+                                    "Verification status has not updated yet. Try again shortly."
+                                )
+                            )
+                        )
+                    )
+                    return@launchAuthenticatedRequest
+                } else {
+                    applyContactProfile(profile)
+                    withLocalStoreOnIo(
+                        event = "save verified contact profile",
+                        expectedGeneration = generation
+                    ) {
+                        saveUserProfile(gson.toJson(profile.toUserDto()))
+                    }
+                }
+                onResult(Result.success(Unit))
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (!isCurrentSession(generation)) return@launchAuthenticatedRequest
+                if (isUnauthorized(error)) {
+                    expireSession("Your sign-in has expired. Sign in again.")
+                } else if (isContactBindingRequired(error)) {
+                    forceContactActivation()
+                }
+                onResult(Result.failure(error))
+            }
+        }
+        if (job == null) {
+            onResult(Result.failure(IllegalStateException("Authentication session is unavailable")))
+        }
+    }
+
+    /**
+     * Installs a fully loaded workspace only after the server says the pending
+     * account is active.  Returning false means another session superseded it.
+     */
+    private suspend fun hydrateActivatedWorkspace(
+        repository: ApiStudentRepository,
+        profile: StudentProfileResponse,
+        generation: Long
+    ): Boolean {
+        val remoteWorkspace = repository.loadWorkspaceAsync()
+        if (!isCurrentSession(generation)) return false
+        workspace = remoteWorkspace.copy(
+            student = remoteWorkspace.student.copy(accountStatus = profile.accountStatus)
+        )
+        contactStatus = profile.contacts
+        isShowingCachedData = false
+        val now = currentSyncTimestamp()
+        lastSyncTimestamp = now
+        withLocalStoreOnIo(
+            event = "activate account and save workspace",
+            expectedGeneration = generation
+        ) {
+            saveUserProfile(gson.toJson(profile.toUserDto())) &&
+                saveWorkspace(workspace) &&
+                saveLastSyncTime(now)
+        }
+        if (!isCurrentSession(generation)) return false
+        // Push registration is deliberately delayed until the account is active.
+        isPreparingActivatedWorkspace = false
+        repository.bearerToken
+            ?.takeIf { it.isNotBlank() }
+            ?.let { token -> syncPushToken(StudentApiClient().withToken(token)) }
+        return isCurrentSession(generation)
+    }
 
     private fun logValidationFailure(method: String, reason: String) {
         android.util.Log.w("StudentAppState", "$method blocked: $reason")
@@ -1017,10 +1650,11 @@ class StudentAppState(
         val photoCount = proofAttachments.count { it.type == ProofMediaType.Image }
         val videoCount = proofAttachments.count { it.type == ProofMediaType.Video }
         val parts = buildList {
-            if (photoCount > 0) add("$photoCount 张图片")
-            if (videoCount > 0) add("$videoCount 个短视频")
+            if (photoCount > 0) add(interfaceText("$photoCount 张图片", "$photoCount photos"))
+            if (videoCount > 0) add(interfaceText("$videoCount 个短视频", "$videoCount videos"))
         }
-        return parts.ifEmpty { listOf("未添加凭证") }.joinToString("，")
+        return parts.ifEmpty { listOf(interfaceText("未添加凭证", "No proof added")) }
+            .joinToString(interfaceText("，", ", "))
     }
 
     private val maxSyncOperations = 12
@@ -1036,7 +1670,7 @@ class StudentAppState(
             type = type,
             title = title,
             detail = detail,
-            createdAt = "刚刚",
+            createdAt = interfaceText("刚刚", "Just now"),
             status = status
         )
         // Prepend new operation and cap the list at maxSyncOperations.
@@ -1076,16 +1710,33 @@ class StudentAppState(
         }
     }
 
-    private fun currentSyncTimestamp(): String {
-        return java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
-            .format(java.util.Date())
+    /** Clears stale workspace data before persisting the server's new-semester snapshot. */
+    private suspend fun clearWorkspaceCacheNow(expectedGeneration: Long): Boolean {
+        val cleared = withLocalStoreOnIo(
+            event = "clear workspace cache for new semester",
+            expectedGeneration = expectedGeneration
+        ) {
+            clearWorkspaceCache()
+        }
+        if (cleared == false) {
+            android.util.Log.w("StudentAppState", "new-semester workspace cache clear failed")
+        }
+        return cleared ?: true
     }
 
-    private fun saveDraft(event: String) {
-        val currentDraft = draft ?: return
-        persist(event = event) {
-            saveDraft(currentDraft)
-        }
+    private fun showNewSemesterWelcomeIfNeeded(
+        isNewSemester: Boolean,
+        remoteWorkspace: StudentWorkspace
+    ) {
+        if (!isNewSemester) return
+        newSemesterWelcomeAcademicYear = remoteWorkspace.student.currentAcademicYear
+            .trim()
+            .takeIf { it.isNotEmpty() }
+    }
+
+    private fun currentSyncTimestamp(): String {
+        return java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", AppLanguagePreferences.currentLocale)
+            .format(java.util.Date())
     }
 
     private fun persist(
@@ -1219,9 +1870,12 @@ class StudentAppState(
         return SyncOperation(
             id = "sync-local-load",
             type = SyncOperationType.ResetLocalData,
-            title = "读取本地工作台",
-            detail = "从 Android SharedPreferences 加载已缓存的工作台数据。",
-            createdAt = "启动时",
+            title = interfaceText("读取本地工作台", "Load local workspace"),
+            detail = interfaceText(
+                "从 Android SharedPreferences 加载已缓存的工作台数据。",
+                "Load cached workspace data from Android SharedPreferences."
+            ),
+            createdAt = interfaceText("启动时", "At startup"),
             status = SyncOperationStatus.LocalOnly
         )
     }

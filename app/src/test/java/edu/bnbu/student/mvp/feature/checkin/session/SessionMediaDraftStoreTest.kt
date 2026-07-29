@@ -76,6 +76,88 @@ class SessionMediaDraftStoreTest {
     }
 
     @Test
+    fun reorderedPhotosPersistAndDefineSubmissionOrder() {
+        val root = temporaryFolder.newFolder("drafts")
+        val store = SessionMediaDraftStore(root, clock)
+        val key = SessionDraftKey("student-1", "session-1")
+        val first = capture(store, key, ProofMediaType.Image)
+        val second = capture(store, key, ProofMediaType.Image)
+        val third = capture(store, key, ProofMediaType.Image)
+
+        assertTrue(store.reorderImages(key, listOf(third.id, first.id, second.id)))
+
+        val restored = SessionMediaDraftStore(root, clock).list(key)
+        assertEquals(listOf(third.id, first.id, second.id), restored.map { it.id })
+        restored.forEach { assertTrue(store.setSelected(key, it.id, true)) }
+        assertEquals(
+            listOf(third.id, first.id, second.id),
+            store.selectedForSubmission(key).getOrThrow().map { it.id }
+        )
+    }
+
+    @Test
+    fun committedEditReplacesOnlyAfterNewFileAndIndexAreReady() {
+        val root = temporaryFolder.newFolder("drafts")
+        val store = SessionMediaDraftStore(root, clock)
+        val key = SessionDraftKey("student-1", "session-1")
+        val original = capture(store, key, ProofMediaType.Image)
+        val originalFile = store.resolveFile(key, original)
+        assertTrue(store.setSelected(key, original.id, true))
+
+        val target = store.prepareEdit(key, original.id).getOrThrow()
+        target.file.writeBytes(byteArrayOf(9, 8, 7, 6))
+        val updated = store.commitFileUpdate(target).getOrThrow()
+
+        assertEquals(original.id, updated.id)
+        assertTrue(updated.selected)
+        assertNotEquals(original.fileName, updated.fileName)
+        assertTrue(store.resolveFile(key, updated).isFile)
+        assertFalse(originalFile.exists())
+        assertEquals(updated, SessionMediaDraftStore(root, clock).list(key).single())
+    }
+
+    @Test
+    fun failedReplacementLeavesTheOriginalDraftUntouched() {
+        val store = SessionMediaDraftStore(temporaryFolder.newFolder("drafts"), clock)
+        val key = SessionDraftKey("student-1", "session-1")
+        val original = capture(store, key, ProofMediaType.Image)
+        val originalFile = store.resolveFile(key, original)
+
+        val target = store.prepareReplacement(key, original.id).getOrThrow()
+        // Leave the camera staging file empty to emulate a cancelled/failed capture.
+        assertTrue(store.commitFileUpdate(target).isFailure)
+
+        assertTrue(originalFile.isFile)
+        assertEquals(original, store.list(key).single())
+        assertFalse(target.file.exists())
+    }
+
+    @Test
+    fun removingDraftUpdatesIndexAndDeletesTheLocalFile() {
+        val store = SessionMediaDraftStore(temporaryFolder.newFolder("drafts"), clock)
+        val key = SessionDraftKey("student-1", "session-1")
+        val draft = capture(store, key, ProofMediaType.Image)
+        val file = store.resolveFile(key, draft)
+
+        assertTrue(store.remove(key, draft.id))
+
+        assertTrue(store.list(key).isEmpty())
+        assertFalse(file.exists())
+    }
+
+    @Test
+    fun videoCoverFramePersistsWithTheSameDraft() {
+        val root = temporaryFolder.newFolder("drafts")
+        val store = SessionMediaDraftStore(root, clock)
+        val key = SessionDraftKey("student-1", "session-1")
+        val video = capture(store, key, ProofMediaType.Video)
+
+        assertTrue(store.setVideoCover(key, video.id, 3_500L))
+
+        assertEquals(3_500L, SessionMediaDraftStore(root, clock).list(key).single().coverTimestampMillis)
+    }
+
+    @Test
     fun accountsAndSessionsUseDifferentPrivateDirectories() {
         val store = SessionMediaDraftStore(temporaryFolder.newFolder("drafts"), clock)
         val first = store.prepareCapture(

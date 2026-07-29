@@ -7,9 +7,9 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
-import edu.bnbu.student.mvp.core.model.CheckInDraft
 import edu.bnbu.student.mvp.core.model.AppThemeMode
-import edu.bnbu.student.mvp.core.model.StudentTaskList
+import edu.bnbu.student.mvp.core.model.AppLanguage
+import edu.bnbu.student.mvp.core.model.SportHourRule
 import edu.bnbu.student.mvp.core.model.StudentWorkspace
 import java.security.KeyStore
 import java.security.MessageDigest
@@ -26,7 +26,9 @@ class AndroidAppLocalStore(
     context: Context,
     private val gson: Gson = GsonBuilder().disableHtmlEscaping().create()
 ) : ExerciseSessionSnapshotStorage {
-    private val preferences = context.applicationContext.getSharedPreferences(
+    private val appContext = context.applicationContext
+
+    private val preferences = appContext.getSharedPreferences(
         StoreName,
         Context.MODE_PRIVATE
     )
@@ -36,7 +38,7 @@ class AndroidAppLocalStore(
     // using an Android Keystore-backed AES/GCM key. Sensitive values are never
     // written in plaintext when the Keystore is unavailable.
     private val encryptedPrefs: SharedPreferences =
-        context.applicationContext.getSharedPreferences(
+        appContext.getSharedPreferences(
             "bnbu.student.secure.v1",
             Context.MODE_PRIVATE
         )
@@ -54,14 +56,114 @@ class AndroidAppLocalStore(
         return save(WorkspaceStorageKey, workspace)
     }
 
-    fun loadDraft(): CheckInDraft? = readDraft().value
-
-    fun readDraft(): LocalStoreReadResult<CheckInDraft> {
-        return read(DraftStorageKey, CheckInDraft::class.java)
+    /**
+     * Returns the academic year stored with the last workspace snapshot.
+     * It is intentionally derived from the workspace so it cannot drift from
+     * the data that will be discarded during a semester transition.
+     */
+    fun loadCachedAcademicYear(): String {
+        return readWorkspace().value?.student?.currentAcademicYear.orEmpty().trim()
     }
 
-    fun saveDraft(draft: CheckInDraft): Boolean {
-        return save(DraftStorageKey, draft)
+    /**
+     * Removes only data that belongs to the cached workspace. Authentication,
+     * theme, language, and other user preferences are deliberately retained.
+     */
+    fun clearWorkspaceCache(): Boolean {
+        return try {
+            val metadataCleared = preferences.edit()
+                .remove(WorkspaceStorageKey)
+                .remove(LastSyncKey)
+                .commit()
+            val encryptedWorkspaceCleared = encryptedPrefs.edit()
+                .remove(encryptedValueKey(WorkspaceStorageKey))
+                .remove(encryptedIvKey(WorkspaceStorageKey))
+                .commit()
+            metadataCleared && encryptedWorkspaceCleared
+        } catch (_: RuntimeException) {
+            false
+        }
+    }
+
+    // Each account acknowledges the reminder independently so changing accounts
+    // never suppresses the first-time reminder for another student.
+    fun hasShownHealthReminder(accountId: String): Boolean {
+        val key = healthReminderStorageKey(accountId) ?: return true
+        return preferences.getBoolean(key, false)
+    }
+
+    fun markHealthReminderShown(accountId: String) {
+        val key = healthReminderStorageKey(accountId) ?: return
+        preferences.edit().putBoolean(key, true).apply()
+    }
+
+    /**
+     * The onboarding acknowledgement belongs to an account instead of a device
+     * session. Logout must not make a returning student see it again.
+     */
+    fun hasCompletedOnboarding(accountId: String): Boolean {
+        val key = onboardingStorageKey(accountId) ?: return true
+        return preferences.getBoolean(key, false)
+    }
+
+    fun markOnboardingCompleted(accountId: String): Boolean {
+        val key = onboardingStorageKey(accountId) ?: return false
+        return try {
+            preferences.edit().putBoolean(key, true).commit()
+        } catch (_: RuntimeException) {
+            false
+        }
+    }
+
+    /**
+     * The course-join guide is intentionally device-scoped: it can be shown
+     * before a student account has been authenticated.
+     */
+    fun hasCompletedPreLoginCourseGuide(): Boolean =
+        preferences.getBoolean(PreLoginCourseGuideCompletedKey, false)
+
+    fun markPreLoginCourseGuideCompleted(): Boolean {
+        return try {
+            preferences.edit().putBoolean(PreLoginCourseGuideCompletedKey, true).commit()
+        } catch (_: RuntimeException) {
+            false
+        }
+    }
+
+    /**
+     * A completed legacy onboarding guide remains a completion signal so
+     * existing accounts are not interrupted by the redesigned post-course guide.
+     */
+    fun hasCompletedPostEnrollmentGuide(accountId: String): Boolean {
+        val key = postEnrollmentGuideStorageKey(accountId) ?: return true
+        return hasCompletedOnboarding(accountId) || preferences.getBoolean(key, false)
+    }
+
+    fun markPostEnrollmentGuideCompleted(accountId: String): Boolean {
+        val key = postEnrollmentGuideStorageKey(accountId) ?: return false
+        return try {
+            preferences.edit().putBoolean(key, true).commit()
+        } catch (_: RuntimeException) {
+            false
+        }
+    }
+
+    /** Records the version and time at which the user accepted the privacy policy. */
+    fun agreePrivacyPolicy(policyVersion: String, agreedAt: String) {
+        preferences.edit()
+            .putString(PrivacyPolicyVersionKey, policyVersion)
+            .putString(PrivacyPolicyAgreedAtKey, agreedAt)
+            .commit()
+    }
+
+    fun hasAgreedPrivacyPolicy(expectedVersion: String): Boolean =
+        getPrivacyConsentInfo()?.first == expectedVersion
+
+    /** Returns the accepted policy version and ISO-8601 acceptance time, if available. */
+    fun getPrivacyConsentInfo(): Pair<String, String>? {
+        val version = preferences.getString(PrivacyPolicyVersionKey, null)
+        val agreedAt = preferences.getString(PrivacyPolicyAgreedAtKey, null)
+        return if (version.isNullOrBlank() || agreedAt.isNullOrBlank()) null else version to agreedAt
     }
 
     override fun readExerciseSessionSnapshot(
@@ -150,6 +252,17 @@ class AndroidAppLocalStore(
         } catch (_: RuntimeException) { false }
     }
 
+    fun loadAppLanguage(): AppLanguage {
+        return AppLanguagePreferences.load(appContext)
+    }
+
+    /** Synchronous so a selected language is durable before the Activity recreates. */
+    fun saveAppLanguage(language: AppLanguage): Boolean {
+        return try {
+            AppLanguagePreferences.save(appContext, language)
+        } catch (_: RuntimeException) { false }
+    }
+
     fun clearAuth() {
         preferences.edit()
             .remove(AuthTokenKey)
@@ -163,15 +276,9 @@ class AndroidAppLocalStore(
             .commit()
     }
 
-    fun clearDraft() {
-        preferences.edit().remove(DraftStorageKey).apply()
-        clearEncryptedValue(DraftStorageKey)
-    }
-
     fun clearAll() {
         preferences.edit()
             .remove(WorkspaceStorageKey)
-            .remove(DraftStorageKey)
             .remove(AuthTokenKey)
             .remove(UserProfileKey)
             .remove(LastSyncKey)
@@ -237,6 +344,12 @@ class AndroidAppLocalStore(
     // so `= emptyList()` defaults are never applied for fields added
     // AFTER the app was last launched. Old cached JSON leaves them null.
     private fun ensureWorkspaceDefaults(ws: StudentWorkspace): StudentWorkspace {
+        val hourRuleNull = try {
+            val f = StudentWorkspace::class.java.getDeclaredField("hourRule")
+            f.isAccessible = true
+            f.get(ws) == null
+        } catch (_: NoSuchFieldException) { false }
+
         val teachersNull = try {
             val f = StudentWorkspace::class.java.getDeclaredField("teachers")
             f.isAccessible = true
@@ -255,19 +368,13 @@ class AndroidAppLocalStore(
             f.get(ws) == null
         } catch (_: NoSuchFieldException) { false }
 
-        val studentTasksNull = try {
-            val f = StudentWorkspace::class.java.getDeclaredField("studentTasks")
-            f.isAccessible = true
-            f.get(ws) == null
-        } catch (_: NoSuchFieldException) { false }
-
-        if (!teachersNull && !syncOpsNull && !exemptionsNull && !studentTasksNull) return ws
+        if (!hourRuleNull && !teachersNull && !syncOpsNull && !exemptionsNull) return ws
 
         return ws.copy(
+            hourRule = if (hourRuleNull) SportHourRule.Standard else ws.hourRule,
             teachers = if (teachersNull) emptyList() else ws.teachers,
             syncOperations = if (syncOpsNull) emptyList() else ws.syncOperations,
-            exemptions = if (exemptionsNull) emptyList() else ws.exemptions,
-            studentTasks = if (studentTasksNull) StudentTaskList(emptyList(), emptyList()) else ws.studentTasks
+            exemptions = if (exemptionsNull) emptyList() else ws.exemptions
         )
     }
 
@@ -354,17 +461,43 @@ class AndroidAppLocalStore(
         return "$ExerciseSessionStorageKey.$digest"
     }
 
+    private fun healthReminderStorageKey(accountId: String): String? {
+        val normalizedAccountId = accountId.trim()
+        if (normalizedAccountId.isEmpty()) return null
+        return "$HealthReminderShownKeyPrefix$normalizedAccountId"
+    }
+
+    private fun onboardingStorageKey(accountId: String): String? {
+        val normalizedAccountId = accountId.trim()
+        if (normalizedAccountId.isEmpty()) return null
+        return "$OnboardingCompletedKeyPrefix$normalizedAccountId"
+    }
+
+    private fun postEnrollmentGuideStorageKey(accountId: String): String? {
+        val normalizedAccountId = accountId.trim()
+        if (normalizedAccountId.isEmpty()) return null
+        return "$PostEnrollmentGuideCompletedKeyPrefix$normalizedAccountId"
+    }
+
     private data class EncryptedValue(val value: String, val iv: String)
 
     companion object {
         const val StoreName = "bnbu.student.local.v1"
         const val WorkspaceStorageKey = "bnbu.student.workspace.v1"
-        const val DraftStorageKey = "bnbu.student.checkin.draft.v1"
         const val ExerciseSessionStorageKey = "bnbu.student.exercise.session.v1"
         const val AuthTokenKey = "bnbu.student.auth.token.v1"
         const val UserProfileKey = "bnbu.student.auth.profile.v1"
         const val LastSyncKey = "bnbu.student.last_sync.v1"
         const val ThemeModeKey = "bnbu.student.theme.mode.v1"
+        const val LanguageKey = "bnbu.student.language.v1"
+        private const val PrivacyPolicyVersionKey = "bnbu.student.privacy_policy.version.v1"
+        private const val PrivacyPolicyAgreedAtKey = "bnbu.student.privacy_policy.agreed_at.v1"
+        private const val HealthReminderShownKeyPrefix = "health_reminder_shown_"
+        private const val OnboardingCompletedKeyPrefix = "onboarding_completed_"
+        private const val PreLoginCourseGuideCompletedKey =
+            "bnbu.student.pre_login_course_guide.completed.v1"
+        private const val PostEnrollmentGuideCompletedKeyPrefix =
+            "post_enrollment_guide_completed_"
 
         // Encrypted token storage keys
         private const val AuthTokenEncryptedKey = "bnbu.student.auth.token.encrypted"

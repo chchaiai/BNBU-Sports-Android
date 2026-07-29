@@ -3,11 +3,12 @@ import cors from "cors";
 import express, { type Express } from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
-import pino from "pino";
+import type { Logger } from "pino";
 import pinoHttp from "pino-http";
 import type { AppConfig } from "./config/env";
 import { AppError, errorHandler, notFoundHandler } from "./errors";
-import { requestId } from "./http";
+import { requestId, requestLogContextMiddleware } from "./http";
+import { createLogger } from "./logger";
 import { createApiRouter } from "./routes";
 import type { BackendStore } from "./store";
 import type { ObjectStorage } from "./storage/storage";
@@ -16,22 +17,18 @@ export interface AppDependencies {
   config: AppConfig;
   store: BackendStore;
   storage: ObjectStorage;
+  logger?: Logger;
 }
 
-export function createApp({ config, store, storage }: AppDependencies): Express {
+export function createApp({ config, store, storage, logger }: AppDependencies): Express {
   const app = express();
+  const appLogger = logger ?? createLogger(config.LOG_LEVEL);
   app.disable("x-powered-by");
   if (config.TRUST_PROXY) app.set("trust proxy", 1);
 
-  const logger = pino({
-    level: config.LOG_LEVEL,
-    redact: {
-      paths: ["req.headers.authorization", "req.headers.cookie"],
-      censor: "[REDACTED]"
-    }
-  });
   app.use(requestId);
-  app.use(pinoHttp({ logger, genReqId: (request) => request.id }));
+  app.use(requestLogContextMiddleware);
+  app.use(pinoHttp({ logger: appLogger, genReqId: (request) => request.id }));
   app.use(helmet({ crossOriginResourcePolicy: { policy: "same-site" } }));
   app.use(cors({
     credentials: true,
@@ -48,6 +45,9 @@ export function createApp({ config, store, storage }: AppDependencies): Express 
     limit: config.GLOBAL_RATE_LIMIT_PER_15_MIN,
     standardHeaders: "draft-7",
     legacyHeaders: false,
+    // Orchestrators can share an IP with high-volume client traffic. Never let
+    // that traffic turn a healthy instance into a failed liveness/readiness probe.
+    skip: (request) => request.method === "GET" && request.path === "/api/health",
     handler: (_request, _response, next) => next(new AppError(429, "RATE_LIMITED", "请求过于频繁，请稍后再试"))
   }));
   app.use(express.json({ limit: "1mb", strict: true }));

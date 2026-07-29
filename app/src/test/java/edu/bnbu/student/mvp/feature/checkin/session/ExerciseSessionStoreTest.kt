@@ -48,7 +48,10 @@ class ExerciseSessionStoreTest {
 
         val finished = ExerciseSessionState.Finished(
             sessionId = "session-1",
-            details = details.copy(description = "完成一小时跑步训练"),
+            details = details.copy(
+                description = "完成一小时跑步训练",
+                remark = "和同学一起完成"
+            ),
             startedAtEpochMillis = 1_000L,
             endedAtEpochMillis = 61.minutes,
             activeDurationMillis = 60.minutes,
@@ -56,6 +59,21 @@ class ExerciseSessionStoreTest {
         )
         assertTrue(store.save("student-1", finished))
         assertEquals(finished, store.restore("student-1").state)
+    }
+
+    @Test
+    fun tooShortPausedSessionRoundTripsWithItsOriginalSessionId() {
+        val paused = ExerciseSessionState.Paused(
+            sessionId = "session-with-drafts",
+            details = details,
+            startedAtEpochMillis = 1_000L,
+            pausedAtEpochMillis = 1_000L + 59.minutes + 59.seconds,
+            accumulatedActiveMillis = 59.minutes + 59.seconds
+        )
+
+        assertTrue(store.save("student-1", paused))
+
+        assertEquals(paused, store.restore("student-1").state)
     }
 
     @Test
@@ -184,4 +202,7 @@ class ExerciseSessionStoreTest {
 
     private val Int.minutes: Long
         get() = this * 60L * 1_000L
+
+    private val Int.seconds: Long
+        get() = this * 1_000L
 }

@@ -49,6 +49,14 @@ async function seed(): Promise<void> {
       [ids.course, ids.semester, ids.teacher]
     );
     await pool.execute(
+      `INSERT INTO checkin_policies
+         (semester_id, window_mode, date_range_start, date_range_end, daily_start_time, daily_end_time, excluded_dates, semester_deadline)
+       VALUES (?, 'semester_wide', NULL, NULL, '06:00:00', '22:00:00', JSON_ARRAY(), ?)
+       ON DUPLICATE KEY UPDATE window_mode=VALUES(window_mode), daily_start_time=VALUES(daily_start_time),
+         daily_end_time=VALUES(daily_end_time), excluded_dates=VALUES(excluded_dates), semester_deadline=VALUES(semester_deadline)`,
+      [ids.semester, `${year + 1}-01-31`]
+    );
+    await pool.execute(
       `INSERT INTO course_enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')
        ON DUPLICATE KEY UPDATE status='enrolled'`,
       [ids.student, ids.course]

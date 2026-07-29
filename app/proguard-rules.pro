@@ -15,5 +15,27 @@
 -keep class javax.crypto.** { *; }
 -keep class android.security.keystore.** { *; }
 
--keepattributes Signature
+# Coil 3 uses service loading and reflective component discovery.
+-keep class coil3.** { *; }
+-dontwarn coil3.**
+
+# ZXing Android Embedded discovers barcode formats and camera integration at runtime.
+-keep class com.journeyapps.** { *; }
+-keep class com.google.zxing.** { *; }
+
+# Firebase Cloud Messaging registers services and handlers from manifest/runtime metadata.
+-keep class com.google.firebase.** { *; }
+-dontwarn com.google.firebase.**
+
+# Gson requires generic signatures and SerializedName-annotated fields at runtime.
+-keepattributes Signature,InnerClasses,EnclosingMethod
 -keepattributes *Annotation*
+-keepclassmembers,allowobfuscation class * {
+    @com.google.gson.annotations.SerializedName <fields>;
+}
+
+# Compose supplies its own consumer rules; suppress optional-class warnings during R8.
+-dontwarn androidx.compose.**
+
+# Preserve coroutine runtime classes used by asynchronous application work.
+-keep class kotlinx.coroutines.** { *; }

@@ -23,6 +23,7 @@ const schema = z
     LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
     GLOBAL_RATE_LIMIT_PER_15_MIN: z.coerce.number().int().min(1).max(1_000_000).default(60_000),
     LOGIN_RATE_LIMIT_PER_15_MIN: z.coerce.number().int().min(1).max(1_000).default(20),
+    CONTACT_CODE_DELIVERY_WEBHOOK_URL: z.union([z.literal(""), z.string().url()]).optional().default(""),
     STORAGE_DRIVER: z.enum(["local", "cos"]).default("local"),
     UPLOAD_LOCAL_DIR: z.string().min(1).default("./uploads"),
     UPLOAD_MAX_REQUEST_BYTES: z.coerce.number().int().min(1_000_000).max(200_000_000).default(120_000_000),
@@ -51,6 +52,9 @@ const schema = z
       }
       if (/replace|change-me|example/i.test(value.JWT_SECRET)) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["JWT_SECRET"], message: "Production JWT secret is still a placeholder" });
+      }
+      if (!value.CONTACT_CODE_DELIVERY_WEBHOOK_URL.startsWith("https://")) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["CONTACT_CODE_DELIVERY_WEBHOOK_URL"], message: "Production requires an HTTPS contact-code delivery webhook" });
       }
     }
     if (value.STORAGE_DRIVER !== "cos") return;

@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import request from "supertest";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
+import { signAccessToken } from "../src/auth";
 import { ConcurrencyGate } from "../src/concurrency";
 import { loadConfig } from "../src/config/env";
 import { createdTableNames, untrackedTableConflicts } from "../src/db/migration-safety";
@@ -11,7 +12,7 @@ import { idempotencyRequestHash } from "../src/idempotency";
 import { DUMMY_PASSWORD_HASH, verifyPassword } from "../src/password";
 import type { BackendStore, JsonObject } from "../src/store";
 import type { ObjectStorage } from "../src/storage/storage";
-import type { CreateExemptionInput, CreateRecordInput, ProofFile, SupplementExemptionInput, SupplementRecordInput, UploadedFileInput, UserRecord } from "../src/types";
+import type { ContactBindingStatus, ContactChannel, CreateExemptionInput, CreateFeedbackInput, CreateRecordInput, ProofFile, PushDeviceRegistration, SupplementExemptionInput, UploadedFileInput, UserRecord } from "../src/types";
 
 const studentId = "10000000-0000-4000-8000-000000000001";
 let passwordHash = "";
@@ -23,8 +24,9 @@ beforeAll(async () => {
 class FakeStore implements BackendStore {
   exemptionSupplementCalls = 0;
   proofRegistrations: ProofFile[][] = [];
-  lastRecordFilters: { status?: string; courseId?: string; limit?: number; offset?: number } | undefined;
+  lastRecordFilters: { courseId?: string; limit?: number; offset?: number } | undefined;
   lastExemptionPage: { limit?: number; offset?: number } | undefined;
+  feedbackTickets: JsonObject[] = [];
   user(): UserRecord {
     return {
       id: studentId,
@@ -36,33 +38,121 @@ class FakeStore implements BackendStore {
       college: "测试学院",
       className: "一班",
       gender: "male",
+      preferredLanguage: "zh-CN",
       gradeLevel: "freshman",
       admissionYear: 2026,
       status: "正常",
       tokenVersion: 0
     };
   }
+  admin(): UserRecord {
+    return {
+      ...this.user(),
+      id: "10000000-0000-4000-8000-000000000099",
+      studentNumber: "admin",
+      email: "admin@example.invalid",
+      role: "admin"
+    };
+  }
   async ping() { return true; }
   async close() {}
   async findUserByAccount(account: string) { return ["20260001", "student@example.invalid"].includes(account) ? this.user() : null; }
-  async findUserById(id: string) { return id === studentId ? this.user() : null; }
-  async getProfile() { return { id: studentId, name: "测试学生", email: "student@example.invalid", role: "student", college: "测试学院", className: "一班", status: "正常", enrolledCourses: 1 }; }
+  async findUserById(id: string) {
+    if (id === studentId) return this.user();
+    return id === this.admin().id ? this.admin() : null;
+  }
+  contactBindingStatus: ContactBindingStatus = {
+    accountStatus: "ACTIVE",
+    contacts: {
+      email: { masked: null, verified: false },
+      phone: { masked: null, verified: false }
+    }
+  };
+  private contactCodes = new Map<string, string>();
+  async getContactBindingStatus() { return this.contactBindingStatus; }
+  async issueContactVerificationCode(_id: string, channel: ContactChannel, contact: string, codeHash: string) {
+    this.contactCodes.set(`${channel}:${contact}`, codeHash);
+  }
+  async verifyContactVerificationCode(_id: string, channel: ContactChannel, contact: string, codeHash: string) {
+    if (this.contactCodes.get(`${channel}:${contact}`) !== codeHash) {
+      throw new AppError(422, "CONTACT_CODE_INVALID", "验证码无效或已过期，请重新获取");
+    }
+    this.contactBindingStatus = {
+      accountStatus: "ACTIVE",
+      contacts: {
+        ...this.contactBindingStatus.contacts,
+        [channel]: { masked: channel === "email" ? "t***@example.invalid" : "+86138****0000", verified: true }
+      }
+    };
+    return { ...(await this.getProfile()), account_status: "ACTIVE", contacts: this.contactBindingStatus.contacts };
+  }
+  preferredLanguage: "zh-CN" | "en" = "zh-CN";
+  async getProfile() {
+    return {
+      id: studentId,
+      name: "测试学生",
+      email: "student@example.invalid",
+      role: "student",
+      college: "测试学院",
+      className: "一班",
+      status: "正常",
+      preferredLanguage: this.preferredLanguage,
+      enrolledCourses: 1
+    };
+  }
   async updateProfile(_id: string, gender: "male" | "female" | null) { return { ...(await this.getProfile()), gender }; }
-  async getSportSummary() { return { courseHours: 1, generalHours: 2, totalCompleted: 3, totalRequired: 20, totalRemaining: 17, courseRemaining: 9, generalRemaining: 8, completed: false, pendingCount: 0, rule: { total: 20, courseRequired: 10, generalRequired: 10, dailyLimit: 2 }, teachers: [], courses: [] }; }
-  async listSportRecords(_id: string, filters?: { status?: string; courseId?: string; limit?: number; offset?: number }) { this.lastRecordFilters = filters; return []; }
-  async getSportRecord(_studentId: string, recordId: string) { return recordId === "record-1" ? { id: recordId, creditType: "课程相关", hours: 1, approvedHours: 0, proofFiles: [{ url: "https://expired.invalid/proof.png", cosKey: "proofs/record-1.png", mediaType: "image", mimeType: "image/png", size: 40 }], aiRiskCodes: [], status: "待审核" } : null; }
-  async createSportRecord(_id: string, input: CreateRecordInput) { return { id: "record-1", status: "待审核", submittedAt: new Date().toISOString(), received: input.creditType }; }
-  async supplementSportRecord(_id: string, recordId: string, _input: SupplementRecordInput) { return { id: recordId, status: "待审核", message: "补充材料已提交" }; }
+  async updateLanguagePreference(_id: string, language: "zh-CN" | "en") { this.preferredLanguage = language; return { language }; }
+  async getSportSummary() { return { courseHours: 1, generalHours: 2, totalCompleted: 3, totalRequired: 20, totalRemaining: 17, courseRemaining: 9, generalRemaining: 8, completed: false, rule: { total: 20, courseRequired: 10, generalRequired: 10, dailyLimit: 2 }, teachers: [], courses: [] }; }
+  async listSportRecords(_id: string, filters?: { courseId?: string; limit?: number; offset?: number }) { this.lastRecordFilters = filters; return []; }
+  async getSportRecord(_studentId: string, recordId: string) { return recordId === "record-1" ? { id: recordId, creditType: "课程相关", hours: 1, proofFiles: [{ url: "https://expired.invalid/proof.png", cosKey: "proofs/record-1.png", mediaType: "image", mimeType: "image/png", size: 40 }], aiRiskCodes: [] } : null; }
+  async createSportRecord(_id: string, input: CreateRecordInput) {
+    return {
+      id: "record-1",
+      status: "待审核",
+      submittedAt: new Date().toISOString(),
+      received: input.creditType,
+      startTime: input.startTime,
+      endTime: input.endTime,
+      actualDurationSeconds: input.actualDurationSeconds
+    };
+  }
   async listIdentities() { return []; }
   async listNotifications() { return []; }
   async markNotificationRead(_id: string, notificationId: string) { return notificationId === "notice-1" ? { id: notificationId, read: true } : null; }
+  pushDeviceRegistrations: Array<{ studentId: string; input: PushDeviceRegistration }> = [];
+  pushDeviceRemovals: Array<{ studentId: string; token: string }> = [];
+  async registerPushDevice(studentId: string, input: PushDeviceRegistration) { this.pushDeviceRegistrations.push({ studentId, input }); }
+  async unregisterPushDevice(studentId: string, token: string) { this.pushDeviceRemovals.push({ studentId, token }); }
   async listCourses(_id: string, scope: "all" | "current" | "history") { return { courses: [], scope }; }
+  async getCheckInTimeWindow() {
+    return {
+      windowMode: "semester_wide", dateRangeStart: null, dateRangeEnd: null,
+      dailyStartTime: "06:00", dailyEndTime: "22:00", excludedDates: [], semesterDeadline: null
+    };
+  }
   async listTasks() { return { pending: [], completed: [] }; }
   async getGrades() { return { grades: [], summary: { overallCheckinScore: 0, overallExam: 0, overallAttendance: 0, overallPhysical: 0, overallTotal: 0, totalPossible: 100 } }; }
   async listExemptions(_id: string, _category?: "physical_test" | "checkin", page?: { limit?: number; offset?: number }) { this.lastExemptionPage = page; return []; }
   async createExemption(_id: string, _category: "physical_test" | "checkin", _input: CreateExemptionInput) { return { id: "exemption-1", status: "pending", createdAt: new Date().toISOString() }; }
   async supplementExemption(_id: string, exemptionId: string, _category: "physical_test" | "checkin", _input: SupplementExemptionInput) { this.exemptionSupplementCalls += 1; return { id: exemptionId, status: "reviewing", createdAt: new Date().toISOString() }; }
+  async createFeedback(_id: string, input: CreateFeedbackInput) {
+    const ticket = { id: `feedback-${this.feedbackTickets.length + 1}`, ticketNumber: `FB-TEST${this.feedbackTickets.length + 1}`, ...input, status: "pending", createdAt: new Date().toISOString(), updatedAt: null, reply: null };
+    this.feedbackTickets.unshift(ticket);
+    return ticket;
+  }
+  async listFeedbackTickets() { return this.feedbackTickets; }
   async convertEndurance(time: number, gender: string, grade: string): Promise<JsonObject | null> { return time > 600 ? null : { score: 80, tier: "pass", timeSeconds: time, gender, gradeLevel: grade, gradeGroup: "freshman_sophomore", range: { min: 271, max: 330 } }; }
+  helpArticles: JsonObject[] = [{ id: "help-1", title: "Published help", category: "Getting started", content: "Server-managed content", sortOrder: 10, status: "published" }];
+  async listPublishedHelpArticles() { return this.helpArticles.filter((article) => article.status === "published"); }
+  async listHelpArticles() { return this.helpArticles; }
+  async upsertHelpArticle(adminId: string, articleId: string | null, input: { title: string; category: string; content: string; sortOrder: number; status: "draft" | "published" | "offline" }) {
+    const id = articleId ?? `help-${this.helpArticles.length + 1}`;
+    const article = { id, ...input, updatedBy: adminId };
+    const index = this.helpArticles.findIndex((item) => item.id === id);
+    if (index >= 0) this.helpArticles[index] = article;
+    else this.helpArticles.push(article);
+    return article;
+  }
   async registerProofFiles(_id: string, proofs: ProofFile[]) { this.proofRegistrations.push(proofs); }
 }
 
@@ -167,14 +257,21 @@ describe("BNBU API", () => {
     expect(limited.body.requestId).toBeTruthy();
   });
 
-  it("returns the unified shape from the global rate limiter", async () => {
+  it("exempts health checks from the global rate limiter while preserving it for API traffic", async () => {
     const app = createApp({
       config: testConfig({ GLOBAL_RATE_LIMIT_PER_15_MIN: "1" }),
       store: new FakeStore(),
       storage: new FakeStorage()
     });
+
     expect((await request(app).get("/api/health")).status).toBe(200);
-    const limited = await request(app).get("/api/health");
+    expect((await request(app).get("/api/health")).status).toBe(200);
+
+    // This request consumes the sole global IP quota; health probes must still work afterwards.
+    expect((await request(app).get("/api/sport/summary")).status).toBe(401);
+    expect((await request(app).get("/api/health")).status).toBe(200);
+
+    const limited = await request(app).get("/api/sport/summary");
     expect(limited.status).toBe(429);
     expect(limited.body.code).toBe("RATE_LIMITED");
     expect(limited.body.requestId).toBeTruthy();
@@ -199,6 +296,81 @@ describe("BNBU API", () => {
     expect(summary.body.courseHours).toBeTypeOf("number");
   });
 
+  it("requires a verified contact after course enrollment while preserving the activation endpoints", async () => {
+    const store = new FakeStore();
+    store.contactBindingStatus = {
+      accountStatus: "PENDING_CONTACT_BINDING",
+      contacts: {
+        email: { masked: null, verified: false },
+        phone: { masked: null, verified: false }
+      }
+    };
+    const { app, token } = await authenticatedAgent(store);
+    const auth = { Authorization: `Bearer ${token}` };
+
+    const profile = await request(app).get("/api/student/profile").set(auth);
+    expect(profile.status).toBe(200);
+
+    const blocked = await request(app).get("/api/sport/summary").set(auth);
+    expect(blocked.status).toBe(403);
+    expect(blocked.body.code).toBe("CONTACT_BINDING_REQUIRED");
+
+    const codeRequest = await request(app)
+      .post("/api/v1/student/contacts/email/send-code")
+      .set(auth)
+      .send({ email: "student.contact@example.invalid" });
+    expect(codeRequest.status).toBe(204);
+  });
+
+  it("returns the server-owned check-in time window", async () => {
+    const { app, token } = await authenticatedAgent();
+    const response = await request(app)
+      .get("/api/student/checkin-time-window")
+      .set("Authorization", `Bearer ${token}`);
+    expect(response.status).toBe(200);
+    expect(response.headers["cache-control"]).toContain("no-store");
+    expect(response.body).toMatchObject({
+      windowMode: "semester_wide",
+      dailyStartTime: "06:00",
+      dailyEndTime: "22:00",
+      excludedDates: []
+    });
+  });
+
+  it("returns only published server-managed help articles", async () => {
+    const { app, store, token } = await authenticatedAgent();
+    store.helpArticles.push({ id: "help-offline", title: "Offline", category: "", content: "Hidden", sortOrder: 20, status: "offline" });
+    const response = await request(app)
+      .get("/api/common/help-articles")
+      .set("Authorization", `Bearer ${token}`);
+    expect(response.status).toBe(200);
+    expect(response.headers["cache-control"]).toContain("no-store");
+    expect(response.body).toEqual([expect.objectContaining({ id: "help-1", title: "Published help" })]);
+  });
+
+  it("lets an administrator publish and take help content offline", async () => {
+    const store = new FakeStore();
+    const config = testConfig();
+    const app = createApp({ config, store, storage: new FakeStorage() });
+    const adminToken = signAccessToken(config, store.admin());
+    const article = {
+      title: "Account help",
+      category: "Accounts",
+      content: "Published by an administrator",
+      sortOrder: 20,
+      status: "published"
+    };
+    const created = await request(app).post("/api/admin/help-articles")
+      .set("Authorization", `Bearer ${adminToken}`).send(article);
+    expect(created.status).toBe(201);
+
+    const offline = await request(app).put(`/api/admin/help-articles/${created.body.id}`)
+      .set("Authorization", `Bearer ${adminToken}`).send({ ...article, status: "offline" });
+    expect(offline.status).toBe(200);
+    expect(offline.body.status).toBe("offline");
+    expect((await store.listPublishedHelpArticles()).some((item) => item.id === created.body.id)).toBe(false);
+  });
+
   it("refreshes stored proof URLs before returning record history", async () => {
     const { app, token } = await authenticatedAgent();
     const response = await request(app)
@@ -213,10 +385,10 @@ describe("BNBU API", () => {
   it("validates and forwards list pagination", async () => {
     const { app, token, store } = await authenticatedAgent();
     const records = await request(app)
-      .get("/api/sport/records?status=pending&limit=25&offset=50")
+      .get("/api/sport/records?limit=25&offset=50")
       .set("Authorization", `Bearer ${token}`);
     expect(records.status).toBe(200);
-    expect(store.lastRecordFilters).toMatchObject({ status: "pending", limit: 25, offset: 50 });
+    expect(store.lastRecordFilters).toMatchObject({ limit: 25, offset: 50 });
 
     const exemptions = await request(app)
       .get("/api/student/checkin-exemptions?limit=10&offset=20")
@@ -253,9 +425,9 @@ describe("BNBU API", () => {
       .post("/api/sport/records")
       .set("Authorization", `Bearer ${token}`)
       .set("Idempotency-Key", "record-test-0001")
-      .send({ creditType: "课程相关", courseId: "course-1", taskId: "task-1", hours: 2, description: "完成训练", proofFiles: [{ cosKey: "proofs/a.jpg", mediaType: "image", mimeType: "image/jpeg", size: 100 }], sportType: "跑步" });
+      .send({ creditType: "课程相关", courseId: "course-1", taskId: "task-1", hours: 2, startTime: "2026-07-14T08:00:00.000Z", endTime: "2026-07-14T10:00:00.000Z", actualDurationSeconds: 7200, description: "完成训练", remark: "与同学一起训练", proofFiles: [{ cosKey: "proofs/a.jpg", mediaType: "image", mimeType: "image/jpeg", size: 100 }], sportType: "跑步" });
     expect(response.status).toBe(201);
-    expect(response.body).toMatchObject({ id: "record-1", status: "待审核", received: "课程相关" });
+    expect(response.body).toMatchObject({ id: "record-1", received: "课程相关", startTime: "2026-07-14T08:00:00.000Z", endTime: "2026-07-14T10:00:00.000Z", actualDurationSeconds: 7200 });
   });
 
   it("rejects reuse of an idempotency key with a different normalized payload", async () => {
@@ -266,6 +438,9 @@ describe("BNBU API", () => {
       courseId: "course-1",
       taskId: "task-1",
       hours: 1,
+      startTime: "2026-07-14T08:00:00.000Z",
+      endTime: "2026-07-14T09:00:00.000Z",
+      actualDurationSeconds: 3600,
       description: "run",
       proofFiles: [{ cosKey: "proofs/a.jpg", mediaType: "image", mimeType: "image/jpeg", size: 100 }]
     };
@@ -341,6 +516,70 @@ describe("BNBU API", () => {
     const response = await request(app).post("/api/scoring/convert-endurance").set("Authorization", `Bearer ${token}`).send({ timeSeconds: 780, gender: "male", gradeLevel: "freshman" });
     expect(response.status).toBe(422);
     expect(response.body.code).toBe("TIME_OUT_OF_RANGE");
+  });
+
+  it("submits and lists problem-feedback tickets with contact details", async () => {
+    const { app, token } = await authenticatedAgent();
+    const payload = {
+      category: "打卡问题",
+      description: "完成打卡后页面没有刷新记录。",
+      currentPage: "我的 / 问题反馈",
+      clientVersion: "0.1.0-mvp",
+      screenshots: ["proofs/feedback.png"],
+      email: "student@example.com",
+      phone: "+86 138 0000 0000"
+    };
+    const created = await request(app).post("/api/v1/student/feedback")
+      .set("Authorization", `Bearer ${token}`).set("Idempotency-Key", "feedback-ticket-0001").send(payload);
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ category: "打卡问题", email: payload.email, phone: payload.phone, status: "pending" });
+
+    const listed = await request(app).get("/api/v1/student/feedback")
+      .set("Authorization", `Bearer ${token}`);
+    expect(listed.status).toBe(200);
+    expect(listed.headers["cache-control"]).toContain("no-store");
+    expect(listed.body.tickets).toHaveLength(1);
+  });
+
+  it("stores a student's email language preference", async () => {
+    const store = new FakeStore();
+    const { app, token } = await authenticatedAgent(store);
+
+    const response = await request(app)
+      .put("/api/v1/student/preferences/language")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", "language-preference-0001")
+      .send({ language: "en" });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ language: "en" });
+    expect(store.preferredLanguage).toBe("en");
+  });
+
+  it("registers and removes only an opaque Android FCM token", async () => {
+    const store = new FakeStore();
+    const { app, token } = await authenticatedAgent(store);
+    const payload = {
+      token: "fcm-token-for-device-address-only-1234567890",
+      platform: "android",
+      appVersion: "0.1.0-mvp"
+    };
+    expect(
+      (await request(app).post("/api/v1/student/push-devices")
+        .set("Authorization", `Bearer ${token}`).send(payload)).status
+    ).toBe(204);
+    expect(store.pushDeviceRegistrations).toEqual([{ studentId, input: payload }]);
+
+    const rejected = await request(app).post("/api/v1/student/push-devices")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ ...payload, title: "Student-specific text is not allowed" });
+    expect(rejected.status).toBe(422);
+
+    expect(
+      (await request(app).delete("/api/v1/student/push-devices")
+        .set("Authorization", `Bearer ${token}`).send(payload)).status
+    ).toBe(204);
+    expect(store.pushDeviceRemovals).toEqual([{ studentId, token: payload.token }]);
   });
 });
 

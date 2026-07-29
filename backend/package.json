@@ -15,6 +15,7 @@
     "db:seed": "tsx src/db/seed.ts",
     "cleanup:proofs": "node dist/src/jobs/cleanup-proofs.js",
     "cleanup:proofs:dev": "tsx src/jobs/cleanup-proofs.ts",
+    "pm2:configure-logrotate": "node scripts/configure-pm2-logrotate.cjs",
     "check": "npm run typecheck && npm test && npm run build"
   },
   "engines": {

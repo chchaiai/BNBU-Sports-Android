@@ -23,6 +23,49 @@ class ExerciseSessionStateTest {
     }
 
     @Test
+    fun exerciseDescriptionIsTruncatedAtTwoHundredCharacters() {
+        val description = "a".repeat(MaxExerciseDescriptionLength + 1)
+
+        assertEquals(MaxExerciseDescriptionLength, truncateExerciseDescription(description).length)
+    }
+
+    @Test
+    fun exerciseRemarkIsTruncatedAtTwoHundredCharacters() {
+        val remark = "a".repeat(MaxExerciseRemarkLength + 1)
+
+        assertEquals(MaxExerciseRemarkLength, truncateExerciseRemark(remark).length)
+    }
+
+    @Test
+    fun tableTennisIsAValidExerciseSport() {
+        val tableTennis = ExerciseSessionDetails(CreditType.General, "table_tennis")
+
+        assertTrue(tableTennis.isValid)
+    }
+
+    @Test
+    fun courseSportIsResolvedFromCurrentCourseName() {
+        val selection = courseSportSelection("大学体育（羽毛球）")
+
+        assertEquals("badminton", selection.sportType)
+        assertEquals("羽毛球", selection.displayName)
+        assertEquals(null, selection.customSportName)
+    }
+
+    @Test
+    fun unknownCourseSportUsesAValidCustomSport() {
+        val selection = courseSportSelection("大学体育（瑜伽）")
+        val courseDetails = ExerciseSessionDetails(
+            creditType = CreditType.CourseRelated,
+            sportType = selection.sportType,
+            customSportName = selection.customSportName
+        )
+
+        assertEquals("瑜伽", selection.displayName)
+        assertTrue(courseDetails.isValid)
+    }
+
+    @Test
     fun activeDurationUsesTimestampsInsteadOfUiTicks() {
         val active = machine.start(ExerciseSessionState.Idle, "session-1", details)
             .changedState<ExerciseSessionState.Active>()
@@ -51,22 +94,50 @@ class ExerciseSessionStateTest {
     }
 
     @Test
-    fun finishBeforeOneHourPausesAndKeepsSessionAvailableToResume() {
+    fun pausedSessionRemainsAvailableAfterMoreThanSixHours() {
+        val active = machine.start(ExerciseSessionState.Idle, "session-1", details)
+            .changedState<ExerciseSessionState.Active>()
+        clock.advance(20.minutes)
+        val paused = machine.pause(active).changedState<ExerciseSessionState.Paused>()
+
+        clock.advance(6.hours + 1.minutes)
+
+        val result = machine.autoFinishIfNeeded(paused)
+
+        assertTrue(result is ExerciseSessionTransition.Changed)
+        assertSame(paused, (result as ExerciseSessionTransition.Changed).state)
+        assertTrue(machine.resume(paused) is ExerciseSessionTransition.Changed)
+    }
+
+    @Test
+    fun finishBeforeOneHourDiscardsTheSessionAndResetsTheTimer() {
         val active = machine.start(ExerciseSessionState.Idle, "session-1", details)
             .changedState<ExerciseSessionState.Active>()
         clock.advance(59.minutes + 59.seconds)
 
         val result = machine.requestFinish(active)
 
-        assertTrue(result is ExerciseSessionTransition.TooShort)
-        result as ExerciseSessionTransition.TooShort
+        assertTrue(result is ExerciseSessionTransition.Discarded)
+        result as ExerciseSessionTransition.Discarded
         assertEquals(ExerciseTooShortMessage, result.message)
-        assertEquals(59.minutes + 59.seconds, result.state.accumulatedActiveMillis)
+        assertTrue(result.message.contains("计时已清零，本地草稿已清除"))
+        assertSame(ExerciseSessionState.Idle, result.state)
+        assertEquals(0L, result.state.effectiveDurationMillis(clock.nowEpochMillis()))
+        assertTrue(machine.resume(result.state) is ExerciseSessionTransition.Rejected)
+    }
 
-        clock.advance(10.minutes)
-        val resumed = machine.resume(result.state).changedState<ExerciseSessionState.Active>()
-        clock.advance(1.seconds)
-        assertEquals(60.minutes, resumed.effectiveDurationMillis(clock.nowEpochMillis()))
+    @Test
+    fun finishPausedSessionBeforeOneHourAlsoDiscardsTheSession() {
+        val active = machine.start(ExerciseSessionState.Idle, "session-1", details)
+            .changedState<ExerciseSessionState.Active>()
+        clock.advance(30.minutes)
+        val paused = machine.pause(active).changedState<ExerciseSessionState.Paused>()
+
+        val result = machine.requestFinish(paused)
+
+        assertTrue(result is ExerciseSessionTransition.Discarded)
+        assertSame(ExerciseSessionState.Idle, result.state)
+        assertEquals(0L, result.state.effectiveDurationMillis(clock.nowEpochMillis()))
     }
 
     @Test
@@ -172,4 +243,7 @@ class ExerciseSessionStateTest {
 
     private val Int.minutes: Long
         get() = this * 60L * 1_000L
+
+    private val Int.hours: Long
+        get() = this * 60.minutes
 }

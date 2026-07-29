@@ -1,257 +1,364 @@
 package edu.bnbu.student.mvp.feature.login
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import edu.bnbu.student.mvp.core.designsystem.AppleTextButton as TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import edu.bnbu.student.mvp.core.designsystem.GridBackground
-import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
-import edu.bnbu.student.mvp.core.designsystem.PrimaryActionButton
-import edu.bnbu.student.mvp.core.designsystem.SectionTitle
+import edu.bnbu.student.mvp.R
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.designsystem.UniversityBrandLockup
+import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 
 @Composable
 fun LoginScreen(
-    onLogin: (account: String, password: String) -> Unit,
+    onEmailLogin: () -> Unit,
+    onPhoneLogin: () -> Unit,
+    onScanJoin: () -> Unit,
+    onRecoveryRequest: () -> Unit,
+    onMockUserLogin: () -> Unit,
     onOpenPrivacy: () -> Unit = {},
-    isLoading: Boolean = false,
-    errorMessage: String? = null
+    privacyAccepted: Boolean = false,
+    onPrivacyAcceptedChange: (Boolean) -> Unit = {},
 ) {
-    var account by rememberSaveable { mutableStateOf("") }
-    // Passwords must not enter Android's saved-instance-state bundle.
-    var password by remember { mutableStateOf("") }
-    var passwordVisible by remember { mutableStateOf(false) }
-    val passwordFocusRequester = remember { FocusRequester() }
-    val keyboardController = LocalSoftwareKeyboardController.current
-    val canLogin = account.isNotBlank() && password.isNotBlank() && !isLoading
-    val submitLogin = {
-        if (canLogin) {
-            keyboardController?.hide()
-            onLogin(account.trim(), password)
-        }
-    }
+    val colors = MaterialTheme.colorScheme
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        GridBackground(modifier = Modifier.fillMaxSize())
-
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(colors.background)
+            .verticalScroll(rememberScrollState())
+            .statusBarsPadding()
+            .padding(horizontal = 20.dp)
+            .padding(top = 16.dp, bottom = 28.dp)
+            .testTag("screen.login"),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(24.dp)
-                .testTag("screen.login"),
-            verticalArrangement = Arrangement.spacedBy(28.dp)
+                .fillMaxWidth()
+                .widthIn(max = 520.dp)
         ) {
             UniversityBrandLockup(modifier = Modifier.fillMaxWidth())
 
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Spacer(Modifier.height(40.dp))
+
+            Text(
+                text = stringResource(R.string.login_title),
+                color = colors.onBackground,
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = stringResource(R.string.login_subtitle),
+                color = colors.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyLarge
+            )
+
+            Spacer(Modifier.height(32.dp))
+
+            SwissPanel(contentPadding = 20.dp) {
                 Text(
-                    text = "BNBU",
-                    color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.displayLarge
+                    text = stringResource(R.string.login_choose_method),
+                    color = colors.onSurface,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold
                 )
-                Text(
-                    text = "体育打卡与成绩进度",
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = 34.sp,
-                    fontWeight = FontWeight.Medium,
-                    lineHeight = 38.sp
+                Spacer(Modifier.height(20.dp))
+
+                PrivacyConsentRow(
+                    checked = privacyAccepted,
+                    onCheckedChange = onPrivacyAcceptedChange,
+                    onOpenPrivacy = onOpenPrivacy
                 )
-                Text(
-                    text = "课程相关 10 小时 + 其他运动 10 小时，进度、缺口与打卡记录一次看清。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyLarge
+
+                Spacer(Modifier.height(24.dp))
+                LoginMethodButton(
+                    title = stringResource(R.string.login_email_button),
+                    subtitle = stringResource(R.string.login_email_hint),
+                    icon = Icons.Filled.Email,
+                    primary = true,
+                    enabled = privacyAccepted,
+                    modifier = Modifier.testTag("login.email"),
+                    onClick = onEmailLogin
                 )
-            }
+                Spacer(Modifier.height(12.dp))
+                LoginMethodButton(
+                    title = stringResource(R.string.login_phone_button),
+                    subtitle = stringResource(R.string.login_phone_hint),
+                    icon = Icons.Filled.Smartphone,
+                    primary = false,
+                    enabled = privacyAccepted,
+                    modifier = Modifier.testTag("login.phone"),
+                    onClick = onPhoneLogin
+                )
 
-            SwissPanel {
-                Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                    SectionTitle(eyebrow = "SIGN IN", title = "学生登录")
+                HorizontalDivider(
+                    modifier = Modifier.padding(top = 24.dp),
+                    color = colors.outlineVariant.copy(alpha = 0.6f)
+                )
+                SectionLabel(label = stringResource(R.string.login_other_methods))
 
-                    // Error message
-                    AnimatedVisibility(
-                        visible = errorMessage != null,
-                        enter = expandVertically(tween(BNBUMotion.Standard)) +
-                            fadeIn(tween(BNBUMotion.Standard)),
-                        exit = shrinkVertically(tween(BNBUMotion.Standard)) +
-                            fadeOut(tween(BNBUMotion.Quick))
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    MaterialTheme.colorScheme.errorContainer,
-                                    MaterialTheme.shapes.small
-                                )
-                                .semantics { liveRegion = LiveRegionMode.Assertive }
-                                .padding(12.dp)
-                        ) {
-                            errorMessage?.let { message ->
-                                Text(
-                                    text = message,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        }
-                    }
+                LoginMethodButton(
+                    title = stringResource(R.string.login_scan_button),
+                    subtitle = stringResource(R.string.login_scan_hint),
+                    icon = Icons.Filled.QrCodeScanner,
+                    primary = false,
+                    enabled = privacyAccepted,
+                    modifier = Modifier.testTag("login.scanJoin"),
+                    onClick = onScanJoin
+                )
 
-                    // Account field
-                    BnbuTextField(
-                        value = account,
-                        onValueChange = { account = it },
-                        label = "学号 / 邮箱",
-                        placeholder = "22301142 或 s1@bnbu.edu.cn",
-                        enabled = !isLoading,
-                        keyboardType = KeyboardType.Email,
-                        imeAction = ImeAction.Next,
-                        keyboardActions = KeyboardActions(
-                            onNext = { passwordFocusRequester.requestFocus() }
-                        )
+                Spacer(Modifier.height(4.dp))
+                TextButton(
+                    onClick = onMockUserLogin,
+                    enabled = privacyAccepted,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("login.mockUser")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
                     )
-
-                    // Password field
-                    BnbuTextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        label = "密码",
-                        placeholder = "请输入密码",
-                        enabled = !isLoading,
-                        modifier = Modifier.focusRequester(passwordFocusRequester),
-                        keyboardType = KeyboardType.Password,
-                        imeAction = ImeAction.Done,
-                        keyboardActions = KeyboardActions(onDone = { submitLogin() }),
-                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(
-                                onClick = { passwordVisible = !passwordVisible },
-                                enabled = !isLoading
-                            ) {
-                                Icon(
-                                    imageVector = if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                    contentDescription = if (passwordVisible) "隐藏密码" else "显示密码",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.login_mock_button),
+                        style = MaterialTheme.typography.labelLarge
                     )
-
-                    // Login button
-                    PrimaryActionButton(
-                        title = if (isLoading) "登录中…" else "进入学生端",
-                        icon = Icons.AutoMirrored.Filled.ArrowForward,
-                        modifier = Modifier.testTag("login.submit"),
-                        enabled = canLogin,
-                        loading = isLoading,
-                        onClick = submitLogin
-                    )
-
-                    TextButton(
-                        onClick = onOpenPrivacy,
-                        enabled = !isLoading,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("登录前请阅读《隐私政策》")
-                    }
                 }
             }
 
-            Text(
-                text = "第一阶段仅包含学生端体育打卡与成绩透明化；老师端和管理端由 Web 承担。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall
+            Spacer(Modifier.height(12.dp))
+            TextButton(
+                onClick = onRecoveryRequest,
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 10.dp),
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .heightIn(min = 48.dp)
+                    .testTag("login.recoveryRequest")
+            ) {
+                Text(
+                    text = stringResource(R.string.login_recovery),
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
+
+        }
+    }
+}
+
+@Composable
+private fun PrivacyConsentRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    onOpenPrivacy: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    val privacyText = buildAnnotatedString {
+        append(stringResource(R.string.login_privacy_prefix))
+        append(" ")
+        withLink(
+            LinkAnnotation.Clickable(
+                tag = "privacy",
+                styles = TextLinkStyles(
+                    style = SpanStyle(
+                        color = colors.primary,
+                        fontWeight = FontWeight.Medium
+                    )
+                ),
+                linkInteractionListener = { onOpenPrivacy() }
+            )
+        ) {
+            append(stringResource(R.string.login_privacy_policy))
+        }
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("login.privacyConsent"),
+        shape = MaterialTheme.shapes.medium,
+        color = colors.surfaceContainerHigh,
+        shadowElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Checkbox(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = CheckboxDefaults.colors(checkedColor = colors.primary)
+            )
+            Spacer(Modifier.width(4.dp))
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(top = 11.dp, end = 4.dp)
+            ) {
+                Text(
+                    text = privacyText,
+                    color = colors.onSurface,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                AnimatedVisibility(visible = !checked) {
+                    Text(
+                        text = stringResource(R.string.login_privacy_required),
+                        color = colors.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LoginMethodButton(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    primary: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    val containerColor by animateColorAsState(
+        targetValue = when {
+            !enabled -> colors.surfaceContainerHigh
+            primary -> colors.primary
+            else -> colors.surface
+        },
+        label = "methodContainer"
+    )
+    val contentColor by animateColorAsState(
+        targetValue = when {
+            !enabled -> colors.onSurfaceVariant.copy(alpha = 0.58f)
+            primary -> colors.onPrimary
+            else -> colors.onSurface
+        },
+        label = "methodContent"
+    )
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 64.dp)
+            .bnbuClickable(
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick
+            ),
+        shape = MaterialTheme.shapes.large,
+        color = containerColor,
+        shadowElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = if (primary && enabled) {
+                    colors.onPrimary.copy(alpha = 0.14f)
+                } else {
+                    colors.primary.copy(alpha = if (enabled) 0.1f else 0.06f)
+                }
+            ) {
+                Box(
+                    modifier = Modifier.size(36.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = if (!primary && enabled) colors.primary else contentColor,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = contentColor,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = subtitle,
+                    color = contentColor.copy(alpha = 0.74f),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = contentColor.copy(alpha = 0.72f),
+                modifier = Modifier.size(19.dp)
             )
         }
     }
 }
 
 @Composable
-private fun BnbuTextField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String,
-    placeholder: String,
-    enabled: Boolean,
-    modifier: Modifier = Modifier,
-    keyboardType: KeyboardType = KeyboardType.Text,
-    imeAction: ImeAction = ImeAction.Default,
-    keyboardActions: KeyboardActions = KeyboardActions.Default,
-    visualTransformation: VisualTransformation = VisualTransformation.None,
-    trailingIcon: @Composable (() -> Unit)? = null
-) {
-    val cs = MaterialTheme.colorScheme
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            text = label.uppercase(),
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.labelSmall
-        )
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            enabled = enabled,
-            modifier = modifier.fillMaxWidth(),
-            placeholder = { Text(placeholder) },
-            keyboardOptions = KeyboardOptions(
-                keyboardType = keyboardType,
-                imeAction = imeAction
-            ),
-            keyboardActions = keyboardActions,
-            visualTransformation = visualTransformation,
-            singleLine = true,
-            shape = MaterialTheme.shapes.small,
-            trailingIcon = trailingIcon
-        )
-    }
+private fun SectionLabel(label: String) {
+    Text(
+        text = label,
+        modifier = Modifier.padding(top = 28.dp, bottom = 12.dp),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Medium
+    )
 }
