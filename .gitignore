@@ -16,3 +16,14 @@ local.properties
 *.aab
 *.jks
 *.keystore
+
+# This repository tracks the Android client only. Keep sibling products,
+# generated binaries, and delivery artifacts out of Android commits.
+/BNBU-web/
+/backend/
+/classes*.dex
+/deliverables/
+/docs/
+/lib/
+/scripts/
+/agent.md
