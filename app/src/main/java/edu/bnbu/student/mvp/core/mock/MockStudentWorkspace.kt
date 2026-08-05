@@ -29,6 +29,7 @@ object MockStudentWorkspace {
         val student = StudentProfile(
             id = studentId,
             name = "林若晴",
+            studentNumber = studentId,
             email = "ruoqing.lin@bnbu.edu.cn",
             college = "工商与管理学院",
             className = "2024级工商管理1班",
@@ -42,14 +43,14 @@ object MockStudentWorkspace {
         val badminton = Course(
             id = "course-badminton-2026-spring", code = "PE2026B12", section = "02",
             name = "大学体育（羽毛球）", semester = "2025-2026 学年第二学期",
-            students = 32, pending = 1, completion = 88, missing = 4,
+            students = 32, completion = 88, missing = 4,
             deadline = "2026-08-02 23:59", teacher = "陈宇航", teacherId = "teacher-chen-yuhang",
             semesterId = "2025-2026-2", academicYear = "2025-2026", term = "第二学期"
         )
         val yoga = Course(
             id = "course-yoga-2026-summer", code = "PE2026S08", section = "01",
             name = "暑期体能与瑜伽", semester = "2025-2026 学年夏季学期",
-            students = 28, pending = 0, completion = 64, missing = 10,
+            students = 28, completion = 64, missing = 10,
             deadline = "2026-08-16 23:59", teacher = "周思敏", teacherId = "teacher-zhou-simin",
             semesterId = "2025-2026-summer", academicYear = "2025-2026", term = "夏季学期"
         )

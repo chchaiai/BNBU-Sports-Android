@@ -62,10 +62,10 @@ sealed class StudentEndpoint(val method: HttpMethod) {
     /** Service-feedback contract. The backend owns the final field schema. */
     data object SubmitFeedback : StudentEndpoint(HttpMethod.POST)
     data object FeedbackTickets : StudentEndpoint(HttpMethod.GET)
-    /** Public lookup used before a student submits a course-join request. */
+    /** Public lookup used before a student directly joins a course. */
     data class CourseInviteLookup(val code: String) : StudentEndpoint(HttpMethod.GET)
-    /** A public invite flow: submit a student's request to join the invited course. */
-    data class CourseInviteJoinRequest(val code: String) : StudentEndpoint(HttpMethod.POST)
+    /** Atomically validates the invite and creates or returns the active membership. */
+    data class CourseJoin(val courseId: String) : StudentEndpoint(HttpMethod.POST)
 
     val path: String
         get() = when (this) {
@@ -115,8 +115,7 @@ sealed class StudentEndpoint(val method: HttpMethod) {
             VerifyPhoneContactCode -> "/v1/student/contacts/phone/verify"
             SubmitFeedback, FeedbackTickets -> "/v1/student/feedback"
             is CourseInviteLookup -> "/v1/course-invites/${code.pathSegment()}"
-            is CourseInviteJoinRequest ->
-                "/v1/course-invites/${code.pathSegment()}/join-request"
+            is CourseJoin -> "/courses/${courseId.pathSegment()}/join"
         }
 }
 

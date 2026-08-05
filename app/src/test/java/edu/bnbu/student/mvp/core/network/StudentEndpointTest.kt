@@ -66,6 +66,11 @@ class StudentEndpointTest {
                 StudentEndpoint.CourseInviteLookup("BNBU-7K3P9Q"),
                 HttpMethod.GET,
                 "/v1/course-invites/BNBU-7K3P9Q"
+            ),
+            Triple(
+                StudentEndpoint.CourseJoin("course-1"),
+                HttpMethod.POST,
+                "/courses/course-1/join"
             )
         )
 
@@ -87,6 +92,10 @@ class StudentEndpointTest {
                 scope = "current term",
                 semesterId = "2026/fall"
             ).path
+        )
+        assertEquals(
+            "/courses/course%2F1/join",
+            StudentEndpoint.CourseJoin("course/1").path
         )
     }
 }

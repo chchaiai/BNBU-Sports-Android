@@ -55,7 +55,6 @@ import kotlinx.coroutines.launch
 fun EnterInviteCodeScreen(
     onInviteResolved: (inviteCode: String, course: CourseJoinInfo) -> Unit,
     onBack: () -> Unit,
-    onInviteUnavailable: (() -> Unit)? = null,
     apiClient: StudentApiClient = remember { StudentApiClient() }
 ) {
     val appLanguage = AppLanguagePreferences.currentLanguage
@@ -86,15 +85,12 @@ fun EnterInviteCodeScreen(
                     apiClient.request(StudentEndpoint.CourseInviteLookup(normalizedCode)),
                     CourseInviteLookupResponse::class.java
                 )
+                response.validateForDirectJoin()
                 onInviteResolved(normalizedCode, response.toCourseJoinInfo())
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                if (isInviteUnavailableError(error) && onInviteUnavailable != null) {
-                    onInviteUnavailable()
-                } else {
-                    errorMessage = inviteLookupErrorMessage(error)
-                }
+                errorMessage = inviteLookupErrorMessage(error)
             } finally {
                 isResolving = false
             }
@@ -137,8 +133,8 @@ fun EnterInviteCodeScreen(
             )
             Text(
                 text = interfaceText(
-                    "请输入老师提供的邀请码。查询后请核对课程、教学班和教师信息，再提交加入申请。",
-                    "Enter the code from your teacher. Review the course, section, and instructor before submitting your request."
+                    "请输入老师提供的邀请码。查询后请核对课程、教学班和教师信息，再确认直接加入。",
+                    "Enter the code from your teacher. Review the course, section, and instructor before joining directly."
                 ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyLarge

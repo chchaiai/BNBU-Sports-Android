@@ -70,9 +70,7 @@ import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.model.CheckInRecord
 import edu.bnbu.student.mvp.core.model.Course
-import edu.bnbu.student.mvp.core.model.CourseJoinRequest
 import edu.bnbu.student.mvp.core.model.CreditType
-import edu.bnbu.student.mvp.core.model.JoinRequestStatus
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import java.time.Instant
@@ -87,8 +85,7 @@ private val CourseControlShape = RoundedCornerShape(14.dp)
 fun CoursesScreen(
     appState: StudentAppState,
     onScanJoin: () -> Unit = {},
-    onEnterCode: () -> Unit = {},
-    onOpenJoinRequest: () -> Unit = {}
+    onEnterCode: () -> Unit = {}
 ) {
     var selectedCourseId by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -124,8 +121,7 @@ fun CoursesScreen(
                 appState = appState,
                 onCourseSelected = { selectedCourseId = it.id },
                 onScanJoin = onScanJoin,
-                onEnterCode = onEnterCode,
-                onOpenJoinRequest = onOpenJoinRequest
+                onEnterCode = onEnterCode
             )
         } else {
             CourseDetail(
@@ -143,8 +139,7 @@ private fun CourseList(
     appState: StudentAppState,
     onCourseSelected: (Course) -> Unit,
     onScanJoin: () -> Unit,
-    onEnterCode: () -> Unit,
-    onOpenJoinRequest: () -> Unit
+    onEnterCode: () -> Unit
 ) {
     var historyExpanded by rememberSaveable { mutableStateOf(false) }
     val courses = appState.workspace.courses
@@ -168,14 +163,6 @@ private fun CourseList(
                 supportingText = interfaceText("每学期仅可选择一门课程", "You may select one course per semester.")
             )
         }
-
-        appState.workspace.courseJoinRequest
-            ?.takeIf { appState.hasPendingJoinRequest }
-            ?.let { request ->
-                item(key = "join-request") {
-                    CourseJoinRequestCard(request = request, onOpen = onOpenJoinRequest)
-                }
-            }
 
         if (courses.isEmpty()) {
             item {
@@ -309,58 +296,6 @@ private fun CourseSectionHeader(title: String, count: Int, unit: String = interf
             fontSize = 15.sp,
             lineHeight = 20.sp
         )
-    }
-}
-
-@Composable
-private fun CourseJoinRequestCard(
-    request: CourseJoinRequest,
-    onOpen: () -> Unit
-) {
-    val colors = MaterialTheme.colorScheme
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .bnbuClickable(onClickLabel = interfaceText("查看加入申请", "View join request"), onClick = onOpen),
-        shape = CourseCardShape,
-        color = colors.surface
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                Text(
-                    text = interfaceText("课程加入申请", "Course join request"),
-                    color = colors.onSurface,
-                    fontSize = 17.sp,
-                    lineHeight = 22.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "${request.courseCode} · Section ${request.section}",
-                    color = colors.onSurfaceVariant,
-                    fontSize = 14.sp,
-                    lineHeight = 19.sp
-                )
-            }
-            CourseStatusPill(
-                text = request.status.label,
-                emphasized = request.status == JoinRequestStatus.PENDING
-            )
-            Spacer(Modifier.width(8.dp))
-            Icon(
-                imageVector = Icons.Filled.ChevronRight,
-                contentDescription = null,
-                tint = colors.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
-        }
     }
 }
 
@@ -599,7 +534,7 @@ private fun CourseCard(
                     } else {
                         course.enrollmentStatus.enrollmentStatusLabel()
                     },
-                    emphasized = !historical && course.enrollmentStatus == "enrolled"
+                    emphasized = !historical && course.hasActiveMembership
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(
@@ -770,7 +705,7 @@ private fun CourseDetailHeader(course: Course, historical: Boolean) {
                 } else {
                     course.enrollmentStatus.enrollmentStatusLabel()
                 },
-                emphasized = !historical && course.enrollmentStatus == "enrolled"
+                emphasized = !historical && course.hasActiveMembership
             )
             Spacer(Modifier.width(10.dp))
             Text(
@@ -1120,7 +1055,7 @@ private data class CourseFact(
 private fun Course.isHistorical(): Boolean =
     !isCurrent ||
         semesterStatus == "archived" ||
-        enrollmentStatus in setOf("completed", "withdrawn")
+        enrollmentStatus.trim().lowercase() in setOf("completed", "withdrawn", "removed", "exited", "disabled")
 
 private fun CheckInRecord.submittedDate(): String =
     submittedAt.substringBefore(' ').ifBlank { interfaceText("未提供", "Not available") }
@@ -1173,9 +1108,12 @@ private fun CheckInRecord.actualDurationText(): String {
 }
 
 private fun String.enrollmentStatusLabel(): String = when (this) {
-    "enrolled" -> interfaceText("修读中", "In progress")
+    "active", "enrolled" -> interfaceText("修读中", "In progress")
     "completed" -> interfaceText("已完成", "Complete")
-    "withdrawn" -> interfaceText("已退课", "Withdrawn")
+    "withdrawn" -> interfaceText("已退出课程", "Exited course")
+    "removed" -> interfaceText("已移出课程", "Removed from course")
+    "exited" -> interfaceText("已退出课程", "Exited course")
+    "disabled" -> interfaceText("成员关系已停用", "Membership disabled")
     else -> ifBlank { interfaceText("待确认", "Pending") }
 }
 

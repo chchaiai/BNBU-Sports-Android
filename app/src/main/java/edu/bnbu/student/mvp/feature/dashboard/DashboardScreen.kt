@@ -70,7 +70,6 @@ import edu.bnbu.student.mvp.feature.checkin.canStartExercise
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionState
 import edu.bnbu.student.mvp.feature.checkin.session.effectiveDurationMillis
-import edu.bnbu.student.mvp.feature.courses.JoinRequestEntryPanel
 import androidx.compose.runtime.mutableLongStateOf
 import java.text.SimpleDateFormat
 import java.time.ZoneId
@@ -92,8 +91,7 @@ internal fun DashboardScreen(
     onOpenNotificationSheet: () -> Unit = {},
     onOpenCheckIn: () -> Unit = {},
     onScanJoin: () -> Unit = {},
-    onEnterCode: () -> Unit = {},
-    onOpenJoinRequest: () -> Unit = {}
+    onEnterCode: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -121,16 +119,7 @@ internal fun DashboardScreen(
             }
         }
 
-        val joinRequest = appState.workspace.courseJoinRequest
-            ?.takeIf { appState.hasPendingJoinRequest }
-        if (joinRequest != null) {
-            item {
-                JoinRequestEntryPanel(
-                    request = joinRequest,
-                    onOpen = onOpenJoinRequest
-                )
-            }
-        } else if (!appState.hasActiveEnrollment) {
+        if (!appState.hasActiveEnrollment) {
             item {
                 CourseJoinEntryPanel(
                     onScanJoin = onScanJoin,

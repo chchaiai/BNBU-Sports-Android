@@ -109,13 +109,11 @@
     <string name="i18n_5d4bac590a6d3b83a9119a451eedcc2a8c996abd2008ea65c6b08aeb21c4f89d" formatted="false"><![CDATA[Upcoming]]></string>
     <string name="i18n_5dc9e1fb8b59cc075b8c3a03ffbc09fca147e4aa51c3effecfcf40f1cbc48fa8" formatted="false"><![CDATA[Endurance exemption · Teacher-assigned score]]></string>
     <string name="i18n_5e2bba038f8cb21c9ef45daae632a81c3cc3d6f7dd73faddd5c35c24366d13c1" formatted="false"><![CDATA[Check-in issue]]></string>
-    <string name="i18n_5f38d62895a21551191e1f40d6128aa8f00574e7632a856e4a8a60b80c374dbd" formatted="false"><![CDATA[View join request]]></string>
     <string name="i18n_5f921164dbb184c5bce14b476feb25ae12ca69f706eeae2470603d4708805dc0" formatted="false"><![CDATA[Check-in hours]]></string>
     <string name="i18n_62983a5a9fdc0d249358e4512fb4ca891149705eff5c2b861aa2bca6e0b52f27" formatted="false"><![CDATA[No check-in photos or videos]]></string>
     <string name="i18n_62cffbffffeefd7a51dd624b9a633fec1fd3aaca08b5b4023fddac387e28e3bd" formatted="false"><![CDATA[Discard this record]]></string>
     <string name="i18n_652fdd601794fce06295b95781b5a04fa442e9a91ded77eb47784cc3447805da" formatted="false"><![CDATA[Enter a valid mobile number.]]></string>
     <string name="i18n_65bff7ad17623ea376fbd4cacc2539ca44a06144b03a9cd98727d6aed5bcd8c3" formatted="false"><![CDATA[Back to check-in records]]></string>
-    <string name="i18n_65f684e3e2b5e5afa1ef350da2c3705d2cd47d2314d5ddc82bbe6485a6ac9b62" formatted="false"><![CDATA[Course join request]]></string>
     <string name="i18n_65fb5ae5e2dac100d0df10db7b539d78b49154daf5ec7e121b94a8bed911eb6a" formatted="false"><![CDATA[Start time]]></string>
     <string name="i18n_6668469a394449629de0ea6c78e4c9dbe42376b6cd7df7a27331563b6546bac7" formatted="false"><![CDATA[End exercise]]></string>
     <string name="i18n_66d0f1e30466a2b7bbfa42e774b7508b84a8b7a1cabf25fa98e083d36ab5e53e" formatted="false"><![CDATA[Add or change your email and mobile number to keep your sign-in methods available.]]></string>
@@ -258,7 +256,6 @@
     <string name="i18n_d76503c2c191ee95fb1b862aa9ce010deb178da1675d64cac3513b076ad436b6" formatted="false"><![CDATA[This record has no media files to display.]]></string>
     <string name="i18n_d7ba7f6bd39277d69d2fce1b2b91a98a582819244562854d1d3a84586d0e4c56" formatted="false"><![CDATA[Check-in submission failed. Try again.]]></string>
     <string name="i18n_d83a00439f92c9051b1e17afbf161dfe90eddf345032fdd64c40eb944db51717" formatted="false"><![CDATA[No records]]></string>
-    <string name="i18n_d8ee1983c45f9b012e68a88fcf29ae72abbd9b257a03943dba4a58b8b9a4485b" formatted="false"><![CDATA[Withdrawn]]></string>
     <string name="i18n_d92c431696e0cd15bced1dc8379726b8f3c5a8886326867f807423455e05611d" formatted="false"><![CDATA[Select at least 1 item]]></string>
     <string name="i18n_daa006ba35ddd6198d516eba92d85ead23388a0c3c6aa5fe4b2c398dc727d842" formatted="false"><![CDATA[Past semester]]></string>
     <string name="i18n_daebffa3933037748fb73b098099e5f5265245590638319273a1854220c6270a" formatted="false"><![CDATA[Scan QR code]]></string>

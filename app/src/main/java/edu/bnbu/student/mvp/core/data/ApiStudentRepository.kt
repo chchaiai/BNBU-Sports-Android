@@ -266,6 +266,8 @@ class ApiStudentRepository(
             name = remoteProfile?.name?.takeIf { it.isNotBlank() }
                 ?: profile?.name?.takeIf { it.isNotBlank() }
                 ?: "学生",
+            studentNumber = remoteProfile?.studentNumber?.takeIf { it.isNotBlank() }
+                ?: profile?.studentNumber.orEmpty(),
             email = remoteProfile?.email?.takeIf { it.isNotBlank() } ?: profile?.email.orEmpty(),
             college = remoteProfile?.college?.takeIf { it.isNotBlank() } ?: profile?.college.orEmpty(),
             className = remoteProfile?.className?.takeIf { it.isNotBlank() } ?: profile?.className.orEmpty(),
@@ -317,7 +319,6 @@ class ApiStudentRepository(
                     name = c.name,
                     semester = c.semester.name.ifBlank { c.semester.academicYear },
                     students = 0,
-                    pending = 0,
                     completion = 0,
                     missing = 0,
                     deadline = c.semester.endDate.orEmpty(),
@@ -343,7 +344,6 @@ class ApiStudentRepository(
                     name = c.courseName,
                     semester = "当前学期",
                     students = 0,
-                    pending = 0,
                     completion = 0,
                     missing = 0,
                     deadline = "",
