@@ -44,11 +44,15 @@ data class SendPhoneCodeRequest(
     val phone: String
 )
 
-/** Request body for POST /api/v1/course-invites/{code}/join-request. */
-data class CourseInviteJoinRequestBody(
-    val name: String,
+/** Request body for direct enrollment through POST /courses/{courseId}/join. */
+data class CourseJoinRequestBody(
+    val studentName: String,
     val studentNumber: String,
-    val email: String?
+    val gender: String,
+    val grade: String,
+    /** Opaque QR/invitation credential; the client never derives permissions from it. */
+    val inviteCode: String,
+    val email: String? = null
 )
 
 data class ProofFileReference(

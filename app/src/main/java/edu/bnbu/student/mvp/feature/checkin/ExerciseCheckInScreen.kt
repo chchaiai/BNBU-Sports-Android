@@ -432,7 +432,7 @@ private fun ExercisePreparationContent(
     val selectedCreditType = CreditType.entries.firstOrNull { it.name == creditTypeName }
         ?: CreditType.General
     val currentCourse = appState.workspace.courses.firstOrNull {
-        it.isCurrent && it.enrollmentStatus == "enrolled" && it.isOpenForCheckIn
+        it.isCurrent && it.hasActiveMembership && it.isOpenForCheckIn
     }
     val selectedCourseSport = currentCourse?.let { courseSportSelection(it.name) }
     val sportType = if (selectedCreditType == CreditType.CourseRelated) {

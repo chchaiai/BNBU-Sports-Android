@@ -42,7 +42,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCodeScanner
-import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.ButtonDefaults
@@ -82,7 +81,7 @@ import kotlinx.coroutines.launch
 
 private enum class GuideArtwork {
     CourseJoin,
-    JoinRequest,
+    DirectJoin,
     StartExercise,
     ExerciseRecord,
     SubmittedRecords,
@@ -166,13 +165,13 @@ private fun preLoginGuideSteps(): List<GuideStep> = listOf(
         artwork = GuideArtwork.CourseJoin
     ),
     GuideStep(
-        title = interfaceText("确认并提交申请", "Confirm and submit"),
+        title = interfaceText("确认后直接加入", "Confirm and join directly"),
         eyebrow = interfaceText("核对信息后再加入", "Review before you join"),
         description = interfaceText(
-            "核对课程和个人资料后提交加入申请；如需补正或等待审核，按页面提示处理。",
-            "Review the course and your details, then submit the join request. Follow the on-screen guidance if information is needed or the request is under review."
+            "核对课程，填写姓名、学号、性别和年级；服务端校验成功后立即加入并进入学生首页，无需等待教师审核。",
+            "Review the course and enter your name, student ID, gender, and grade. After server validation, you join immediately and open the student home screen without teacher approval."
         ),
-        artwork = GuideArtwork.JoinRequest
+        artwork = GuideArtwork.DirectJoin
     )
 )
 
@@ -502,7 +501,7 @@ private fun GuideArtwork(
         ) {
             when (step.artwork) {
                 GuideArtwork.CourseJoin -> CourseJoinArtwork()
-                GuideArtwork.JoinRequest -> JoinRequestArtwork()
+                GuideArtwork.DirectJoin -> DirectJoinArtwork()
                 GuideArtwork.StartExercise -> StartExerciseArtwork()
                 GuideArtwork.ExerciseRecord -> ExerciseRecordArtwork()
                 GuideArtwork.SubmittedRecords -> SubmittedRecordsArtwork()
@@ -588,7 +587,7 @@ private fun CourseJoinArtwork() {
 }
 
 @Composable
-private fun JoinRequestArtwork() {
+private fun DirectJoinArtwork() {
     val colors = MaterialTheme.colorScheme
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -638,13 +637,13 @@ private fun JoinRequestArtwork() {
                 )
                 GuideInfoRow(
                     icon = Icons.AutoMirrored.Filled.Assignment,
-                    title = interfaceText("提交加入申请", "Submit the join request")
+                    title = interfaceText("确认姓名、学号、性别和年级", "Confirm name, student ID, gender, and grade")
                 )
             }
         }
         StatusArtworkRow(
-            icon = Icons.Filled.Schedule,
-            text = interfaceText("等待审核或按提示补正", "Wait for review or add what is needed"),
+            icon = Icons.Filled.Check,
+            text = interfaceText("校验成功后立即成为课程成员", "Become an active course member after validation"),
             containerColor = colors.secondaryContainer,
             contentColor = colors.onSecondaryContainer,
             iconColor = colors.secondary

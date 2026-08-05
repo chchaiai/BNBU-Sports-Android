@@ -84,8 +84,8 @@ import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
 import edu.bnbu.student.mvp.core.designsystem.BnbuSportsBrandLockup
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
-import edu.bnbu.student.mvp.core.model.CourseJoinRequest
 import edu.bnbu.student.mvp.core.model.SystemMode
+import edu.bnbu.student.mvp.core.network.StudentApiClient
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.checkin.CheckInScreen
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
@@ -94,7 +94,7 @@ import edu.bnbu.student.mvp.feature.courses.CourseJoinInfo
 import edu.bnbu.student.mvp.feature.courses.CoursesScreen
 import edu.bnbu.student.mvp.feature.courses.EnterInviteCodeScreen
 import edu.bnbu.student.mvp.feature.courses.ScanJoinScreen
-import edu.bnbu.student.mvp.feature.courses.JoinRequestStatusScreen
+import edu.bnbu.student.mvp.feature.courses.buildDemoCourseJoinResponse
 import edu.bnbu.student.mvp.feature.dashboard.DashboardScreen
 import edu.bnbu.student.mvp.feature.grades.GradesScreen
 import edu.bnbu.student.mvp.feature.guide.PostEnrollmentGuideScreen
@@ -136,7 +136,6 @@ enum class SubScreen {
     None,
     ScanJoin,
     EnterCode,
-    JoinRequestStatus,
     CourseJoinConfirm,
     EnduranceScoring,
     Exemption,
@@ -374,12 +373,34 @@ private fun AppRootContent(
                     CourseJoinConfirmScreen(
                         inviteCode = inviteCode,
                         course = inviteCourse,
+                        initialName = appState.workspace.student.name,
+                        initialStudentNumber = appState.workspace.student.studentNumber,
+                        initialGender = appState.workspace.student.gender,
+                        initialGrade = appState.workspace.student.gradeLevel,
+                        initialEmail = appState.workspace.student.email,
                         writeEnabled = appState.isWriteAllowed,
-                        canSubmitNewJoinRequest = appState.canStartNewCourseJoin,
+                        activeCourseId = appState.workspace.courses.firstOrNull {
+                            it.isCurrent && it.hasActiveMembership
+                        }?.id,
                         onBack = {
                             pendingInviteCode = null
                             pendingInviteCourse = null
                             showScanJoin = true
+                        },
+                        onJoined = { response ->
+                            appState.acceptDirectCourseJoin(
+                                response = response,
+                                expectedCourseId = inviteCourse.id,
+                                allowLocalSession = inviteCourse.isDemoScanResult
+                            )
+                            pendingInviteCode = null
+                            pendingInviteCourse = null
+                            showScanJoin = false
+                        },
+                        submitCourseJoin = if (inviteCourse.isDemoScanResult) {
+                            { body -> buildDemoCourseJoinResponse(inviteCourse, body) }
+                        } else {
+                            null
                         }
                     )
                 } else if (showScanJoin) {
@@ -591,10 +612,8 @@ private fun AuthenticatedAppContent(
     var subScreen by rememberSaveable { mutableStateOf(SubScreen.None) }
     var renderedSubScreen by rememberSaveable { mutableStateOf(subScreen) }
     var exemptionTargetId by rememberSaveable { mutableStateOf<String?>(null) }
-    var correctionRequest by remember { mutableStateOf<CourseJoinRequest?>(null) }
     var scannedInviteCode by rememberSaveable { mutableStateOf<String?>(null) }
     var scannedInviteCourse by remember { mutableStateOf<CourseJoinInfo?>(null) }
-    var inviteUnavailable by rememberSaveable { mutableStateOf(false) }
     var showNotificationSheet by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(subScreen) {
         if (subScreen != SubScreen.None) renderedSubScreen = subScreen
@@ -689,19 +708,12 @@ private fun AuthenticatedAppContent(
                             openScanJoin = {
                                 scannedInviteCode = null
                                 scannedInviteCourse = null
-                                inviteUnavailable = false
                                 renderedSubScreen = SubScreen.ScanJoin
                                 subScreen = SubScreen.ScanJoin
                             },
                             openEnterCode = {
-                                inviteUnavailable = false
                                 renderedSubScreen = SubScreen.EnterCode
                                 subScreen = SubScreen.EnterCode
-                            },
-                            openJoinRequest = {
-                                inviteUnavailable = false
-                                renderedSubScreen = SubScreen.JoinRequestStatus
-                                subScreen = SubScreen.JoinRequestStatus
                             }
                         )
                     }
@@ -726,16 +738,12 @@ private fun AuthenticatedAppContent(
                 subScreen = renderedSubScreen,
                 appState = appState,
                 exemptionTargetId = exemptionTargetId,
-                correctionRequest = correctionRequest,
                 scannedInviteCode = scannedInviteCode,
                 scannedInviteCourse = scannedInviteCourse,
-                inviteUnavailable = inviteUnavailable,
                 onClose = {
                     exemptionTargetId = null
-                    correctionRequest = null
                     scannedInviteCode = null
                     scannedInviteCourse = null
-                    inviteUnavailable = false
                     subScreen = SubScreen.None
                 },
                 onNavigateFromSettings = { destination ->
@@ -761,67 +769,14 @@ private fun AuthenticatedAppContent(
                 onInviteResolved = { code, course ->
                     scannedInviteCode = code
                     scannedInviteCourse = course
-                    inviteUnavailable = false
                     renderedSubScreen = SubScreen.CourseJoinConfirm
                     subScreen = SubScreen.CourseJoinConfirm
-                },
-                onInviteUnavailable = {
-                    scannedInviteCode = null
-                    scannedInviteCourse = null
-                    inviteUnavailable = true
-                    renderedSubScreen = SubScreen.JoinRequestStatus
-                    subScreen = SubScreen.JoinRequestStatus
                 },
                 onReturnToScan = {
                     scannedInviteCode = null
                     scannedInviteCourse = null
-                    inviteUnavailable = false
                     renderedSubScreen = SubScreen.ScanJoin
                     subScreen = SubScreen.ScanJoin
-                },
-                onEditJoinRequest = { request ->
-                    correctionRequest = request
-                    renderedSubScreen = SubScreen.CourseJoinConfirm
-                    subScreen = SubScreen.CourseJoinConfirm
-                },
-                onUseNewInvite = {
-                    correctionRequest = null
-                    inviteUnavailable = false
-                    renderedSubScreen = SubScreen.ScanJoin
-                    subScreen = SubScreen.ScanJoin
-                },
-                onContactTeacher = {
-                    selectedTab = AppTab.Profile
-                    correctionRequest = null
-                    subScreen = SubScreen.None
-                },
-                onCorrectionSubmitted = { request ->
-                    appState.markCourseJoinRequestResubmitted(request.id)
-                    correctionRequest = null
-                    renderedSubScreen = SubScreen.JoinRequestStatus
-                    subScreen = SubScreen.JoinRequestStatus
-                },
-                onReturnToJoinRequestStatus = {
-                    correctionRequest = null
-                    renderedSubScreen = SubScreen.JoinRequestStatus
-                    subScreen = SubScreen.JoinRequestStatus
-                },
-                onNewJoinRequestSubmitted = { inviteCode, course, name, studentNumber, email ->
-                    appState.recordCourseJoinRequestSubmitted(
-                        inviteCode = inviteCode,
-                        courseName = course.name,
-                        courseCode = course.courseNumber,
-                        section = course.section,
-                        teacherName = course.teacher,
-                        semester = course.semester,
-                        studentName = name,
-                        studentNumber = studentNumber,
-                        email = email
-                    )
-                    scannedInviteCode = null
-                    scannedInviteCourse = null
-                    renderedSubScreen = SubScreen.JoinRequestStatus
-                    subScreen = SubScreen.JoinRequestStatus
                 }
             )
         }
@@ -971,10 +926,8 @@ private fun SubScreenOverlay(
     subScreen: SubScreen,
     appState: StudentAppState,
     exemptionTargetId: String?,
-    correctionRequest: CourseJoinRequest?,
     scannedInviteCode: String?,
     scannedInviteCourse: CourseJoinInfo?,
-    inviteUnavailable: Boolean,
     onClose: () -> Unit,
     onNavigateFromSettings: (SubScreen) -> Unit,
     onReturnToSettings: () -> Unit,
@@ -982,16 +935,12 @@ private fun SubScreenOverlay(
     onOpenChangelog: () -> Unit,
     onReturnToAbout: () -> Unit,
     onInviteResolved: (String, CourseJoinInfo) -> Unit,
-    onInviteUnavailable: () -> Unit,
-    onReturnToScan: () -> Unit,
-    onEditJoinRequest: (CourseJoinRequest) -> Unit,
-    onUseNewInvite: () -> Unit,
-    onContactTeacher: () -> Unit,
-    onCorrectionSubmitted: (CourseJoinRequest) -> Unit,
-    onReturnToJoinRequestStatus: () -> Unit,
-    onNewJoinRequestSubmitted: (String, CourseJoinInfo, String, String, String) -> Unit
+    onReturnToScan: () -> Unit
 ) {
     val repo = appState.apiRepository
+    val joinApiClient = remember(repo?.bearerToken) {
+        StudentApiClient().withToken(repo?.bearerToken)
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1068,66 +1017,56 @@ private fun SubScreenOverlay(
                 onUnauthorized = appState::handleUnauthorized,
                 onBack = onReturnToSettings
             )
-            SubScreen.JoinRequestStatus -> JoinRequestStatusScreen(
-                request = appState.workspace.courseJoinRequest,
-                inviteUnavailable = inviteUnavailable,
-                onBack = onClose,
-                onContactTeacher = onContactTeacher,
-                onEditAndResubmit = onEditJoinRequest,
-                onUseNewInvite = onUseNewInvite,
-                onApproved = onClose
-            )
             SubScreen.CourseJoinConfirm -> {
-                val request = correctionRequest
                 val inviteCode = scannedInviteCode
                 val inviteCourse = scannedInviteCourse
-                if (request != null) {
-                    CourseJoinConfirmScreen(
-                        inviteCode = request.inviteCode,
-                        course = CourseJoinInfo(
-                            name = request.courseName,
-                            courseNumber = request.courseCode,
-                            section = request.section,
-                            teacher = request.teacherName,
-                            semester = request.semester
-                        ),
-                        initialName = request.studentName,
-                        initialStudentNumber = request.studentNumber,
-                        initialEmail = request.email,
-                        writeEnabled = appState.isWriteAllowed,
-                        onBack = onReturnToJoinRequestStatus,
-                        onSubmitted = { onCorrectionSubmitted(request) }
-                    )
-                } else if (inviteCode != null && inviteCourse != null) {
+                if (inviteCode != null && inviteCourse != null) {
                     CourseJoinConfirmScreen(
                         inviteCode = inviteCode,
                         course = inviteCourse,
+                        initialName = appState.workspace.student.name,
+                        initialStudentNumber = appState.workspace.student.studentNumber,
+                        initialGender = appState.workspace.student.gender,
+                        initialGrade = appState.workspace.student.gradeLevel,
+                        initialEmail = appState.workspace.student.email,
                         writeEnabled = appState.isWriteAllowed,
-                        canSubmitNewJoinRequest = appState.canStartNewCourseJoin,
+                        activeCourseId = appState.workspace.courses.firstOrNull {
+                            it.isCurrent && it.hasActiveMembership
+                        }?.id,
                         onBack = onReturnToScan,
-                        onSubmittedRequest = { name, studentNumber, email ->
-                            onNewJoinRequestSubmitted(
-                                inviteCode,
-                                inviteCourse,
-                                name,
-                                studentNumber,
-                                email
+                        onEnterExistingCourse = onClose,
+                        onJoined = { response ->
+                            appState.acceptDirectCourseJoin(
+                                response = response,
+                                expectedCourseId = inviteCourse.id,
+                                allowLocalSession = inviteCourse.isDemoScanResult
                             )
+                            onClose()
+                        },
+                        apiClient = joinApiClient,
+                        submitCourseJoin = if (inviteCourse.isDemoScanResult) {
+                            { body -> buildDemoCourseJoinResponse(inviteCourse, body) }
+                        } else {
+                            null
                         }
                     )
                 } else {
-                    JoinRequestStatusScreen(request = null, onBack = onClose)
+                    ScanJoinScreen(
+                        onInviteResolved = onInviteResolved,
+                        onBack = onClose,
+                        apiClient = joinApiClient
+                    )
                 }
             }
             SubScreen.ScanJoin -> ScanJoinScreen(
                 onInviteResolved = onInviteResolved,
-                onInviteUnavailable = onInviteUnavailable,
-                onBack = onClose
+                onBack = onClose,
+                apiClient = joinApiClient
             )
             SubScreen.EnterCode -> EnterInviteCodeScreen(
                 onInviteResolved = onInviteResolved,
-                onInviteUnavailable = onInviteUnavailable,
-                onBack = onClose
+                onBack = onClose,
+                apiClient = joinApiClient
             )
             SubScreen.None -> Unit
         }
@@ -1377,8 +1316,7 @@ private fun RootTabContent(
     openExemption: (String?) -> Unit = {},
     openEnduranceScoring: () -> Unit = {},
     openScanJoin: () -> Unit = {},
-    openEnterCode: () -> Unit = {},
-    openJoinRequest: () -> Unit = {}
+    openEnterCode: () -> Unit = {}
 ) {
     val tabStateHolder = rememberSaveableStateHolder()
     Box(
@@ -1399,14 +1337,12 @@ private fun RootTabContent(
                     onOpenNotificationSheet = onOpenNotificationSheet,
                     onOpenCheckIn = onOpenCheckIn,
                     onScanJoin = openScanJoin,
-                    onEnterCode = openEnterCode,
-                    onOpenJoinRequest = openJoinRequest
+                    onEnterCode = openEnterCode
                 )
                 AppTab.Courses -> CoursesScreen(
                     appState = appState,
                     onScanJoin = openScanJoin,
-                    onEnterCode = openEnterCode,
-                    onOpenJoinRequest = openJoinRequest
+                    onEnterCode = openEnterCode
                 )
                 AppTab.CheckIn -> CheckInScreen(appState, exerciseSessionController)
                 AppTab.Grades -> GradesScreen(appState)

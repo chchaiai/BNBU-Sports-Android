@@ -6,37 +6,39 @@ import org.junit.Test
 
 class CourseJoinPolicyTest {
     @Test
-    fun allowsANewJoinWhenThereIsNoCurrentEnrollmentOrRequest() {
+    fun allowsANewJoinWhenThereIsNoActiveCurrentMembership() {
         assertTrue(StudentWorkspace.empty().canStartNewCourseJoin())
     }
 
     @Test
-    fun blocksANewJoinWhenTheCurrentSemesterAlreadyHasAnEnrollment() {
-        val workspace = StudentWorkspace.empty().copy(courses = listOf(currentCourse()))
+    fun activeAndLegacyEnrolledMembershipsBlockASecondCourse() {
+        listOf("active", "enrolled").forEach { status ->
+            val workspace = StudentWorkspace.empty().copy(
+                courses = listOf(currentCourse().copy(enrollmentStatus = status))
+            )
 
-        assertFalse(workspace.canStartNewCourseJoin())
+            assertFalse(workspace.canStartNewCourseJoin())
+        }
+    }
+
+    @Test
+    fun inactiveMembershipsDoNotBlockAReplacementCourse() {
+        listOf("removed", "exited", "disabled", "completed", "withdrawn").forEach { status ->
+            val workspace = StudentWorkspace.empty().copy(
+                courses = listOf(currentCourse().copy(enrollmentStatus = status))
+            )
+
+            assertTrue(workspace.canStartNewCourseJoin())
+        }
     }
 
     @Test
     fun historicalEnrollmentDoesNotBlockANewSemester() {
         val workspace = StudentWorkspace.empty().copy(
-            courses = listOf(currentCourse().copy(isCurrent = false, enrollmentStatus = "completed"))
+            courses = listOf(currentCourse().copy(isCurrent = false, enrollmentStatus = "active"))
         )
 
         assertTrue(workspace.canStartNewCourseJoin())
-    }
-
-    @Test
-    fun pendingOrApprovedRequestBlocksANewJoinUntilCourseDataRefreshes() {
-        val pending = StudentWorkspace.empty().copy(
-            courseJoinRequest = joinRequest(JoinRequestStatus.PENDING)
-        )
-        val approved = StudentWorkspace.empty().copy(
-            courseJoinRequest = joinRequest(JoinRequestStatus.ACTIVE)
-        )
-
-        assertFalse(pending.canStartNewCourseJoin())
-        assertFalse(approved.canStartNewCourseJoin())
     }
 
     private fun currentCourse() = Course(
@@ -44,29 +46,11 @@ class CourseJoinPolicyTest {
         code = "PE101",
         section = "01",
         name = "Physical Education",
-        semester = "2026 Spring",
+        semester = "2026 Fall",
         students = 0,
-        pending = 0,
         completion = 0,
         missing = 0,
         deadline = "",
         teacher = "Teacher"
-    )
-
-    private fun joinRequest(status: JoinRequestStatus) = CourseJoinRequest(
-        id = "request-1",
-        inviteCode = "INVITE-1",
-        courseName = "Physical Education",
-        courseCode = "PE101",
-        section = "01",
-        teacherName = "Teacher",
-        semester = "2026 Spring",
-        studentName = "Student",
-        studentNumber = "20260001",
-        email = "student@example.invalid",
-        status = status,
-        reviewComment = "",
-        submittedAt = "2026-01-01T00:00:00Z",
-        reviewedAt = null
     )
 }

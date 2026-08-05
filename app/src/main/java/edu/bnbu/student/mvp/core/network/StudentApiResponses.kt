@@ -7,6 +7,8 @@ import com.google.gson.annotations.SerializedName
 data class UserDto(
     val id: String,
     val name: String,
+    @SerializedName(value = "studentNumber", alternate = ["student_number"])
+    val studentNumber: String = "",
     val email: String,
     val role: String,
     val college: String = "",
@@ -69,6 +71,96 @@ data class LoginResponse(
     val user: UserDto,
     val defaultRoute: String
 )
+
+/**
+ * Direct-enrollment result. Both a flat response and a conventional `data`
+ * wrapper are accepted while the backend contract is being unified.
+ */
+data class CourseJoinResponse(
+    val student: CourseJoinStudentResponse? = null,
+    val course: CourseJoinCourseResponse? = null,
+    val membership: CourseJoinMembershipResponse? = null,
+    val session: CourseJoinSessionResponse? = null,
+    val token: String = "",
+    val result: String = "",
+    @SerializedName(value = "alreadyJoined", alternate = ["already_joined"])
+    val alreadyJoined: Boolean = false,
+    val data: CourseJoinResultResponse? = null
+) {
+    fun resolvedStudent(): CourseJoinStudentResponse? = student ?: data?.student
+    fun resolvedCourse(): CourseJoinCourseResponse? = course ?: data?.course
+    fun resolvedMembership(): CourseJoinMembershipResponse? = membership ?: data?.membership
+    fun resolvedToken(): String = token.ifBlank {
+        session?.resolvedToken().orEmpty()
+    }.ifBlank {
+        data?.token.orEmpty()
+    }.ifBlank {
+        data?.session?.resolvedToken().orEmpty()
+    }
+    fun resolvedResult(): String = result.ifBlank { data?.result.orEmpty() }
+    fun isAlreadyJoined(): Boolean = alreadyJoined || data?.alreadyJoined == true
+}
+
+data class CourseJoinResultResponse(
+    val student: CourseJoinStudentResponse? = null,
+    val course: CourseJoinCourseResponse? = null,
+    val membership: CourseJoinMembershipResponse? = null,
+    val session: CourseJoinSessionResponse? = null,
+    val token: String = "",
+    val result: String = "",
+    @SerializedName(value = "alreadyJoined", alternate = ["already_joined"])
+    val alreadyJoined: Boolean = false
+)
+
+data class CourseJoinStudentResponse(
+    val id: String = "",
+    val name: String = "",
+    @SerializedName(value = "studentNumber", alternate = ["student_number"])
+    val studentNumber: String = "",
+    val email: String = "",
+    val college: String = "",
+    val className: String = "",
+    val gender: String = "",
+    @SerializedName(value = "grade", alternate = ["gradeLevel", "grade_level"])
+    val grade: String = "",
+    val status: String = "正常",
+    @SerializedName(value = "accountStatus", alternate = ["account_status"])
+    val accountStatus: String = "ACTIVE",
+    val contacts: ContactStatusResponse = ContactStatusResponse()
+)
+
+data class CourseJoinCourseResponse(
+    val id: String = "",
+    val code: String = "",
+    val section: String = "",
+    val name: String = "",
+    val teacherId: String = "",
+    val teacherName: String = "",
+    val semesterId: String = "",
+    val semester: String = "",
+    val academicYear: String = "",
+    val term: String = "",
+    val status: String = "active"
+)
+
+data class CourseJoinMembershipResponse(
+    val id: String = "",
+    val courseId: String = "",
+    val studentId: String = "",
+    val status: String = "active",
+    @SerializedName(value = "joinedAt", alternate = ["joined_at"])
+    val joinedAt: String = "",
+    @SerializedName(value = "joinMethod", alternate = ["join_method"])
+    val joinMethod: String = "qr"
+)
+
+data class CourseJoinSessionResponse(
+    val token: String = "",
+    @SerializedName(value = "accessToken", alternate = ["access_token"])
+    val accessToken: String = ""
+) {
+    fun resolvedToken(): String = accessToken.ifBlank { token }
+}
 
 data class SportSummaryResponse(
     val courseHours: Double = 0.0,
@@ -269,6 +361,8 @@ data class ExemptionSubmitResponse(
 data class StudentProfileResponse(
     val id: String,
     val name: String,
+    @SerializedName(value = "studentNumber", alternate = ["student_number"])
+    val studentNumber: String = "",
     val email: String,
     val role: String,
     val college: String = "",

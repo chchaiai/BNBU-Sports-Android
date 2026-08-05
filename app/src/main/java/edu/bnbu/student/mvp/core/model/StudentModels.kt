@@ -15,6 +15,8 @@ enum class AppThemeMode(val label: String, val storageValue: String) {
 data class StudentProfile(
     val id: String,
     val name: String,
+    /** Stable campus identifier used when a student directly joins a course. */
+    val studentNumber: String = "",
     val email: String,
     val college: String,
     val className: String,
@@ -67,31 +69,6 @@ data class TeacherInfo(
     val teacherName: String
 )
 
-/** A student's most recent request to join a course through an invitation. */
-data class CourseJoinRequest(
-    val id: String,
-    val inviteCode: String,
-    val courseName: String,
-    val courseCode: String,
-    val section: String,
-    val teacherName: String,
-    val semester: String,
-    val studentName: String,
-    val studentNumber: String,
-    val email: String,
-    val status: JoinRequestStatus,
-    val reviewComment: String,
-    val submittedAt: String,
-    val reviewedAt: String?
-)
-
-enum class JoinRequestStatus(val label: String) {
-    PENDING("待审核"),
-    ACTIVE("已通过"),
-    REJECTED("已拒绝"),
-    NEEDS_CORRECTION("需补正")
-}
-
 data class StudentWorkspace(
     val student: StudentProfile,
     val courses: List<Course>,
@@ -106,9 +83,7 @@ data class StudentWorkspace(
     val syncOperations: List<SyncOperation> = emptyList(),
     val exemptions: List<Exemption> = emptyList(),
     /** Server-owned policy used to decide whether a new exercise session may start. */
-    val checkInTimeWindow: CheckInTimeWindow = CheckInTimeWindow.unavailable(),
-    /** Null when the student has no invitation-based course join request. */
-    val courseJoinRequest: CourseJoinRequest? = null
+    val checkInTimeWindow: CheckInTimeWindow = CheckInTimeWindow.unavailable()
 ) {
     companion object {
         fun empty(): StudentWorkspace = StudentWorkspace(
@@ -132,8 +107,7 @@ data class StudentWorkspace(
             teachers = emptyList(),
             syncOperations = emptyList(),
             exemptions = emptyList(),
-            checkInTimeWindow = CheckInTimeWindow.unavailable(),
-            courseJoinRequest = null
+            checkInTimeWindow = CheckInTimeWindow.unavailable()
         )
     }
 }
@@ -166,7 +140,6 @@ data class Course(
     val name: String,
     val semester: String,
     val students: Int,
-    val pending: Int,
     val completion: Int,
     val missing: Int,
     val deadline: String,
@@ -190,18 +163,18 @@ data class Course(
 
     val isOpenForCheckIn: Boolean
         get() = status.trim().lowercase() in setOf("active", "open", "enabled")
+
+    /** The backend may use either the legacy `enrolled` value or the new `active` value. */
+    val hasActiveMembership: Boolean
+        get() = enrollmentStatus.trim().lowercase() in setOf("active", "enrolled")
 }
 
 /**
- * A student may start only one course enrollment flow in the current semester.
- *
- * The server remains authoritative when it receives the join request.  This
- * client-side policy keeps every UI entry point consistent and prevents a
- * second request while the first one is pending.
+ * A student may hold only one active course membership in the current semester.
+ * The server remains authoritative and repeats this check atomically at join time.
  */
 fun StudentWorkspace.canStartNewCourseJoin(): Boolean =
-    courses.none { it.isCurrent && it.enrollmentStatus == "enrolled" } &&
-        courseJoinRequest?.status !in setOf(JoinRequestStatus.PENDING, JoinRequestStatus.ACTIVE)
+    courses.none { it.isCurrent && it.hasActiveMembership }
 
 data class StudentProgress(
     val id: String,

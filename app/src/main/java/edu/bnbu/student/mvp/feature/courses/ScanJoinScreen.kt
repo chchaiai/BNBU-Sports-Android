@@ -1,7 +1,10 @@
 package edu.bnbu.student.mvp.feature.courses
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
 import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -29,7 +32,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material3.AlertDialog
 import edu.bnbu.student.mvp.core.designsystem.AppleButton as Button
@@ -70,6 +76,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.app.ActivityCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.google.gson.annotations.SerializedName
@@ -83,11 +90,30 @@ import edu.bnbu.student.mvp.core.network.ApiHttpException
 import edu.bnbu.student.mvp.core.network.StudentApiClient
 import edu.bnbu.student.mvp.core.network.StudentEndpoint
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
+import java.io.IOException
 import java.net.URI
+import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 private val InviteCodePattern = Regex("^[A-Za-z0-9][A-Za-z0-9-]{2,127}$")
+
+/**
+ * Preview data mirrors the active example course published in the Web teacher
+ * workspace.  It is deliberately marked as a demo result so the confirmation
+ * page can distinguish it from a live invitation returned by the server.
+ */
+internal const val DemoStudentScanInviteCode = "PE01-7K2Q"
+
+internal val DemoStudentScanCourse = CourseJoinInfo(
+    id = "demo-course-pe101-01",
+    name = "大学体育（一）",
+    courseNumber = "PE101",
+    section = "01班",
+    teacher = "陈若宁",
+    semester = "2025–2026 第二学期",
+    isDemoScanResult = true
+)
 
 /**
  * Scans a teacher-provided course QR code and resolves its public invite data.
@@ -100,12 +126,17 @@ private val InviteCodePattern = Regex("^[A-Za-z0-9][A-Za-z0-9-]{2,127}$")
 fun ScanJoinScreen(
     onInviteResolved: (inviteCode: String, course: CourseJoinInfo) -> Unit,
     onBack: () -> Unit,
-    onInviteUnavailable: (() -> Unit)? = null,
     apiClient: StudentApiClient = remember { StudentApiClient() }
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
+    val cameraAvailable = remember(context) {
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+    }
+    val flashAvailable = remember(context) {
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH)
+    }
     var hasCameraPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
@@ -117,9 +148,13 @@ fun ScanJoinScreen(
     var message by remember { mutableStateOf<String?>(null) }
     var showManualInput by remember { mutableStateOf(false) }
     var lastScannedValue by remember { mutableStateOf<String?>(null) }
+    var retryInviteCode by remember { mutableStateOf<String?>(null) }
+    var flashEnabled by remember { mutableStateOf(false) }
+    var cameraPermissionPermanentlyDenied by remember { mutableStateOf(false) }
 
     fun resolveCode(code: String) {
         if (isResolving) return
+        retryInviteCode = null
         if (!isInviteCode(code)) {
             message = interfaceText("请输入有效的邀请码", "Enter a valid invitation code.")
             return
@@ -133,15 +168,13 @@ fun ScanJoinScreen(
                     apiClient.request(StudentEndpoint.CourseInviteLookup(code)),
                     CourseInviteLookupResponse::class.java
                 )
+                response.validateForDirectJoin()
                 onInviteResolved(code, response.toCourseJoinInfo())
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                if (isInviteUnavailableError(error) && onInviteUnavailable != null) {
-                    onInviteUnavailable()
-                } else {
-                    message = inviteLookupErrorMessage(error)
-                }
+                message = inviteLookupErrorMessage(error)
+                retryInviteCode = code.takeIf { isRetryableInviteLookupError(error) }
             } finally {
                 isResolving = false
             }
@@ -151,10 +184,18 @@ fun ScanJoinScreen(
     fun resolveQrValue(value: String) {
         val code = inviteCodeFromQr(value)
         if (code == null) {
+            retryInviteCode = null
             message = interfaceText("无效的课程二维码，请确认后重试", "Invalid course QR code. Check it and try again.")
             return
         }
         resolveCode(code)
+    }
+
+    fun showDemoScanSuccess() {
+        if (isResolving) return
+        message = null
+        retryInviteCode = null
+        onInviteResolved(DemoStudentScanInviteCode, DemoStudentScanCourse)
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -162,12 +203,33 @@ fun ScanJoinScreen(
     ) { granted ->
         hasCameraPermission = granted
         if (!granted) {
+            val activity = context as? android.app.Activity
+            cameraPermissionPermanentlyDenied = activity != null &&
+                !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)
+        }
+        if (!granted) {
             message = interfaceText("需要相机权限才能扫描二维码，也可以手动输入邀请码", "Camera permission is required to scan a QR code. You can also enter an invitation code manually.")
         }
     }
 
+    fun requestCameraPermission() {
+        cameraPermissionPermanentlyDenied = false
+        permissionLauncher.launch(Manifest.permission.CAMERA)
+    }
+
+    fun openAppSettings() {
+        val intent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.fromParts("package", context.packageName, null)
+        )
+        runCatching { context.startActivity(intent) }
+            .onFailure {
+                message = interfaceText("Unable to open Settings. Allow camera access in your device settings.", "Unable to open Settings. Allow camera access in your device settings.")
+            }
+    }
+
     LaunchedEffect(Unit) {
-        if (!hasCameraPermission) permissionLauncher.launch(Manifest.permission.CAMERA)
+        if (cameraAvailable && !hasCameraPermission) requestCameraPermission()
     }
 
     DisposableEffect(scannerView, lifecycleOwner, hasCameraPermission, isResolving) {
@@ -234,9 +296,12 @@ fun ScanJoinScreen(
                     style = MaterialTheme.typography.bodyLarge
                 )
                 Spacer(Modifier.height(24.dp))
-                if (hasCameraPermission) {
+                if (cameraAvailable && hasCameraPermission) {
                     CameraScannerSurface(
                         isResolving = isResolving,
+                        flashAvailable = flashAvailable,
+                        flashEnabled = flashEnabled,
+                        onFlashToggle = { flashEnabled = !flashEnabled },
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
@@ -270,11 +335,23 @@ fun ScanJoinScreen(
                             modifier = Modifier.fillMaxSize()
                         )
                     }
+                    LaunchedEffect(scannerView, flashEnabled) {
+                        scannerView?.let { view ->
+                            if (flashEnabled) view.setTorchOn() else view.setTorchOff()
+                        }
+                    }
+                } else if (!cameraAvailable) {
+                    CameraUnavailableContent(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .heightIn(min = 240.dp, max = 420.dp)
+                    )
                 } else {
                     PermissionRequiredContent(
-                        onRequestPermission = {
-                            permissionLauncher.launch(Manifest.permission.CAMERA)
-                        },
+                        permanentlyDenied = cameraPermissionPermanentlyDenied,
+                        onRequestPermission = ::requestCameraPermission,
+                        onOpenSettings = ::openAppSettings,
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
@@ -297,10 +374,51 @@ fun ScanJoinScreen(
                             .testTag("courseJoin.scan.hint")
                     )
                 } else {
-                    ScanMessage(text = message.orEmpty())
+                    ScanMessage(
+                        text = message.orEmpty(),
+                        onRetry = retryInviteCode?.let { failedCode ->
+                            {
+                                retryInviteCode = null
+                                lastScannedValue = null
+                                resolveCode(failedCode)
+                            }
+                        }
+                    )
                 }
 
                 Spacer(Modifier.height(20.dp))
+                Button(
+                    onClick = ::showDemoScanSuccess,
+                    enabled = !isResolving,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                        .testTag("courseJoin.scan.simulateSuccess")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.CheckCircle,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = interfaceText("模拟扫码成功", "Simulate a successful scan"),
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = interfaceText(
+                        "用于预览扫码后的直接入课界面，不读取相机或访问真实服务；确认后仅写入本地演示数据。",
+                        "Preview direct enrollment after scanning without using the camera or a real service. Confirming writes local demo data only."
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = { showManualInput = true },
                     enabled = !isResolving,
@@ -375,6 +493,9 @@ private fun ScanJoinTopBar(
 @Composable
 private fun CameraScannerSurface(
     isResolving: Boolean,
+    flashAvailable: Boolean,
+    flashEnabled: Boolean,
+    onFlashToggle: () -> Unit,
     modifier: Modifier = Modifier,
     cameraPreview: @Composable () -> Unit
 ) {
@@ -389,6 +510,31 @@ private fun CameraScannerSurface(
     ) {
         cameraPreview()
         ScannerGuide(modifier = Modifier.fillMaxSize())
+        if (flashAvailable) {
+            OutlinedButton(
+                onClick = onFlashToggle,
+                enabled = !isResolving,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp)
+                    .testTag("courseJoin.scan.toggleFlash")
+            ) {
+                Icon(
+                    imageVector = if (flashEnabled) Icons.Filled.FlashOff else Icons.Filled.FlashOn,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (flashEnabled) {
+                        interfaceText("\u5173\u95ed\u8865\u5149", "Turn off light")
+                    } else {
+                        interfaceText("\u6253\u5f00\u8865\u5149", "Turn on light")
+                    }
+                )
+            }
+        }
         if (isResolving) {
             Column(
                 modifier = Modifier
@@ -448,7 +594,9 @@ private fun ScannerGuide(modifier: Modifier = Modifier) {
 
 @Composable
 private fun PermissionRequiredContent(
+    permanentlyDenied: Boolean,
     onRequestPermission: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -489,7 +637,7 @@ private fun PermissionRequiredContent(
         )
         Spacer(Modifier.height(20.dp))
         Button(
-            onClick = onRequestPermission,
+            onClick = if (permanentlyDenied) onOpenSettings else onRequestPermission,
             shape = RoundedCornerShape(14.dp),
             modifier = Modifier
                 .defaultMinSize(minHeight = 48.dp)
@@ -501,7 +649,41 @@ private fun PermissionRequiredContent(
 }
 
 @Composable
-private fun ScanMessage(text: String) {
+private fun CameraUnavailableContent(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 28.dp, vertical = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Filled.CameraAlt,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(32.dp)
+        )
+        Spacer(Modifier.height(16.dp))
+        Text(
+            text = interfaceText("\u8bbe\u5907\u6ca1\u6709\u53ef\u7528\u7684\u76f8\u673a", "No camera is available on this device"),
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = interfaceText("\u8bf7\u5728\u4e0b\u65b9\u624b\u52a8\u8f93\u5165\u9080\u8bf7\u7801\u4ee5\u7ee7\u7eed", "Enter the invitation code manually below to continue."),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun ScanMessage(text: String, onRetry: (() -> Unit)? = null) {
     val colors = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
@@ -523,11 +705,18 @@ private fun ScanMessage(text: String) {
             modifier = Modifier.size(20.dp)
         )
         Spacer(Modifier.width(10.dp))
-        Text(
-            text = text,
-            color = colors.onSurface,
-            style = MaterialTheme.typography.bodyMedium
-        )
+        Column {
+            Text(
+                text = text,
+                color = colors.onSurface,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            onRetry?.let {
+                TextButton(onClick = it, modifier = Modifier.testTag("courseJoin.scan.retry")) {
+                    Text(interfaceText("\u91cd\u8bd5", "Retry"))
+                }
+            }
+        }
     }
 }
 
@@ -615,19 +804,60 @@ internal fun inviteCodeFromQr(rawValue: String): String? {
 
 internal fun isInviteCode(value: String): Boolean = InviteCodePattern.matches(value.trim())
 
-internal fun inviteLookupErrorMessage(error: Throwable): String {
-    return if (isInviteUnavailableError(error)) {
-        interfaceText("该邀请已过期或已被撤销，请联系教师获取新二维码或邀请码", "This invitation has expired or was revoked. Contact the teacher for a new QR code or invitation code.")
-    } else {
-        interfaceText("网络连接失败，请检查网络后重试", "Network connection failed. Check your connection and try again.")
-    }
+internal fun inviteLookupErrorMessage(error: Throwable): String = when {
+        error is InviteLookupException.Expired -> interfaceText(
+            "该课程二维码或邀请码已过期，请向教师获取新的加入凭证。",
+            "This course QR code or invitation code has expired. Ask the teacher for a new credential."
+        )
+        error is InviteLookupException.Revoked -> interfaceText(
+            "该课程二维码或邀请码已被停用，请向教师获取新的加入凭证。",
+            "This course QR code or invitation code has been disabled. Ask the teacher for a new credential."
+        )
+        error is InviteLookupException.Closed -> interfaceText(
+            "该课程已关闭加入，请联系教师。",
+            "This course is closed to new members. Contact the teacher."
+        )
+        error is InviteLookupException.Invalid -> interfaceText(
+            "课程二维码或邀请码无效，请确认后重试。",
+            "The course QR code or invitation code is invalid. Check it and try again."
+        )
+        error is InvalidInviteLookupResponseException -> interfaceText(
+            "\u8bfe\u7a0b\u4fe1\u606f\u4e0d\u5b8c\u6574\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u6216\u8054\u7cfb\u6559\u5e08",
+            "Course information was incomplete. Try again later or contact your teacher."
+        )
+        error is ApiHttpException && error.statusCode == 404 -> interfaceText(
+            "课程或加入凭证不存在，请联系教师确认。",
+            "The course or join credential does not exist. Contact the teacher to confirm it."
+        )
+        isInviteUnavailableError(error) -> interfaceText(
+            "该课程二维码或邀请码已过期或被停用，请向教师获取新的加入凭证。",
+            "This course QR code or invitation code has expired or was disabled. Ask the teacher for a new credential."
+        )
+        error is ApiHttpException && error.statusCode >= 500 -> interfaceText(
+            "\u670d\u52a1\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5",
+            "The service is temporarily unavailable. Try again shortly."
+        )
+        error is ApiHttpException -> interfaceText(
+            "\u65e0\u6cd5\u9a8c\u8bc1\u9080\u8bf7\u7801\uff0c\u8bf7\u68c0\u67e5\u540e\u91cd\u8bd5",
+            "The invitation could not be verified. Check it and try again."
+        )
+        error !is IOException -> interfaceText(
+            "\u8bfe\u7a0b\u4fe1\u606f\u6682\u65f6\u65e0\u6cd5\u8bfb\u53d6\uff0c\u8bf7\u91cd\u8bd5",
+            "Course information could not be read. Try again."
+        )
+        else -> interfaceText("网络连接失败，请检查网络后重试", "Network connection failed. Check your connection and try again.")
 }
+
+internal fun isRetryableInviteLookupError(error: Throwable): Boolean =
+    error is IOException && error !is InviteLookupException &&
+        (error !is ApiHttpException || error.statusCode >= 500)
 
 /** True only for a server-confirmed invitation expiration or revocation. */
 internal fun isInviteUnavailableError(error: Throwable): Boolean {
     val apiError = error as? ApiHttpException ?: return false
     val response = apiError.responseBody.uppercase()
-    return apiError.statusCode == 410 ||
+    return apiError.statusCode == 404 ||
+        apiError.statusCode == 410 ||
         response.contains("EXPIRED") ||
         response.contains("REVOKED") ||
         response.contains("已过期") ||
@@ -637,6 +867,7 @@ internal fun isInviteUnavailableError(error: Throwable): Boolean {
 /** DTO for GET /api/v1/course-invites/{code}.  The data wrapper is accepted too. */
 data class CourseInviteLookupResponse(
     val code: String = "",
+    val courseId: String = "",
     val courseName: String = "",
     val courseCode: String = "",
     val section: String = "",
@@ -644,13 +875,45 @@ data class CourseInviteLookupResponse(
     val teacherName: String = "",
     val teacher: String = "",
     val semester: String = "",
+    val status: String = "",
+    val inviteStatus: String = "",
+    val expiresAt: String = "",
+    val joinEnabled: Boolean? = null,
     val course: CourseInviteCourseResponse? = null,
     val data: CourseInviteCourseResponse? = null,
     @SerializedName("invite") val invite: CourseInviteCourseResponse? = null
 ) {
+    fun hasCourseDetails(): Boolean {
+        val nested = data ?: invite ?: course
+        val resolvedId = courseId.ifBlank { nested?.courseId.orEmpty() }.ifBlank { nested?.id.orEmpty() }
+        val resolvedName = courseName.ifBlank { nested?.name.orEmpty() }
+        val resolvedCode = courseCode.ifBlank { nested?.code.orEmpty() }
+        return resolvedId.isNotBlank() && resolvedName.isNotBlank() && resolvedCode.isNotBlank()
+    }
+
+    fun validateForDirectJoin() {
+        val nested = data ?: invite ?: course
+        val normalizedStatus = inviteStatus.ifBlank { status }
+            .ifBlank { nested?.inviteStatus.orEmpty() }
+            .ifBlank { nested?.status.orEmpty() }
+            .trim()
+            .uppercase()
+        val resolvedExpiry = expiresAt.ifBlank { nested?.expiresAt.orEmpty() }
+        when {
+            normalizedStatus in ExpiredInviteStatuses -> throw InviteLookupException.Expired()
+            normalizedStatus in RevokedInviteStatuses -> throw InviteLookupException.Revoked()
+            normalizedStatus in InvalidInviteStatuses -> throw InviteLookupException.Invalid()
+            resolvedExpiry.isPastInstant() -> throw InviteLookupException.Expired()
+            joinEnabled == false || nested?.joinEnabled == false || normalizedStatus in ClosedInviteStatuses ->
+                throw InviteLookupException.Closed()
+            !hasCourseDetails() -> throw InvalidInviteLookupResponseException()
+        }
+    }
+
     fun toCourseJoinInfo(): CourseJoinInfo {
         val nested = data ?: invite ?: course
         return CourseJoinInfo(
+            id = courseId.ifBlank { nested?.courseId.orEmpty() }.ifBlank { nested?.id.orEmpty() },
             name = courseName.ifBlank { nested?.name.orEmpty() }.orDash(),
             courseNumber = courseCode.ifBlank { nested?.code.orEmpty() }.orDash(),
             section = section.ifBlank { nested?.section ?: className }.orDash(),
@@ -661,11 +924,36 @@ data class CourseInviteLookupResponse(
 }
 
 data class CourseInviteCourseResponse(
+    val id: String = "",
+    val courseId: String = "",
     val name: String = "",
     val code: String = "",
     val section: String = "",
     val teacherName: String = "",
-    val semester: String = ""
+    val semester: String = "",
+    val status: String = "",
+    val inviteStatus: String = "",
+    val expiresAt: String = "",
+    val joinEnabled: Boolean? = null
 )
+
+private class InvalidInviteLookupResponseException : IOException("Course invite response has no course details")
+
+internal sealed class InviteLookupException(message: String) : IOException(message) {
+    class Expired : InviteLookupException("INVITE_EXPIRED")
+    class Revoked : InviteLookupException("INVITE_REVOKED")
+    class Closed : InviteLookupException("COURSE_JOIN_CLOSED")
+    class Invalid : InviteLookupException("INVITE_INVALID")
+}
+
+private val ExpiredInviteStatuses = setOf("EXPIRED", "INVITE_EXPIRED", "QR_EXPIRED")
+private val RevokedInviteStatuses = setOf("REVOKED", "DISABLED", "INVITE_REVOKED", "QR_REVOKED")
+private val ClosedInviteStatuses = setOf("CLOSED", "JOIN_CLOSED", "COURSE_CLOSED", "ENROLLMENT_CLOSED")
+private val InvalidInviteStatuses = setOf("INVALID", "INVALID_INVITE", "INVALID_QR")
+
+private fun String.isPastInstant(): Boolean =
+    takeIf { it.isNotBlank() }
+        ?.let { value -> runCatching { Instant.parse(value) }.getOrNull() }
+        ?.isBefore(Instant.now()) == true
 
 private fun String.orDash(): String = ifBlank { "—" }

@@ -16,7 +16,6 @@ import edu.bnbu.student.mvp.core.model.AppLanguage
 import edu.bnbu.student.mvp.core.model.AccountStatus
 import edu.bnbu.student.mvp.core.model.Course
 import edu.bnbu.student.mvp.core.model.CreditType
-import edu.bnbu.student.mvp.core.model.JoinRequestStatus
 import edu.bnbu.student.mvp.core.model.Membership
 import edu.bnbu.student.mvp.core.model.NoticeCategory
 import edu.bnbu.student.mvp.core.model.ProofAttachment
@@ -42,6 +41,7 @@ import edu.bnbu.student.mvp.core.network.ProofFileReference
 import edu.bnbu.student.mvp.core.network.SubmitSportRecordRequest
 import edu.bnbu.student.mvp.core.network.UserDto
 import edu.bnbu.student.mvp.core.network.ContactStatusResponse
+import edu.bnbu.student.mvp.core.network.CourseJoinResponse
 import edu.bnbu.student.mvp.core.network.StudentProfileResponse
 import java.io.File
 import java.time.Instant
@@ -348,17 +348,14 @@ class StudentAppState(
     }
 
     val hasActiveEnrollment: Boolean
-        get() = workspace.courses.any { it.isCurrent && it.enrollmentStatus == "enrolled" }
+        get() = workspace.courses.any { it.isCurrent && it.hasActiveMembership }
 
     val hasOpenCurrentCourse: Boolean
         get() = workspace.courses.any {
-            it.isCurrent && it.enrollmentStatus == "enrolled" && it.isOpenForCheckIn
+            it.isCurrent && it.hasActiveMembership && it.isOpenForCheckIn
         }
 
-    val hasPendingJoinRequest: Boolean
-        get() = workspace.courseJoinRequest?.status?.let { it != JoinRequestStatus.ACTIVE } == true
-
-    /** Whether this student can start a new course request for the current semester. */
+    /** Whether this student can directly join a course in the current semester. */
     val canStartNewCourseJoin: Boolean
         get() = workspace.canStartNewCourseJoin()
 
@@ -663,53 +660,145 @@ class StudentAppState(
         retryLoadWorkspace()
     }
 
-    /** Reflect a successful correction submission until the next server workspace refresh. */
-    fun markCourseJoinRequestResubmitted(requestId: String) {
-        if (!allowWrite("markCourseJoinRequestResubmitted")) return
-        val request = workspace.courseJoinRequest?.takeIf { it.id == requestId } ?: return
-        workspace = workspace.copy(
-            courseJoinRequest = request.copy(
-                status = JoinRequestStatus.PENDING,
-                reviewComment = "",
-                submittedAt = currentSyncTimestamp(),
-                reviewedAt = null
-            )
-        )
-        saveWorkspace(event = "课程加入申请已重新提交")
-    }
-
-    /** Stores the optimistic PENDING state after the join-request endpoint accepts a submission. */
-    fun recordCourseJoinRequestSubmitted(
-        inviteCode: String,
-        courseName: String,
-        courseCode: String,
-        section: String,
-        teacherName: String,
-        semester: String,
-        studentName: String,
-        studentNumber: String,
-        email: String
+    /**
+     * Installs the authoritative student, course, membership and session returned
+     * by the direct-join endpoint. This is the only client seam that turns a
+     * successful pre-login scan into an authenticated workspace.
+     *
+     * [allowLocalSession] is reserved for the explicitly labelled local demo.
+     * It never persists a fake bearer token or restores as a real account.
+     */
+    suspend fun acceptDirectCourseJoin(
+        response: CourseJoinResponse,
+        expectedCourseId: String,
+        allowLocalSession: Boolean = false
     ) {
-        if (!allowWrite("recordCourseJoinRequestSubmitted")) return
-        workspace = workspace.copy(
-            courseJoinRequest = edu.bnbu.student.mvp.core.model.CourseJoinRequest(
-                id = "local-$inviteCode",
-                inviteCode = inviteCode,
-                courseName = courseName,
-                courseCode = courseCode,
-                section = section,
-                teacherName = teacherName,
-                semester = semester,
-                studentName = studentName,
-                studentNumber = studentNumber,
-                email = email,
-                status = JoinRequestStatus.PENDING,
-                reviewComment = "",
-                submittedAt = currentSyncTimestamp(),
-                reviewedAt = null
+        val student = response.resolvedStudent()
+            ?: throw IllegalArgumentException("JOIN_RESPONSE_STUDENT_MISSING")
+        val joinedCourse = response.resolvedCourse()
+            ?: throw IllegalArgumentException("JOIN_RESPONSE_COURSE_MISSING")
+        val membership = response.resolvedMembership()
+            ?: throw IllegalArgumentException("JOIN_RESPONSE_MEMBERSHIP_MISSING")
+        val expectedId = expectedCourseId.trim()
+        require(expectedId.isNotEmpty() && joinedCourse.id == expectedId) {
+            "JOIN_RESPONSE_COURSE_MISMATCH"
+        }
+        require(membership.courseId == expectedId) { "JOIN_RESPONSE_MEMBERSHIP_MISMATCH" }
+        require(membership.status.trim().lowercase() == "active") {
+            "JOIN_RESPONSE_MEMBERSHIP_NOT_ACTIVE"
+        }
+        require(student.id.isNotBlank() && student.studentNumber.isNotBlank()) {
+            "JOIN_RESPONSE_STUDENT_INVALID"
+        }
+        require(membership.studentId.isBlank() || membership.studentId == student.id) {
+            "JOIN_RESPONSE_STUDENT_MISMATCH"
+        }
+
+        val token = response.resolvedToken().ifBlank {
+            apiRepository?.bearerToken.orEmpty()
+        }
+        if (!allowLocalSession && !isAuthenticated && token.isBlank()) {
+            throw IllegalArgumentException("JOIN_RESPONSE_SESSION_MISSING")
+        }
+
+        val generation = if (isAuthenticated) sessionGeneration else beginSessionGeneration()
+        val profile = StudentProfile(
+            id = student.id,
+            name = student.name,
+            studentNumber = student.studentNumber,
+            email = student.email,
+            college = student.college,
+            className = student.className,
+            status = student.status,
+            gender = student.gender,
+            gradeLevel = student.grade,
+            accountStatus = student.accountStatus
+        )
+        val course = Course(
+            id = joinedCourse.id,
+            code = joinedCourse.code,
+            section = joinedCourse.section,
+            name = joinedCourse.name,
+            semester = joinedCourse.semester,
+            students = 0,
+            completion = 0,
+            missing = 0,
+            deadline = "",
+            teacher = joinedCourse.teacherName,
+            teacherId = joinedCourse.teacherId,
+            semesterId = joinedCourse.semesterId,
+            academicYear = joinedCourse.academicYear,
+            term = joinedCourse.term,
+            status = joinedCourse.status,
+            enrollmentStatus = "active",
+            isCurrent = true
+        )
+        val base = if (isAuthenticated) workspace else StudentWorkspace.empty()
+        val courses = (base.courses.filterNot { it.id == course.id } + course)
+        val joinedWorkspace = base.copy(
+            student = profile,
+            courses = courses,
+            progress = base.progress.copy(
+                id = profile.id,
+                name = profile.name,
+                college = profile.college,
+                className = profile.className
+            ),
+            grades = base.grades.copy(
+                studentId = profile.id,
+                studentName = profile.name
             )
         )
-        saveWorkspace(event = "课程加入申请已提交")
+        val user = UserDto(
+            id = profile.id,
+            name = profile.name,
+            studentNumber = profile.studentNumber,
+            email = profile.email,
+            role = "student",
+            college = profile.college,
+            status = profile.status,
+            gender = profile.gender,
+            gradeLevel = profile.gradeLevel,
+            className = profile.className,
+            accountStatus = profile.accountStatus,
+            contacts = student.contacts
+        )
+
+        awaitPendingSessionClear()
+        if (!isCurrentSession(generation)) throw CancellationException("Session changed during join")
+        localSessionInvalidated = false
+        workspace = joinedWorkspace
+        contactStatus = student.contacts
+        isUsingMockUser = allowLocalSession
+        isAuthenticated = true
+        isPreparingActivatedWorkspace = false
+        contactActivationLoadError = null
+        isShowingCachedData = false
+        lastError = null
+        apiRepository = token.takeIf { it.isNotBlank() }?.let {
+            ApiStudentRepository(apiClient = StudentApiClient().withToken(it), userProfile = user)
+        }
+        val now = currentSyncTimestamp()
+        lastSyncTimestamp = now
+
+        if (allowLocalSession) {
+            saveWorkspace(event = "本地演示课程已直接加入")
+        } else {
+            val saved = withLocalStoreOnIo(
+                event = "save direct course join session",
+                expectedGeneration = generation
+            ) {
+                saveAuthToken(token) &&
+                    saveUserProfile(gson.toJson(user)) &&
+                    saveWorkspace(joinedWorkspace) &&
+                    saveLastSyncTime(now) &&
+                    markPostEnrollmentGuideCompleted(profile.id.ifBlank { profile.studentNumber })
+            }
+            if (saved == false) {
+                android.util.Log.w("StudentAppState", "save direct course join session failed")
+            }
+            syncPushToken(StudentApiClient().withToken(token))
+        }
     }
 
     fun sendEmailContactBindingCode(email: String, onResult: (Result<Unit>) -> Unit) {
@@ -1042,7 +1131,7 @@ class StudentAppState(
 
         val associatedCourseId = if (creditType == CreditType.CourseRelated) {
             workspace.courses.firstOrNull {
-                it.isCurrent && it.enrollmentStatus == "enrolled"
+                it.isCurrent && it.hasActiveMembership
             }?.id
         } else {
             null
@@ -1294,6 +1383,7 @@ class StudentAppState(
             student = StudentProfile(
                 id = user.id,
                 name = user.name,
+                studentNumber = user.studentNumber,
                 email = user.email,
                 college = user.college,
                 className = user.className,
@@ -1312,6 +1402,7 @@ class StudentAppState(
             student = current.copy(
                 id = profile.id.ifBlank { current.id },
                 name = profile.name.ifBlank { current.name },
+                studentNumber = profile.studentNumber.ifBlank { current.studentNumber },
                 email = profile.email.ifBlank { current.email },
                 college = profile.college.ifBlank { current.college },
                 className = profile.className.ifBlank { current.className },
@@ -1329,6 +1420,7 @@ class StudentAppState(
     private fun UserDto.withProfile(profile: StudentProfileResponse): UserDto = copy(
         id = profile.id.ifBlank { id },
         name = profile.name.ifBlank { name },
+        studentNumber = profile.studentNumber.ifBlank { studentNumber },
         email = profile.email.ifBlank { email },
         role = profile.role.ifBlank { role },
         college = profile.college.ifBlank { college },
@@ -1343,6 +1435,7 @@ class StudentAppState(
     private fun StudentProfileResponse.toUserDto(): UserDto = UserDto(
         id = id,
         name = name,
+        studentNumber = studentNumber,
         email = email,
         role = role,
         college = college,
