@@ -77,8 +77,8 @@ class ExerciseSessionStoreTest {
     }
 
     @Test
-    fun twoHourPausedSessionRoundTripsWhileWaitingForFinishConfirmation() {
-        val waiting = ExerciseSessionState.Paused(
+    fun legacyTwoHourPausedSessionRestoresAsCompleted() {
+        val legacyPaused = ExerciseSessionState.Paused(
             sessionId = "session-1",
             details = details,
             startedAtEpochMillis = 1_000L,
@@ -86,8 +86,12 @@ class ExerciseSessionStoreTest {
             accumulatedActiveMillis = MaximumExerciseMillis
         )
 
-        assertTrue(store.save("student-1", waiting))
-        assertEquals(waiting, store.restore("student-1").state)
+        assertTrue(store.save("student-1", legacyPaused))
+        val completed = store.restore("student-1").state as ExerciseSessionState.Finished
+
+        assertEquals(MaximumExerciseMillis, completed.activeDurationMillis)
+        assertEquals(1_000L + MaximumExerciseMillis, completed.endedAtEpochMillis)
+        assertEquals(2, completed.creditedHours)
     }
 
     @Test

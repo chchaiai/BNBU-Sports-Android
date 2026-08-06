@@ -1,5 +1,6 @@
 package edu.bnbu.student.mvp.feature.checkin.session
 
+import edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase
 import edu.bnbu.student.mvp.core.model.CreditType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -164,37 +165,53 @@ class ExerciseSessionStateTest {
     }
 
     @Test
-    fun twoHourLimitStopsAtExactThresholdAndWaitsForConfirmation() {
+    fun twoHourLimitCompletesAtExactThreshold() {
         val active = machine.start(ExerciseSessionState.Idle, "session-1", details)
             .changedState<ExerciseSessionState.Active>()
         clock.advance(125.minutes)
 
-        val waiting = machine.autoFinishIfNeeded(active)
-            .changedState<ExerciseSessionState.Paused>()
-
-        assertEquals(MaximumExerciseMillis, waiting.accumulatedActiveMillis)
-        assertEquals(1_000L + MaximumExerciseMillis, waiting.pausedAtEpochMillis)
-
-        clock.advance(10.minutes)
-        val finished = machine.requestFinish(waiting)
+        val completed = machine.autoFinishIfNeeded(active)
             .changedState<ExerciseSessionState.Finished>()
-        assertEquals(MaximumExerciseMillis, finished.activeDurationMillis)
-        assertEquals(2, finished.creditedHours)
-        assertEquals(clock.nowEpochMillis(), finished.endedAtEpochMillis)
+
+        assertEquals(MaximumExerciseMillis, completed.activeDurationMillis)
+        assertEquals(2, completed.creditedHours)
+        assertEquals(1_000L + MaximumExerciseMillis, completed.endedAtEpochMillis)
+        assertEquals(ExerciseSessionPhase.COMPLETED, completed.toExerciseSessionPhaseOrNull())
     }
 
     @Test
-    fun twoHourLimitCannotResumeWhileWaitingForConfirmation() {
+    fun completedSessionRejectsEveryContinuationOperation() {
         val active = machine.start(ExerciseSessionState.Idle, "session-1", details)
             .changedState<ExerciseSessionState.Active>()
         clock.advance(120.minutes)
-        val waiting = machine.autoFinishIfNeeded(active)
-            .changedState<ExerciseSessionState.Paused>()
+        val completed = machine.autoFinishIfNeeded(active)
+            .changedState<ExerciseSessionState.Finished>()
 
-        val resumeResult = machine.resume(waiting)
+        val restartResult = machine.start(completed, "session-2", details)
+        val pauseResult = machine.pause(completed)
+        val resumeResult = machine.resume(completed)
+        val finishResult = machine.requestFinish(completed)
 
+        assertTrue(restartResult is ExerciseSessionTransition.Rejected)
+        assertTrue(pauseResult is ExerciseSessionTransition.Rejected)
         assertTrue(resumeResult is ExerciseSessionTransition.Rejected)
-        assertSame(waiting, resumeResult.state)
+        assertTrue(finishResult is ExerciseSessionTransition.Rejected)
+        assertSame(completed, restartResult.state)
+        assertSame(completed, pauseResult.state)
+        assertSame(completed, resumeResult.state)
+        assertSame(completed, finishResult.state)
+    }
+
+    @Test
+    fun localRunningStatesUseTheSamePhasesAsTheBackendContract() {
+        val active = machine.start(ExerciseSessionState.Idle, "session-1", details)
+            .changedState<ExerciseSessionState.Active>()
+        clock.advance(15.minutes)
+        val paused = machine.pause(active).changedState<ExerciseSessionState.Paused>()
+
+        assertEquals(ExerciseSessionPhase.ACTIVE, active.toExerciseSessionPhaseOrNull())
+        assertEquals(ExerciseSessionPhase.PAUSED, paused.toExerciseSessionPhaseOrNull())
+        assertEquals(null, ExerciseSessionState.Idle.toExerciseSessionPhaseOrNull())
     }
 
     @Test

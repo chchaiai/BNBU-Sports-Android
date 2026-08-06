@@ -60,6 +60,37 @@ class SessionMediaDraftStoreTest {
     }
 
     @Test
+    fun videoLongerThanFiveMinutesIsRejectedAndRemoved() {
+        val store = SessionMediaDraftStore(temporaryFolder.newFolder("drafts"), clock)
+        val key = SessionDraftKey("student-1", "session-1")
+        val target = store.prepareCapture(key, ProofMediaType.Video).getOrThrow()
+        target.file.writeBytes(byteArrayOf(1, 2, 3))
+
+        val result = store.completeCapture(target, success = true, durationSeconds = 300.01)
+
+        assertTrue(result.isFailure)
+        assertFalse(target.file.exists())
+        assertTrue(store.list(key).isEmpty())
+    }
+
+    @Test
+    fun captureCannotBeCompletedForAnotherSession() {
+        val store = SessionMediaDraftStore(temporaryFolder.newFolder("drafts"), clock)
+        val originalKey = SessionDraftKey("student-1", "session-1")
+        val otherKey = SessionDraftKey("student-1", "session-2")
+        val target = store.prepareCapture(originalKey, ProofMediaType.Image).getOrThrow()
+        target.file.writeBytes(byteArrayOf(1, 2, 3))
+        val mismatchedTarget = target.copy(key = otherKey)
+
+        val result = store.completeCapture(mismatchedTarget, success = true)
+
+        assertTrue(result.isFailure)
+        assertTrue(target.file.exists())
+        assertEquals(1, store.list(originalKey).size)
+        assertTrue(store.list(otherKey).isEmpty())
+    }
+
+    @Test
     fun selectedSubmissionAcceptsOnePhotoOrOneVideo() {
         val store = SessionMediaDraftStore(temporaryFolder.newFolder("drafts"), clock)
         val key = SessionDraftKey("student-1", "session-1")
@@ -215,7 +246,12 @@ class SessionMediaDraftStoreTest {
     ): SessionMediaDraft {
         val target = store.prepareCapture(key, type).getOrThrow()
         target.file.writeBytes(byteArrayOf(1, 2, 3))
-        return store.completeCapture(target, success = true).getOrThrow()
+        val durationSeconds = if (type == ProofMediaType.Video) 60.0 else null
+        return store.completeCapture(
+            target,
+            success = true,
+            durationSeconds = durationSeconds
+        ).getOrThrow()
     }
 
     private class FakeExerciseClock(var now: Long) : ExerciseClock {
