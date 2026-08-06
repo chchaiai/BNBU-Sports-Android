@@ -1,0 +1,304 @@
+package edu.bnbu.student.mvp.core.exercise
+
+import edu.bnbu.student.mvp.core.model.ProofMediaType
+import java.util.concurrent.CancellationException
+import kotlinx.coroutines.sync.Mutex
+
+internal enum class ExerciseMediaAvailability {
+    PROCESSING,
+    AVAILABLE,
+    FAILED
+}
+
+internal data class ExerciseMediaReference(
+    val mediaId: String,
+    val sessionId: String,
+    val type: ProofMediaType,
+    val availability: ExerciseMediaAvailability
+) {
+    init {
+        require(mediaId.isNotBlank()) { "Media ID cannot be empty." }
+        require(sessionId.isNotBlank()) { "Media session ID cannot be empty." }
+    }
+}
+
+internal data class ExerciseRecordForm(
+    val description: String = "",
+    val remark: String = "",
+    val sportType: String = "",
+    val otherSportName: String? = null,
+    val media: List<ExerciseMediaReference> = emptyList()
+) {
+    fun normalizedForSubmission(): ExerciseRecordForm {
+        val normalizedDescription = description.trim()
+        val normalizedRemark = remark.trim()
+        val normalizedSportType = sportType.trim()
+        val normalizedOtherSportName = otherSportName?.trim()?.takeIf { it.isNotEmpty() }
+        require(normalizedDescription.length in 1..MaxExerciseRecordDescriptionLength) {
+            "Exercise description must contain 1 to $MaxExerciseRecordDescriptionLength characters."
+        }
+        require(normalizedRemark.length <= MaxExerciseRecordRemarkLength) {
+            "Exercise remark cannot exceed $MaxExerciseRecordRemarkLength characters."
+        }
+        require(normalizedSportType.isNotEmpty()) { "Sport type cannot be empty." }
+        if (normalizedSportType.equals(OtherSportType, ignoreCase = true)) {
+            require(
+                normalizedOtherSportName != null &&
+                    normalizedOtherSportName.length in 1..MaxOtherSportNameLength
+            ) {
+                "Other sport name must contain 1 to $MaxOtherSportNameLength characters."
+            }
+        } else {
+            require(normalizedOtherSportName == null) {
+                "Other sport name is only valid when sport type is OTHER."
+            }
+        }
+        require(media.isNotEmpty()) { "At least one AVAILABLE media item is required." }
+        require(media.all { it.availability == ExerciseMediaAvailability.AVAILABLE }) {
+            "Only AVAILABLE media can be attached to an exercise record."
+        }
+        require(media.count { it.type == ProofMediaType.Image } <= ExerciseMediaPolicy.MaxImageCount) {
+            "At most ${ExerciseMediaPolicy.MaxImageCount} images can be attached."
+        }
+        require(media.count { it.type == ProofMediaType.Video } <= ExerciseMediaPolicy.MaxVideoCount) {
+            "At most ${ExerciseMediaPolicy.MaxVideoCount} video can be attached."
+        }
+        require(media.map { it.mediaId }.distinct().size == media.size) {
+            "The same media item cannot be attached more than once."
+        }
+        return copy(
+            description = normalizedDescription,
+            remark = normalizedRemark,
+            sportType = normalizedSportType,
+            otherSportName = normalizedOtherSportName
+        )
+    }
+
+    companion object {
+        const val OtherSportType = "other"
+    }
+}
+
+internal data class UpdateExerciseRecordDraftCommand(
+    val recordId: String,
+    val expectedVersion: Long,
+    val form: ExerciseRecordForm
+) {
+    init {
+        require(recordId.isNotBlank()) { "Record ID cannot be empty." }
+        require(expectedVersion >= 0L) { "Record version cannot be negative." }
+        form.normalizedForSubmission()
+    }
+}
+
+internal data class ExerciseRecordDraft(
+    val recordId: String,
+    val sessionId: String,
+    val version: Long
+) {
+    init {
+        require(recordId.isNotBlank()) { "Record ID cannot be empty." }
+        require(sessionId.isNotBlank()) { "Session ID cannot be empty." }
+        require(version >= 0L) { "Record version cannot be negative." }
+    }
+}
+
+internal data class ExerciseRecord(
+    val recordId: String,
+    val sessionId: String,
+    val version: Long,
+    val submittedAtEpochMillis: Long
+) {
+    init {
+        require(recordId.isNotBlank()) { "Record ID cannot be empty." }
+        require(sessionId.isNotBlank()) { "Session ID cannot be empty." }
+        require(version >= 0L) { "Record version cannot be negative." }
+        require(submittedAtEpochMillis >= 0L) { "Submission time cannot be negative." }
+    }
+}
+
+internal enum class ExerciseRecordAction {
+    CREATE,
+    UPDATE,
+    SUBMIT
+}
+
+internal enum class ExerciseRecordRejection {
+    OPERATION_IN_PROGRESS,
+    INVALID_STATE,
+    INVALID_FORM
+}
+
+internal data class ExerciseRecordRecoverableFailure(
+    val action: ExerciseRecordAction,
+    val cause: Throwable
+)
+
+internal data class ExerciseRecordWorkflowState(
+    val completedSession: ExerciseSessionRecord? = null,
+    val remoteDraft: ExerciseRecordDraft? = null,
+    val form: ExerciseRecordForm = ExerciseRecordForm(),
+    val isFormSynced: Boolean = false,
+    val submittedRecord: ExerciseRecord? = null,
+    val inFlightAction: ExerciseRecordAction? = null,
+    val recoverableFailure: ExerciseRecordRecoverableFailure? = null
+)
+
+internal sealed interface ExerciseRecordOperationResult {
+    data class Success(
+        val state: ExerciseRecordWorkflowState
+    ) : ExerciseRecordOperationResult
+
+    data class Rejected(
+        val reason: ExerciseRecordRejection
+    ) : ExerciseRecordOperationResult
+
+    data class Failed(
+        val retainedState: ExerciseRecordWorkflowState,
+        val cause: Throwable
+    ) : ExerciseRecordOperationResult
+}
+
+/** Record orchestration only; media upload and transport remain outside this class. */
+internal class ExerciseRecordCoordinator(
+    private val gateway: ExerciseGateway
+) {
+    private val operationMutex = Mutex()
+
+    var state: ExerciseRecordWorkflowState = ExerciseRecordWorkflowState()
+        private set
+
+    suspend fun begin(
+        completedSession: ExerciseSessionRecord
+    ): ExerciseRecordOperationResult {
+        if (
+            completedSession.phase != ExerciseSessionPhase.COMPLETED ||
+            completedSession.activeDurationSeconds < MinimumValidExerciseDurationSeconds ||
+            state.inFlightAction != null ||
+            state.remoteDraft != null ||
+            state.submittedRecord != null
+        ) {
+            return invalidState()
+        }
+        state = ExerciseRecordWorkflowState(completedSession = completedSession)
+        return execute(ExerciseRecordAction.CREATE) {
+            val draft = gateway.createRecordDraft(completedSession.sessionId)
+            require(draft.sessionId == completedSession.sessionId) {
+                "Record draft belongs to a different exercise session."
+            }
+            state = state.copy(remoteDraft = draft)
+            success()
+        }
+    }
+
+    fun edit(form: ExerciseRecordForm): ExerciseRecordOperationResult {
+        if (
+            state.inFlightAction != null ||
+            state.remoteDraft == null ||
+            state.submittedRecord != null
+        ) {
+            return invalidState()
+        }
+        state = state.copy(
+            form = form,
+            isFormSynced = false,
+            recoverableFailure = null
+        )
+        return success()
+    }
+
+    suspend fun updateDraft(): ExerciseRecordOperationResult {
+        val draft = state.remoteDraft ?: return invalidState()
+        if (state.submittedRecord != null) return invalidState()
+        val normalizedForm = runCatching { state.form.normalizedForSubmission() }
+            .getOrElse {
+                return ExerciseRecordOperationResult.Rejected(
+                    ExerciseRecordRejection.INVALID_FORM
+                )
+            }
+        val sessionId = state.completedSession?.sessionId ?: return invalidState()
+        if (normalizedForm.media.any { it.sessionId != sessionId }) {
+            return ExerciseRecordOperationResult.Rejected(
+                ExerciseRecordRejection.INVALID_FORM
+            )
+        }
+        return execute(ExerciseRecordAction.UPDATE) {
+            val updated = gateway.updateRecordDraft(
+                UpdateExerciseRecordDraftCommand(
+                    recordId = draft.recordId,
+                    expectedVersion = draft.version,
+                    form = normalizedForm
+                )
+            )
+            require(updated.recordId == draft.recordId && updated.sessionId == draft.sessionId) {
+                "Server returned a different exercise record draft."
+            }
+            require(updated.version > draft.version) {
+                "Record update did not advance the server version."
+            }
+            state = state.copy(
+                remoteDraft = updated,
+                form = normalizedForm,
+                isFormSynced = true
+            )
+            success()
+        }
+    }
+
+    suspend fun submit(): ExerciseRecordOperationResult {
+        val draft = state.remoteDraft ?: return invalidState()
+        if (!state.isFormSynced || state.submittedRecord != null) return invalidState()
+        return execute(ExerciseRecordAction.SUBMIT) {
+            val submitted = gateway.submitRecord(draft.recordId, draft.version)
+            require(
+                submitted.recordId == draft.recordId &&
+                    submitted.sessionId == draft.sessionId
+            ) { "Server returned a different submitted exercise record." }
+            require(submitted.version > draft.version) {
+                "Record submission did not advance the server version."
+            }
+            state = state.copy(submittedRecord = submitted)
+            success()
+        }
+    }
+
+    private suspend fun execute(
+        action: ExerciseRecordAction,
+        operation: suspend () -> ExerciseRecordOperationResult
+    ): ExerciseRecordOperationResult {
+        if (!operationMutex.tryLock()) {
+            return ExerciseRecordOperationResult.Rejected(
+                ExerciseRecordRejection.OPERATION_IN_PROGRESS
+            )
+        }
+        state = state.copy(inFlightAction = action, recoverableFailure = null)
+        return try {
+            operation()
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            state = state.copy(
+                inFlightAction = null,
+                recoverableFailure = ExerciseRecordRecoverableFailure(action, error)
+            )
+            ExerciseRecordOperationResult.Failed(state, error)
+        } finally {
+            if (state.inFlightAction != null) {
+                state = state.copy(inFlightAction = null)
+            }
+            operationMutex.unlock()
+        }
+    }
+
+    private fun success(): ExerciseRecordOperationResult.Success {
+        state = state.copy(inFlightAction = null, recoverableFailure = null)
+        return ExerciseRecordOperationResult.Success(state)
+    }
+
+    private fun invalidState() = ExerciseRecordOperationResult.Rejected(
+        ExerciseRecordRejection.INVALID_STATE
+    )
+}
+
+internal const val MaxExerciseRecordDescriptionLength = 200
+internal const val MaxExerciseRecordRemarkLength = 200
+internal const val MaxOtherSportNameLength = 100

@@ -3,6 +3,7 @@ package edu.bnbu.student.mvp.feature.checkin.session
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase
 import edu.bnbu.student.mvp.core.model.CreditType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -42,6 +43,19 @@ class ExerciseSessionStateTest {
         val tableTennis = ExerciseSessionDetails(CreditType.General, "table_tennis")
 
         assertTrue(tableTennis.isValid)
+    }
+
+    @Test
+    fun otherSportNameAllowsOneToOneHundredCharacters() {
+        val valid = ExerciseSessionDetails(
+            creditType = CreditType.General,
+            sportType = ExerciseSessionDetails.OtherSportType,
+            customSportName = "a".repeat(100)
+        )
+        val tooLong = valid.copy(customSportName = "a".repeat(101))
+
+        assertTrue(valid.isValid)
+        assertFalse(tooLong.isValid)
     }
 
     @Test

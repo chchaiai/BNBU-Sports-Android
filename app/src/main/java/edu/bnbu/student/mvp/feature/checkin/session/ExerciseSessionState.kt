@@ -1,6 +1,7 @@
 package edu.bnbu.student.mvp.feature.checkin.session
 
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase
+import edu.bnbu.student.mvp.core.exercise.MaxOtherSportNameLength
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 
@@ -83,7 +84,8 @@ internal data class ExerciseSessionDetails(
         get() = creditType in setOf(CreditType.CourseRelated, CreditType.General) &&
             sportType in SupportedSportTypes &&
             if (sportType == OtherSportType) {
-                !customSportName.isNullOrBlank() && customSportName.length <= 32
+                !customSportName.isNullOrBlank() &&
+                    customSportName.length <= MaxOtherSportNameLength
             } else {
                 customSportName.isNullOrBlank()
             }
