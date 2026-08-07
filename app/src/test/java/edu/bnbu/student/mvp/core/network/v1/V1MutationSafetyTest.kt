@@ -90,9 +90,10 @@ class V1MutationSafetyTest {
 
     @Test
     fun versionsRejectNegativeValuesAndConflictIsTyped() {
-        assertThrows(IllegalArgumentException::class.java) { ExpectedVersion(-1) }
+        assertThrows(IllegalArgumentException::class.java) { ExpectedVersion(0L) }
         assertThrows(IllegalArgumentException::class.java) { ExpectedReviewVersion(-1) }
-        assertEquals(0, ExpectedVersion(0).wireValue)
+        assertEquals(1L, ExpectedVersion(1L).wireValue)
+        assertEquals(0, ExpectedReviewVersion(0).wireValue)
 
         val exception = V1HttpException(
             operationId = "submitExerciseRecord",
@@ -111,8 +112,8 @@ class V1MutationSafetyTest {
         val conflict = exception.asVersionConflictOrNull()!!
         assertEquals("EXERCISE_RECORD", conflict.resourceType)
         assertEquals("record-1", conflict.resourceId)
-        assertEquals(3, conflict.expectedVersion?.wireValue)
-        assertEquals(4, conflict.actualVersion?.wireValue)
+        assertEquals(3L, conflict.expectedVersion?.wireValue)
+        assertEquals(4L, conflict.actualVersion?.wireValue)
         assertEquals("req-version", conflict.requestId)
         assertNull(
             V1HttpException(

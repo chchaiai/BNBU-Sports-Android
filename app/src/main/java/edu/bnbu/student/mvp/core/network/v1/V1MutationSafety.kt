@@ -111,9 +111,9 @@ fun V1ApiRequest.withMutationIntent(intent: MutationIntent): V1ApiRequest {
 }
 
 @JvmInline
-value class ExpectedVersion(val wireValue: Int) {
+value class ExpectedVersion(val wireValue: Long) {
     init {
-        require(wireValue >= 0) { "expectedVersion must be non-negative" }
+        require(wireValue >= 1L) { "expectedVersion must be positive" }
     }
 }
 
@@ -138,8 +138,8 @@ fun V1HttpException.asVersionConflictOrNull(): VersionConflict? {
     return VersionConflict(
         resourceType = details?.safeString("resourceType"),
         resourceId = details?.safeString("resourceId"),
-        expectedVersion = details?.safeNonNegativeInt("expectedVersion")?.let(::ExpectedVersion),
-        actualVersion = details?.safeNonNegativeInt("actualVersion")?.let(::ExpectedVersion),
+        expectedVersion = details?.safePositiveLong("expectedVersion")?.let(::ExpectedVersion),
+        actualVersion = details?.safePositiveLong("actualVersion")?.let(::ExpectedVersion),
         requestId = error.requestId
     )
 }
@@ -150,11 +150,11 @@ private fun com.google.gson.JsonObject.safeString(name: String): String? = get(n
     ?.asString
     ?.takeIf(String::isNotBlank)
 
-private fun com.google.gson.JsonObject.safeNonNegativeInt(name: String): Int? = get(name)
+private fun com.google.gson.JsonObject.safePositiveLong(name: String): Long? = get(name)
     ?.takeUnless(JsonElement::isJsonNull)
     ?.takeIf(JsonElement::isJsonPrimitive)
-    ?.let { runCatching { it.asInt }.getOrNull() }
-    ?.takeIf { it >= 0 }
+    ?.let { runCatching { it.asLong }.getOrNull() }
+    ?.takeIf { it >= 1L }
 
 private const val IDEMPOTENCY_HEADER = "Idempotency-Key"
 private const val VERSION_CONFLICT_CODE = "CONFLICT_VERSION_MISMATCH"

@@ -81,6 +81,9 @@ data class V1ApiRequest(
     }
 }
 
+/** JSON tree body used when the contract requires explicit null PATCH fields. */
+internal data class V1ExplicitJsonBody(val value: JsonElement)
+
 data class V1ResponseMeta(
     val requestId: String,
     val pagination: JsonElement? = null
@@ -226,7 +229,11 @@ class V1ApiTransport(
         }
 
         val requestBody = request.body?.let { body ->
-            gson.toJson(body).toRequestBody(JSON_MEDIA_TYPE)
+            val json = when (body) {
+                is V1ExplicitJsonBody -> body.value.toString()
+                else -> gson.toJson(body)
+            }
+            json.toRequestBody(JSON_MEDIA_TYPE)
         }
         when (request.method) {
             V1HttpMethod.GET -> builder.get()

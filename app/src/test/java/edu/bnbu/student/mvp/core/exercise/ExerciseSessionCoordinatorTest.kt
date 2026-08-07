@@ -47,14 +47,14 @@ class ExerciseSessionCoordinatorTest {
         gateway.onGetActive = { active }
         var pauseExpectedVersion = -1L
         var resumeExpectedVersion = -1L
-        gateway.onPause = { sessionId, expectedVersion ->
-            assertEquals(active.sessionId, sessionId)
-            pauseExpectedVersion = expectedVersion
+        gateway.onPause = { current ->
+            assertEquals(active.sessionId, current.sessionId)
+            pauseExpectedVersion = current.version
             paused
         }
-        gateway.onResume = { sessionId, expectedVersion ->
-            assertEquals(paused.sessionId, sessionId)
-            resumeExpectedVersion = expectedVersion
+        gateway.onResume = { current ->
+            assertEquals(paused.sessionId, current.sessionId)
+            resumeExpectedVersion = current.version
             resumed
         }
         val coordinator = ExerciseSessionCoordinator(gateway)
@@ -79,8 +79,8 @@ class ExerciseSessionCoordinatorTest {
         )
         gateway.onGetActive = { active }
         var receivedVersion = -1L
-        gateway.onFinish = { _, expectedVersion ->
-            receivedVersion = expectedVersion
+        gateway.onFinish = { current ->
+            receivedVersion = current.version
             completed
         }
         val coordinator = ExerciseSessionCoordinator(gateway)
@@ -102,12 +102,18 @@ class ExerciseSessionCoordinatorTest {
         var activeCallCount = 0
         gateway.onGetActive = {
             activeCallCount += 1
-            if (activeCallCount == 1) stale else latest
+            stale
+        }
+        gateway.onGet = { sessionId, localMirror ->
+            activeCallCount += 1
+            assertEquals(stale.sessionId, sessionId)
+            assertEquals(stale, localMirror)
+            latest
         }
         var pauseCallCount = 0
-        gateway.onPause = { _, expectedVersion ->
+        gateway.onPause = { current ->
             pauseCallCount += 1
-            assertEquals(2L, expectedVersion)
+            assertEquals(2L, current.version)
             throw ExerciseVersionConflictException()
         }
         val coordinator = ExerciseSessionCoordinator(gateway)
@@ -129,9 +135,9 @@ class ExerciseSessionCoordinatorTest {
         val paused = session(ExerciseSessionPhase.PAUSED, version = 3L, durationSeconds = 610L)
         gateway.onGetActive = { active }
         var pauseCalls = 0
-        gateway.onPause = { _, expectedVersion ->
+        gateway.onPause = { current ->
             pauseCalls += 1
-            assertEquals(2L, expectedVersion)
+            assertEquals(2L, current.version)
             if (pauseCalls == 1) throw IllegalStateException("offline")
             paused
         }

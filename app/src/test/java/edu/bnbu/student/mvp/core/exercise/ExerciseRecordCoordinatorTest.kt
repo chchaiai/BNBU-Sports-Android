@@ -23,8 +23,9 @@ class ExerciseRecordCoordinatorTest {
             version = 3L,
             submittedAtEpochMillis = 9_000L
         )
-        gateway.onCreateRecordDraft = { sessionId ->
-            assertEquals(session.sessionId, sessionId)
+        var createCommand: CreateExerciseRecordDraftCommand? = null
+        gateway.onCreateRecordDraft = { command ->
+            createCommand = command
             created
         }
         var updateCommand: UpdateExerciseRecordDraftCommand? = null
@@ -32,24 +33,57 @@ class ExerciseRecordCoordinatorTest {
             updateCommand = command
             updated
         }
-        var submitExpectedVersion = -1L
-        gateway.onSubmitRecord = { recordId, expectedVersion ->
-            assertEquals(created.recordId, recordId)
-            submitExpectedVersion = expectedVersion
+        var submitCommand: SubmitExerciseRecordCommand? = null
+        gateway.onSubmitRecord = { command ->
+            submitCommand = command
             submitted
         }
-        val coordinator = ExerciseRecordCoordinator(gateway)
+        val coordinator = ExerciseRecordCoordinator(gateway) { "android-record-1" }
 
         coordinator.begin(session)
         coordinator.edit(validForm(description = "  morning run  "))
         coordinator.updateDraft()
+        coordinator.edit(validForm(description = "  evening run  "))
+        coordinator.updateDraft()
         val result = coordinator.submit()
 
         assertTrue(result is ExerciseRecordOperationResult.Success)
+        assertEquals(session.sessionId, createCommand?.sessionId)
+        assertEquals("android-record-1", createCommand?.clientRequestId)
+        assertEquals("morning run", createCommand?.form?.normalizedForDraft()?.description)
         assertEquals(1L, updateCommand?.expectedVersion)
-        assertEquals("morning run", updateCommand?.form?.description)
-        assertEquals(2L, submitExpectedVersion)
+        assertEquals("evening run", updateCommand?.form?.description)
+        assertEquals(2L, submitCommand?.expectedVersion)
+        assertEquals(listOf("media-1"), submitCommand?.mediaIds)
         assertEquals(submitted, coordinator.state.submittedRecord)
+    }
+
+    @Test
+    fun failedDraftCreationRetainsStableClientRequestIdForRetry() = runBlocking {
+        val failure = IllegalStateException("offline")
+        val observedClientRequestIds = mutableListOf<String>()
+        var attempts = 0
+        val gateway = FakeExerciseGateway().apply {
+            onCreateRecordDraft = { command ->
+                observedClientRequestIds += command.clientRequestId
+                attempts += 1
+                if (attempts == 1) throw failure
+                ExerciseRecordDraft("record-1", command.sessionId, version = 1L)
+            }
+        }
+        val coordinator = ExerciseRecordCoordinator(gateway) { "android-record-stable" }
+        coordinator.begin(completedSession())
+        coordinator.edit(validForm())
+
+        val failed = coordinator.updateDraft()
+        val retried = coordinator.updateDraft()
+
+        assertTrue(failed is ExerciseRecordOperationResult.Failed)
+        assertTrue(retried is ExerciseRecordOperationResult.Success)
+        assertEquals(
+            listOf("android-record-stable", "android-record-stable"),
+            observedClientRequestIds
+        )
     }
 
     @Test
@@ -104,7 +138,8 @@ class ExerciseRecordCoordinatorTest {
             )
         ))
 
-        val result = coordinator.updateDraft()
+        coordinator.updateDraft()
+        val result = coordinator.submit()
 
         assertRejectedForm(result)
     }
@@ -125,7 +160,8 @@ class ExerciseRecordCoordinatorTest {
             )
         ))
 
-        val result = coordinator.updateDraft()
+        coordinator.updateDraft()
+        val result = coordinator.submit()
 
         assertRejectedForm(result)
     }
@@ -133,15 +169,17 @@ class ExerciseRecordCoordinatorTest {
     @Test
     fun failedSubmissionRetainsDraftFormAndMediaThenAllowsRetry() = runBlocking {
         val gateway = gatewayWithCreatedDraft()
-        gateway.onUpdateRecordDraft = { command ->
-            ExerciseRecordDraft(command.recordId, "session-1", version = 2L)
-        }
         val failure = IllegalStateException("offline")
         var submitCalls = 0
-        gateway.onSubmitRecord = { recordId, _ ->
+        gateway.onSubmitRecord = { command ->
             submitCalls += 1
             if (submitCalls == 1) throw failure
-            ExerciseRecord(recordId, "session-1", version = 3L, submittedAtEpochMillis = 9_000L)
+            ExerciseRecord(
+                command.recordId,
+                "session-1",
+                version = 2L,
+                submittedAtEpochMillis = 9_000L
+            )
         }
         val coordinator = ExerciseRecordCoordinator(gateway)
         val form = validForm()
@@ -167,17 +205,19 @@ class ExerciseRecordCoordinatorTest {
     @Test
     fun concurrentSubmitIsRejectedInsteadOfCreatingADuplicateRequest() = runBlocking {
         val gateway = gatewayWithCreatedDraft()
-        gateway.onUpdateRecordDraft = { command ->
-            ExerciseRecordDraft(command.recordId, "session-1", version = 2L)
-        }
         val enteredSubmit = CompletableDeferred<Unit>()
         val releaseSubmit = CompletableDeferred<Unit>()
         var submitCalls = 0
-        gateway.onSubmitRecord = { recordId, _ ->
+        gateway.onSubmitRecord = { command ->
             submitCalls += 1
             enteredSubmit.complete(Unit)
             releaseSubmit.await()
-            ExerciseRecord(recordId, "session-1", version = 3L, submittedAtEpochMillis = 9_000L)
+            ExerciseRecord(
+                command.recordId,
+                "session-1",
+                version = 2L,
+                submittedAtEpochMillis = 9_000L
+            )
         }
         val coordinator = ExerciseRecordCoordinator(gateway)
         coordinator.begin(completedSession())
@@ -200,9 +240,9 @@ class ExerciseRecordCoordinatorTest {
     fun sessionShorterThanOneHourCannotCreateARecordDraft() = runBlocking {
         val gateway = FakeExerciseGateway()
         var createCalls = 0
-        gateway.onCreateRecordDraft = {
+        gateway.onCreateRecordDraft = { command ->
             createCalls += 1
-            ExerciseRecordDraft("record-1", it, version = 1L)
+            ExerciseRecordDraft("record-1", command.sessionId, version = 1L)
         }
         val coordinator = ExerciseRecordCoordinator(gateway)
 
@@ -216,8 +256,8 @@ class ExerciseRecordCoordinatorTest {
 
     private fun gatewayWithCreatedDraft(): FakeExerciseGateway {
         return FakeExerciseGateway().apply {
-            onCreateRecordDraft = { sessionId ->
-                ExerciseRecordDraft("record-1", sessionId, version = 1L)
+            onCreateRecordDraft = { command ->
+                ExerciseRecordDraft("record-1", command.sessionId, version = 1L)
             }
         }
     }

@@ -60,7 +60,7 @@ internal class ExerciseSessionCoordinator(
         localMirror: ExerciseSessionRecord?
     ): ExerciseSessionOperationResult = execute(ExerciseSessionAction.RESTORE) {
         state = state.copy(session = localMirror)
-        val serverActive = gateway.getActive()
+        val serverActive = gateway.getActive(localMirror)
         val authoritative = serverActive ?: localMirror?.takeIf {
             it.phase == ExerciseSessionPhase.COMPLETED
         }
@@ -82,7 +82,7 @@ internal class ExerciseSessionCoordinator(
         val current = state.session?.takeIf { it.phase == ExerciseSessionPhase.ACTIVE }
             ?: return invalidState()
         return mutate(ExerciseSessionAction.PAUSE, current) {
-            gateway.pause(current.sessionId, current.version)
+            gateway.pause(current)
         }
     }
 
@@ -90,7 +90,7 @@ internal class ExerciseSessionCoordinator(
         val current = state.session?.takeIf { it.phase == ExerciseSessionPhase.PAUSED }
             ?: return invalidState()
         return mutate(ExerciseSessionAction.RESUME, current) {
-            gateway.resume(current.sessionId, current.version)
+            gateway.resume(current)
         }
     }
 
@@ -99,7 +99,7 @@ internal class ExerciseSessionCoordinator(
             it.phase == ExerciseSessionPhase.ACTIVE || it.phase == ExerciseSessionPhase.PAUSED
         } ?: return invalidState()
         return mutate(ExerciseSessionAction.FINISH, current) {
-            gateway.finish(current.sessionId, current.version)
+            gateway.finish(current)
         }
     }
 
@@ -152,8 +152,10 @@ internal class ExerciseSessionCoordinator(
             if (error is CancellationException) throw error
             val fallback = state.session ?: previous
             val retained = if (error is ExerciseVersionConflictException) {
-                val refreshed = runCatching { gateway.getActive() }
-                if (refreshed.isSuccess) refreshed.getOrNull() else fallback
+                val refreshed = fallback?.let { current ->
+                    runCatching { gateway.get(current.sessionId, current) }
+                }
+                if (refreshed?.isSuccess == true) refreshed.getOrNull() else fallback
             } else {
                 fallback
             }

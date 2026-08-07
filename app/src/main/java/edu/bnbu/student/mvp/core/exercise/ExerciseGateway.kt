@@ -2,31 +2,48 @@ package edu.bnbu.student.mvp.core.exercise
 
 import edu.bnbu.student.mvp.core.model.CreditType
 
-/** Business boundary implemented by the backend integration owner. */
+/**
+ * Business boundary implemented by the OpenAPI v1 adapter.
+ *
+ * The backend ExerciseSession projection deliberately does not contain the
+ * client-selected credit/sport presentation fields.  The current local mirror
+ * is therefore passed to reads and mutations so an authoritative server
+ * response can be combined with those client-only fields without pretending
+ * that the backend returned them.
+ */
 internal interface ExerciseGateway {
     suspend fun start(command: StartExerciseCommand): ExerciseSessionRecord
 
-    suspend fun getActive(): ExerciseSessionRecord?
+    suspend fun getActive(localMirror: ExerciseSessionRecord? = null): ExerciseSessionRecord?
 
-    suspend fun pause(sessionId: String, expectedVersion: Long): ExerciseSessionRecord
+    suspend fun get(
+        sessionId: String,
+        localMirror: ExerciseSessionRecord? = null
+    ): ExerciseSessionRecord
 
-    suspend fun resume(sessionId: String, expectedVersion: Long): ExerciseSessionRecord
+    suspend fun pause(current: ExerciseSessionRecord): ExerciseSessionRecord
 
-    suspend fun finish(sessionId: String, expectedVersion: Long): ExerciseSessionRecord
+    suspend fun resume(current: ExerciseSessionRecord): ExerciseSessionRecord
 
-    suspend fun createRecordDraft(sessionId: String): ExerciseRecordDraft
+    suspend fun finish(current: ExerciseSessionRecord): ExerciseSessionRecord
+
+    suspend fun createRecordDraft(
+        command: CreateExerciseRecordDraftCommand
+    ): ExerciseRecordDraft
 
     suspend fun updateRecordDraft(
         command: UpdateExerciseRecordDraftCommand
     ): ExerciseRecordDraft
 
-    suspend fun submitRecord(recordId: String, expectedVersion: Long): ExerciseRecord
+    suspend fun submitRecord(command: SubmitExerciseRecordCommand): ExerciseRecord
 }
 
 internal enum class ExerciseSessionPhase {
     ACTIVE,
     PAUSED,
-    COMPLETED
+    COMPLETED,
+    CANCELLED,
+    EXPIRED
 }
 
 internal data class StartExerciseCommand(
@@ -59,8 +76,12 @@ internal data class ExerciseSessionRecord(
     val sessionId: String,
     val phase: ExerciseSessionPhase,
     val version: Long,
+    val enrollmentId: String? = null,
+    /** Client-only selection; it is not part of the ExerciseSession response. */
     val creditType: CreditType,
+    /** Client-only selection; it is not part of the ExerciseSession response. */
     val sportType: String,
+    /** Client-only selection; it is not part of the ExerciseSession response. */
     val customSportName: String? = null,
     val startedAtEpochMillis: Long,
     val activeDurationSeconds: Long,
@@ -68,6 +89,9 @@ internal data class ExerciseSessionRecord(
 ) {
     init {
         require(sessionId.isNotBlank()) { "Session ID cannot be empty." }
+        require(enrollmentId == null || enrollmentId.isNotBlank()) {
+            "Enrollment ID cannot be blank."
+        }
         require(version >= 0L) { "Session version cannot be negative." }
         require(creditType == CreditType.CourseRelated || creditType == CreditType.General) {
             "Exercise session credit type is invalid."

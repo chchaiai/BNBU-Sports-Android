@@ -69,6 +69,9 @@ internal fun ExerciseSessionRecord.toLocalState(
             activeDurationMillis = durationMillis,
             creditedHours = creditedExerciseHours(durationMillis)
         )
+
+        ExerciseSessionPhase.CANCELLED,
+        ExerciseSessionPhase.EXPIRED -> ExerciseSessionState.Idle
     }
 }
 
