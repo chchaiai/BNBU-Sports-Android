@@ -87,6 +87,53 @@ class ExerciseRecordCoordinatorTest {
     }
 
     @Test
+    fun onlyAvailableServerMediaCanBeAttachedToTheRecord() = runBlocking {
+        val coordinator = ExerciseRecordCoordinator(gatewayWithCreatedDraft())
+        coordinator.begin(completedSession())
+
+        val processing = coordinator.attachAvailableMedia(
+            listOf(serverEvidence(ExerciseMediaServerStatus.PROCESSING))
+        )
+        val available = coordinator.attachAvailableMedia(
+            listOf(serverEvidence(ExerciseMediaServerStatus.AVAILABLE))
+        )
+
+        assertRejectedForm(processing)
+        assertTrue(available is ExerciseRecordOperationResult.Success)
+        assertEquals("media-server-1", coordinator.state.form.media.single().mediaId)
+        assertEquals(
+            ExerciseMediaAvailability.AVAILABLE,
+            coordinator.state.form.media.single().availability
+        )
+    }
+
+    @Test
+    fun availableServerMediaIdIsUsedByRecordSubmission() = runBlocking {
+        val gateway = gatewayWithCreatedDraft()
+        var submitCommand: SubmitExerciseRecordCommand? = null
+        gateway.onSubmitRecord = { command ->
+            submitCommand = command
+            ExerciseRecord(command.recordId, "session-1", 3L, 9_000L)
+        }
+        gateway.onUpdateRecordDraft = { command ->
+            ExerciseRecordDraft(command.recordId, "session-1", 2L)
+        }
+        val coordinator = ExerciseRecordCoordinator(gateway)
+        coordinator.begin(completedSession())
+        coordinator.edit(validForm().copy(media = emptyList()))
+        coordinator.updateDraft()
+
+        coordinator.attachAvailableMedia(
+            listOf(serverEvidence(ExerciseMediaServerStatus.AVAILABLE))
+        )
+        coordinator.updateDraft()
+        val submitted = coordinator.submit()
+
+        assertTrue(submitted is ExerciseRecordOperationResult.Success)
+        assertEquals(listOf("media-server-1"), submitCommand?.mediaIds)
+    }
+
+    @Test
     fun allRecordDescriptionsMustContainOneToTwoHundredCharacters() = runBlocking {
         val gateway = gatewayWithCreatedDraft()
         val coordinator = ExerciseRecordCoordinator(gateway)
@@ -287,6 +334,14 @@ class ExerciseRecordCoordinatorTest {
                 availability = ExerciseMediaAvailability.AVAILABLE
             )
         )
+    )
+
+    private fun serverEvidence(status: ExerciseMediaServerStatus) = ExerciseMediaEvidence(
+        mediaId = "media-server-1",
+        sessionId = "session-1",
+        mediaType = ProofMediaType.Image,
+        status = status,
+        version = 3L
     )
 
     private fun assertRejectedForm(result: ExerciseRecordOperationResult) {

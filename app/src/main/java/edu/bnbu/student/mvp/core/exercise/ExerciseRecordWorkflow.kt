@@ -257,6 +257,42 @@ internal class ExerciseRecordCoordinator(
         return success()
     }
 
+    fun attachAvailableMedia(
+        evidence: List<ExerciseMediaEvidence>
+    ): ExerciseRecordOperationResult {
+        val sessionId = state.completedSession?.sessionId ?: return invalidState()
+        if (state.inFlightAction != null || state.submittedRecord != null) return invalidState()
+        val references = runCatching {
+            require(evidence.isNotEmpty()) { "At least one media item is required." }
+            require(evidence.all { it.sessionId == sessionId }) {
+                "Media belongs to a different exercise session."
+            }
+            require(evidence.all { it.status == ExerciseMediaServerStatus.AVAILABLE }) {
+                "Only AVAILABLE media can be attached to an exercise record."
+            }
+            require(evidence.map { it.mediaId }.distinct().size == evidence.size) {
+                "The same media item cannot be attached more than once."
+            }
+            require(evidence.count { it.mediaType == ProofMediaType.Image } <=
+                ExerciseMediaPolicy.MaxImageCount) {
+                "Too many exercise images are attached."
+            }
+            require(evidence.count { it.mediaType == ProofMediaType.Video } <=
+                ExerciseMediaPolicy.MaxVideoCount) {
+                "Too many exercise videos are attached."
+            }
+            evidence.map(ExerciseMediaEvidence::toRecordReference)
+        }.getOrElse {
+            return ExerciseRecordOperationResult.Rejected(ExerciseRecordRejection.INVALID_FORM)
+        }
+        state = state.copy(
+            form = state.form.copy(media = references),
+            isFormSynced = false,
+            recoverableFailure = null
+        )
+        return success()
+    }
+
     suspend fun updateDraft(): ExerciseRecordOperationResult {
         if (state.submittedRecord != null) return invalidState()
         val completedSession = state.completedSession ?: return invalidState()
