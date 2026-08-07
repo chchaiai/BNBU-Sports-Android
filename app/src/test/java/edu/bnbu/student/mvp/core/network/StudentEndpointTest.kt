@@ -55,17 +55,17 @@ class StudentEndpointTest {
             Triple(StudentEndpoint.UpdateStudentProfile, HttpMethod.PUT, "/student/profile"),
             Triple(StudentEndpoint.UploadProof, HttpMethod.POST, "/upload/proof"),
             Triple(StudentEndpoint.StudentGrades, HttpMethod.GET, "/student/grades"),
-            Triple(StudentEndpoint.SendEmailContactCode, HttpMethod.POST, "/v1/student/contacts/email/send-code"),
-            Triple(StudentEndpoint.VerifyEmailContactCode, HttpMethod.POST, "/v1/student/contacts/email/verify"),
-            Triple(StudentEndpoint.SendPhoneContactCode, HttpMethod.POST, "/v1/student/contacts/phone/send-code"),
-            Triple(StudentEndpoint.VerifyPhoneContactCode, HttpMethod.POST, "/v1/student/contacts/phone/verify"),
-            Triple(StudentEndpoint.SubmitFeedback, HttpMethod.POST, "/v1/student/feedback"),
-            Triple(StudentEndpoint.FeedbackTickets, HttpMethod.GET, "/v1/student/feedback"),
-            Triple(StudentEndpoint.UpdateLanguagePreference, HttpMethod.PUT, "/v1/student/preferences/language"),
+            Triple(StudentEndpoint.SendEmailContactCode, HttpMethod.POST, "/student/contacts/email/send-code"),
+            Triple(StudentEndpoint.VerifyEmailContactCode, HttpMethod.POST, "/student/contacts/email/verify"),
+            Triple(StudentEndpoint.SendPhoneContactCode, HttpMethod.POST, "/student/contacts/phone/send-code"),
+            Triple(StudentEndpoint.VerifyPhoneContactCode, HttpMethod.POST, "/student/contacts/phone/verify"),
+            Triple(StudentEndpoint.SubmitFeedback, HttpMethod.POST, "/student/feedback"),
+            Triple(StudentEndpoint.FeedbackTickets, HttpMethod.GET, "/student/feedback"),
+            Triple(StudentEndpoint.UpdateLanguagePreference, HttpMethod.PUT, "/student/preferences/language"),
             Triple(
                 StudentEndpoint.CourseInviteLookup("BNBU-7K3P9Q"),
                 HttpMethod.GET,
-                "/v1/course-invites/BNBU-7K3P9Q"
+                "/course-invites/BNBU-7K3P9Q"
             ),
             Triple(
                 StudentEndpoint.CourseJoin("course-1"),

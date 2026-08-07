@@ -37,8 +37,8 @@ data class StudentApiClient(
     init {
         val parsedBaseUrl = baseUrl.toHttpUrlOrNull()
         require(parsedBaseUrl != null) { "BNBU_API_BASE_URL must be a valid HTTP(S) URL" }
-        require(BuildConfig.DEBUG || parsedBaseUrl.isHttps) {
-            "Release builds require an HTTPS BNBU_API_BASE_URL"
+        require(BuildConfig.BNBU_ALLOW_CLEARTEXT_API || parsedBaseUrl.isHttps) {
+            "Non-local builds require an HTTPS BNBU_API_BASE_URL"
         }
         require(parsedBaseUrl.username.isEmpty() && parsedBaseUrl.password.isEmpty()) {
             "BNBU_API_BASE_URL must not contain credentials"
@@ -46,8 +46,8 @@ data class StudentApiClient(
         require(parsedBaseUrl.query == null && parsedBaseUrl.fragment == null) {
             "BNBU_API_BASE_URL must not contain a query or fragment"
         }
-        require(parsedBaseUrl.encodedPath.trimEnd('/').endsWith("/api")) {
-            "BNBU_API_BASE_URL must end with /api"
+        require(parsedBaseUrl.encodedPath.trimEnd('/') == "/api/v1") {
+            "BNBU_API_BASE_URL must end with /api/v1"
         }
     }
 

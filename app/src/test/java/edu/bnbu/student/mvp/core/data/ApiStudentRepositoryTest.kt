@@ -198,7 +198,7 @@ class ApiStudentRepositoryTest {
         assertEquals("exemption-1", response.id)
         val request = server.takeRequest()
         assertEquals(
-            "/api/student/checkin-exemptions/exemption-1/supplements",
+            "/api/v1/student/checkin-exemptions/exemption-1/supplements",
             request.path
         )
         val body = request.body.readUtf8()
@@ -236,7 +236,7 @@ class ApiStudentRepositoryTest {
         userProfile: UserDto? = null
     ): ApiStudentRepository {
         val apiClient = StudentApiClient(
-            baseUrl = server.url("/api").toString(),
+            baseUrl = server.url("/api/v1").toString(),
             bearerToken = "test-token",
             httpClient = httpClient
         )

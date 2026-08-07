@@ -25,7 +25,7 @@ import javax.crypto.spec.GCMParameterSpec
 class AndroidAppLocalStore(
     context: Context,
     private val gson: Gson = GsonBuilder().disableHtmlEscaping().create()
-) : ExerciseSessionSnapshotStorage {
+) : ExerciseSessionSnapshotStorage, AuthSessionCredentialStore {
     private val appContext = context.applicationContext
 
     private val preferences = appContext.getSharedPreferences(
@@ -188,39 +188,55 @@ class AndroidAppLocalStore(
         clearEncryptedValue(key)
     }
 
-    fun saveAuthToken(token: String): Boolean {
-        return try {
-            val encrypted = encrypt(token) ?: return false
-            val committed = encryptedPrefs.edit()
-                .putString(AuthTokenEncryptedKey, encrypted.value)
-                .putString(AuthTokenIvKey, encrypted.iv)
-                .commit()
-            if (committed) preferences.edit().remove(AuthTokenKey).commit()
-            committed
-        } catch (_: RuntimeException) { false }
+    /** Persists a complete v1 token pair as one Keystore-encrypted value. */
+    override fun saveAuthSession(session: AuthSessionCredentials): Boolean {
+        val stored = PersistedAuthSession(
+            schemaVersion = AuthSessionSchemaVersion,
+            sessionId = session.sessionId,
+            enrollmentId = session.enrollmentId,
+            principalUserId = session.principalUserId,
+            accessToken = session.accessToken,
+            refreshToken = session.refreshToken,
+            accessTokenExpiresAt = session.accessTokenExpiresAt?.toString(),
+            refreshTokenExpiresAt = session.refreshTokenExpiresAt?.toString(),
+            isLegacyAccessOnly = session.isLegacyAccessOnly
+        )
+        val committed = saveSensitiveString(AuthSessionStorageKey, gson.toJson(stored))
+        if (committed) clearLegacyAuthToken()
+        return committed
     }
 
-    fun loadAuthToken(): String? {
-        return try {
-            val encryptedValue = encryptedPrefs.getString(AuthTokenEncryptedKey, null)
-            val iv = encryptedPrefs.getString(AuthTokenIvKey, null)
-            if (encryptedValue != null && iv != null) {
-                decrypt(encryptedValue, iv).also { decrypted ->
-                    if (decrypted == null) clearEncryptedAuthToken()
-                }
-            } else {
-                // One-time migration from legacy plaintext storage. If secure
-                // migration is impossible, discard the token rather than expose it.
-                val legacyToken = preferences.getString(AuthTokenKey, null)
-                if (legacyToken != null && saveAuthToken(legacyToken)) legacyToken else {
-                    preferences.edit().remove(AuthTokenKey).commit()
-                    null
-                }
-            }
-        } catch (_: RuntimeException) {
-            null
+    override fun loadAuthSession(): AuthSessionCredentials? {
+        val storedJson = readSensitiveString(AuthSessionStorageKey)
+        if (storedJson != null) {
+            val session = decodeAuthSession(storedJson)
+            if (session != null) return session
+            clearEncryptedValue(AuthSessionStorageKey)
+            preferences.edit().remove(AuthSessionStorageKey).commit()
+            clearLegacyAuthToken()
+            return null
         }
+
+        // One-time migration from both historical formats: an encrypted single
+        // bearer token or the still older plaintext preference. A legacy token
+        // cannot refresh, but it remains usable until the first v1 login/401.
+        val legacyToken = loadLegacyAuthToken() ?: return null
+        val migrated = AuthSessionCredentials.legacyAccessOnly(legacyToken)
+        if (migrated != null && saveAuthSession(migrated)) return migrated
+
+        // Never keep plaintext or an old parallel token namespace when secure
+        // migration is unavailable.
+        clearLegacyAuthToken()
+        return null
     }
+
+    /** Compatibility bridge for old screens while their auth adapter migrates. */
+    fun saveAuthToken(token: String): Boolean {
+        val session = AuthSessionCredentials.legacyAccessOnly(token) ?: return false
+        return saveAuthSession(session)
+    }
+
+    fun loadAuthToken(): String? = loadAuthSession()?.accessToken
 
     fun saveUserProfile(userProfileJson: String): Boolean {
         return saveSensitiveString(UserProfileKey, userProfileJson)
@@ -263,14 +279,17 @@ class AndroidAppLocalStore(
         } catch (_: RuntimeException) { false }
     }
 
-    fun clearAuth() {
+    override fun clearAuth() {
         preferences.edit()
             .remove(AuthTokenKey)
+            .remove(AuthSessionStorageKey)
             .remove(UserProfileKey)
             .commit()
         encryptedPrefs.edit()
             .remove(AuthTokenEncryptedKey)
             .remove(AuthTokenIvKey)
+            .remove(encryptedValueKey(AuthSessionStorageKey))
+            .remove(encryptedIvKey(AuthSessionStorageKey))
             .remove(encryptedValueKey(UserProfileKey))
             .remove(encryptedIvKey(UserProfileKey))
             .commit()
@@ -280,6 +299,7 @@ class AndroidAppLocalStore(
         preferences.edit()
             .remove(WorkspaceStorageKey)
             .remove(AuthTokenKey)
+            .remove(AuthSessionStorageKey)
             .remove(UserProfileKey)
             .remove(LastSyncKey)
             .commit()
@@ -441,6 +461,47 @@ class AndroidAppLocalStore(
             .commit()
     }
 
+    private fun clearLegacyAuthToken() {
+        preferences.edit().remove(AuthTokenKey).commit()
+        clearEncryptedAuthToken()
+    }
+
+    private fun loadLegacyAuthToken(): String? {
+        return try {
+            val encryptedValue = encryptedPrefs.getString(AuthTokenEncryptedKey, null)
+            val iv = encryptedPrefs.getString(AuthTokenIvKey, null)
+            if (encryptedValue != null && iv != null) {
+                decrypt(encryptedValue, iv).also { decrypted ->
+                    if (decrypted == null) clearEncryptedAuthToken()
+                }
+            } else {
+                preferences.getString(AuthTokenKey, null)
+            }
+        } catch (_: RuntimeException) {
+            null
+        }
+    }
+
+    private fun decodeAuthSession(json: String): AuthSessionCredentials? {
+        return try {
+            val stored = gson.fromJson(json, PersistedAuthSession::class.java)
+                ?: return null
+            if (stored.schemaVersion != AuthSessionSchemaVersion) return null
+            AuthSessionCredentials.fromStored(
+                sessionId = stored.sessionId,
+                enrollmentId = stored.enrollmentId,
+                principalUserId = stored.principalUserId,
+                accessToken = stored.accessToken,
+                refreshToken = stored.refreshToken,
+                accessTokenExpiresAt = stored.accessTokenExpiresAt,
+                refreshTokenExpiresAt = stored.refreshTokenExpiresAt,
+                isLegacyAccessOnly = stored.isLegacyAccessOnly
+            )
+        } catch (_: RuntimeException) {
+            null
+        }
+    }
+
     private fun clearEncryptedValue(key: String) {
         encryptedPrefs.edit()
             .remove(encryptedValueKey(key))
@@ -481,11 +542,24 @@ class AndroidAppLocalStore(
 
     private data class EncryptedValue(val value: String, val iv: String)
 
+    private data class PersistedAuthSession(
+        val schemaVersion: Int = 0,
+        val sessionId: String? = null,
+        val enrollmentId: String? = null,
+        val principalUserId: String? = null,
+        val accessToken: String = "",
+        val refreshToken: String? = null,
+        val accessTokenExpiresAt: String? = null,
+        val refreshTokenExpiresAt: String? = null,
+        val isLegacyAccessOnly: Boolean = false
+    )
+
     companion object {
         const val StoreName = "bnbu.student.local.v1"
         const val WorkspaceStorageKey = "bnbu.student.workspace.v1"
         const val ExerciseSessionStorageKey = "bnbu.student.exercise.session.v1"
         const val AuthTokenKey = "bnbu.student.auth.token.v1"
+        const val AuthSessionStorageKey = "bnbu.student.auth.session.v2"
         const val UserProfileKey = "bnbu.student.auth.profile.v1"
         const val LastSyncKey = "bnbu.student.last_sync.v1"
         const val ThemeModeKey = "bnbu.student.theme.mode.v1"
@@ -502,6 +576,7 @@ class AndroidAppLocalStore(
         // Encrypted token storage keys
         private const val AuthTokenEncryptedKey = "bnbu.student.auth.token.encrypted"
         private const val AuthTokenIvKey = "bnbu.student.auth.token.iv"
+        private const val AuthSessionSchemaVersion = 2
 
         private const val KEY_ALIAS = "bnbu_student_auth_key"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
