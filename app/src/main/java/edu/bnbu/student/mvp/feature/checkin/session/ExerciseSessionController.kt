@@ -10,6 +10,12 @@ import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
+import edu.bnbu.student.mvp.core.exercise.ExerciseGateway
+import edu.bnbu.student.mvp.core.exercise.ExerciseOperationRejection
+import edu.bnbu.student.mvp.core.exercise.ExerciseSessionCoordinator
+import edu.bnbu.student.mvp.core.exercise.ExerciseSessionOperationResult
+import edu.bnbu.student.mvp.core.exercise.ExerciseVersionConflictException
+import edu.bnbu.student.mvp.core.exercise.StartExerciseCommand
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.local.LocalStoreReadStatus
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
@@ -40,7 +46,8 @@ internal class ExerciseSessionController(
     private val localStore: AndroidAppLocalStore,
     mediaRootDirectory: File,
     private val clock: ExerciseClock = SystemExerciseClock,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val exerciseGateway: ExerciseGateway? = null
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val machine = ExerciseSessionMachine(clock)
@@ -51,6 +58,8 @@ internal class ExerciseSessionController(
     private var persistenceJob: Job? = null
     private var locationRequestGeneration = 0L
     private var locationCancellationSource: CancellationTokenSource? = null
+    private var serverCoordinator = exerciseGateway?.let(::ExerciseSessionCoordinator)
+    private var automaticFinishSessionId: String? = null
     private val _locationStatus = MutableStateFlow<LocationStatus>(LocationStatus.Unknown)
 
     val locationStatus: StateFlow<LocationStatus> = _locationStatus.asStateFlow()
@@ -64,6 +73,9 @@ internal class ExerciseSessionController(
         private set
 
     var isMediaBusy: Boolean by mutableStateOf(false)
+        private set
+
+    var isSessionBusy: Boolean by mutableStateOf(false)
         private set
 
     var message: String? by mutableStateOf(null)
@@ -87,7 +99,10 @@ internal class ExerciseSessionController(
             state = ExerciseSessionState.Idle
             drafts = emptyList()
             isRestoring = false
+            isSessionBusy = false
             shouldShowHealthReminder = false
+            serverCoordinator = exerciseGateway?.let(::ExerciseSessionCoordinator)
+            automaticFinishSessionId = null
             resetLocationStatus()
             if (previousAccountId != null && !preserveExistingDrafts) {
                 scope.launch(ioDispatcher) {
@@ -99,12 +114,15 @@ internal class ExerciseSessionController(
         if (boundAccountId == normalized && !isRestoring) return
         val previousAccountId = boundAccountId
         boundAccountId = normalized
+        serverCoordinator = exerciseGateway?.let(::ExerciseSessionCoordinator)
+        automaticFinishSessionId = null
         shouldShowHealthReminder = !localStore.hasShownHealthReminder(normalized)
         bindingGeneration += 1
         val generation = bindingGeneration
         state = ExerciseSessionState.Idle
         drafts = emptyList()
         isRestoring = true
+        isSessionBusy = false
         resetLocationStatus()
         scope.launch {
             if (previousAccountId != null && previousAccountId != normalized) {
@@ -116,6 +134,35 @@ internal class ExerciseSessionController(
             if (generation != bindingGeneration || boundAccountId != normalized) return@launch
             val normalizedTransition = machine.autoFinishIfNeeded(restored.state)
             state = normalizedTransition.state
+            val coordinator = serverCoordinator
+            if (coordinator != null) {
+                val localMirror = state.toContractMirrorOrNull(
+                    version = 0L,
+                    nowEpochMillis = clock.nowEpochMillis()
+                )
+                when (val serverResult = withContext(ioDispatcher) {
+                    coordinator.restore(localMirror)
+                }) {
+                    is ExerciseSessionOperationResult.Success -> {
+                        val mapped = runCatching {
+                            serverResult.session?.toLocalState(clock.nowEpochMillis())
+                                ?: ExerciseSessionState.Idle
+                        }
+                        if (mapped.isSuccess) {
+                            state = mapped.getOrThrow()
+                        } else {
+                            message = serverStateFailureMessage()
+                        }
+                    }
+
+                    is ExerciseSessionOperationResult.Failed -> {
+                        message = recoverableServerFailureMessage()
+                    }
+
+                    is ExerciseSessionOperationResult.Rejected -> Unit
+                }
+            }
+            if (generation != bindingGeneration || boundAccountId != normalized) return@launch
             val restoredDrafts = withContext(ioDispatcher) {
                 runCatching {
                     currentDraftKey(normalized, state)?.let(mediaStore::list).orEmpty()
@@ -125,7 +172,7 @@ internal class ExerciseSessionController(
             if (restoredDrafts.isFailure && restored.status != LocalStoreReadStatus.Discarded) {
                 message = interfaceText("媒体草稿恢复失败，原始文件未被修改。", "Could not restore media drafts. Original files were not changed.")
             }
-            if (normalizedTransition.state != restored.state) persistCurrentState()
+            if (state != restored.state) persistCurrentState()
             if (restored.status == LocalStoreReadStatus.Discarded) {
                 message = interfaceText("无法恢复旧运动会话，已安全清理本地状态。", "Could not restore the previous exercise session. Local state was safely cleared.")
             }
@@ -134,6 +181,19 @@ internal class ExerciseSessionController(
     }
 
     fun start(details: ExerciseSessionDetails) {
+        val coordinator = serverCoordinator
+        if (coordinator != null) {
+            runServerSessionOperation {
+                coordinator.start(
+                    StartExerciseCommand(
+                        creditType = details.creditType,
+                        sportType = details.sportType,
+                        customSportName = details.customSportName
+                    )
+                )
+            }
+            return
+        }
         applyTransition(
             machine.start(
                 state = state,
@@ -144,6 +204,11 @@ internal class ExerciseSessionController(
     }
 
     fun pause() {
+        val coordinator = serverCoordinator
+        if (coordinator != null) {
+            runServerSessionOperation(coordinator::pause)
+            return
+        }
         applyTransition(machine.pause(state))
     }
 
@@ -195,14 +260,35 @@ internal class ExerciseSessionController(
     }
 
     fun resume() {
+        val coordinator = serverCoordinator
+        if (coordinator != null) {
+            runServerSessionOperation(coordinator::resume)
+            return
+        }
         applyTransition(machine.resume(state))
     }
 
     fun requestFinish() {
+        val coordinator = serverCoordinator
+        if (coordinator != null) {
+            runServerSessionOperation(coordinator::finish)
+            return
+        }
         applyTransition(machine.requestFinish(state))
     }
 
     fun autoFinishIfNeeded() {
+        if (serverCoordinator != null) {
+            val active = state as? ExerciseSessionState.Active ?: return
+            if (
+                active.effectiveDurationMillis(clock.nowEpochMillis()) >= MaximumExerciseMillis &&
+                automaticFinishSessionId != active.sessionId
+            ) {
+                automaticFinishSessionId = active.sessionId
+                requestFinish()
+            }
+            return
+        }
         val transition = machine.autoFinishIfNeeded(state)
         if (transition.state != state) {
             applyTransition(transition)
@@ -532,14 +618,20 @@ internal class ExerciseSessionController(
         }
         val finished = state as? ExerciseSessionState.Finished
             ?: return Result.failure(IllegalStateException(interfaceText("当前运动尚未结束", "The current exercise has not ended.")))
-        val requiresDescription = finished.details.creditType == CreditType.General
-        if (requiresDescription && finished.details.description.isBlank()) {
+        if (finished.activeDurationMillis < MinimumValidExerciseMillis) {
+            return Result.failure(
+                IllegalStateException(
+                    interfaceText(
+                        "运动不足 1 小时，不能创建有效打卡记录。",
+                        "Exercise under 1 hour cannot create a valid check-in record."
+                    )
+                )
+            )
+        }
+        if (finished.details.description.isBlank()) {
             return Result.failure(IllegalArgumentException(interfaceText("请填写运动说明", "Enter exercise details.")))
         }
-        if (
-            requiresDescription &&
-            finished.details.description.length > MaxExerciseDescriptionLength
-        ) {
+        if (finished.details.description.length > MaxExerciseDescriptionLength) {
             return Result.failure(
                 IllegalArgumentException(interfaceText("运动说明不能超过 $MaxExerciseDescriptionLength 个字符", "Exercise details cannot exceed $MaxExerciseDescriptionLength characters."))
             )
@@ -568,6 +660,7 @@ internal class ExerciseSessionController(
             creditedHours = finished.creditedHours,
             summary = summary
         )
+        serverCoordinator?.clearCompletedSession()
         drafts = emptyList()
         queuePersistence(accountId, ExerciseSessionState.Idle)
         if (key != null) {
@@ -639,6 +732,85 @@ internal class ExerciseSessionController(
         locationCancellationSource?.cancel()
         scope.cancel()
     }
+
+    private fun runServerSessionOperation(
+        operation: suspend () -> ExerciseSessionOperationResult
+    ) {
+        if (isSessionBusy) {
+            message = interfaceText(
+                "正在同步运动状态，请稍候。",
+                "Exercise state is syncing. Try again shortly."
+            )
+            return
+        }
+        val generation = bindingGeneration
+        val accountId = boundAccountId
+        if (accountId == null) {
+            message = interfaceText(
+                "当前账号尚未准备好，无法同步运动状态。",
+                "The current account is not ready for exercise sync."
+            )
+            return
+        }
+        isSessionBusy = true
+        scope.launch {
+            val result = withContext(ioDispatcher) { operation() }
+            if (generation != bindingGeneration || boundAccountId != accountId) return@launch
+            when (result) {
+                is ExerciseSessionOperationResult.Success -> {
+                    val mapped = runCatching {
+                        result.session?.toLocalState(clock.nowEpochMillis())
+                            ?: ExerciseSessionState.Idle
+                    }
+                    if (mapped.isSuccess) {
+                        state = mapped.getOrThrow()
+                        if (state is ExerciseSessionState.Active) {
+                            automaticFinishSessionId = null
+                        }
+                        persistCurrentState()
+                        refreshDraftsAsync()
+                    } else {
+                        message = serverStateFailureMessage()
+                    }
+                }
+
+                is ExerciseSessionOperationResult.Failed -> {
+                    if (result.cause is ExerciseVersionConflictException) {
+                        val mapped = runCatching {
+                            result.retainedSession?.toLocalState(clock.nowEpochMillis())
+                                ?: ExerciseSessionState.Idle
+                        }
+                        if (mapped.isSuccess) {
+                            state = mapped.getOrThrow()
+                            persistCurrentState()
+                            refreshDraftsAsync()
+                        }
+                    }
+                    message = recoverableServerFailureMessage()
+                }
+
+                is ExerciseSessionOperationResult.Rejected -> {
+                    if (result.reason == ExerciseOperationRejection.INVALID_STATE) {
+                        message = interfaceText(
+                            "服务端运动状态已变化，请重新进入页面后再试。",
+                            "The server exercise state changed. Reopen this page and try again."
+                        )
+                    }
+                }
+            }
+            isSessionBusy = false
+        }
+    }
+
+    private fun recoverableServerFailureMessage(): String = interfaceText(
+        "网络请求失败，已保留最后确认的运动状态和本地媒体草稿，请重试。",
+        "The request failed. The last confirmed exercise state and local media drafts were retained. Try again."
+    )
+
+    private fun serverStateFailureMessage(): String = interfaceText(
+        "服务端返回的运动状态无法识别，已保留本地状态。",
+        "The server returned an invalid exercise state. The local state was retained."
+    )
 
     private fun applyTransition(transition: ExerciseSessionTransition) {
         when (transition) {

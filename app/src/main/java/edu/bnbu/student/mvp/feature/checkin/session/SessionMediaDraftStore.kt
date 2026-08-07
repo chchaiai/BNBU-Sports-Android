@@ -2,8 +2,10 @@ package edu.bnbu.student.mvp.feature.checkin.session
 
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
+import edu.bnbu.student.mvp.core.exercise.ExerciseMediaCandidate
+import edu.bnbu.student.mvp.core.exercise.ExerciseMediaPolicy
+import edu.bnbu.student.mvp.core.exercise.ExerciseMediaSource
 import edu.bnbu.student.mvp.core.model.ProofMediaType
-import edu.bnbu.student.mvp.core.model.ProofUploadRule
 import java.io.File
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -121,7 +123,7 @@ internal class SessionMediaDraftStore(
             error("拍摄已取消")
         }
         val actualBytes = target.file.length()
-        validateCapturedFile(target.type, actualBytes)
+        validateCapturedFile(target.type, actualBytes, durationSeconds)
         val ready = pending.copy(
             byteCount = actualBytes,
             durationSeconds = durationSeconds?.takeIf { it >= 0.0 },
@@ -132,7 +134,7 @@ internal class SessionMediaDraftStore(
         ))) { "无法更新媒体草稿索引" }
         ready
     }.onFailure {
-        if (!success || target.file.length() <= 0L || target.file.length() > maxBytesFor(target.type)) {
+        if (!success || !isCapturedFileValid(target.type, target.file.length(), durationSeconds)) {
             cancelCapture(target)
         }
     }
@@ -215,20 +217,18 @@ internal class SessionMediaDraftStore(
     @Synchronized
     fun selectedForSubmission(key: SessionDraftKey): Result<List<SessionMediaDraft>> = runCatching {
         val selected = list(key).filter { it.selected }
-        check(selected.isNotEmpty()) { "请至少选择 1 张照片或 1 个视频作为打卡凭证" }
-        val imageCount = selected.count { it.type == ProofMediaType.Image }
-        val videoCount = selected.count { it.type == ProofMediaType.Video }
-        check(imageCount <= ProofUploadRule.maxImageCount) {
-            "最多选择 ${ProofUploadRule.maxImageCount} 张照片"
-        }
-        check(videoCount <= ProofUploadRule.maxVideoCount) {
-            "最多选择 ${ProofUploadRule.maxVideoCount} 个视频"
-        }
         selected.forEach { draft ->
             val file = resolveFile(key, draft)
             check(file.isFile && file.length() == draft.byteCount) { "凭证文件不存在或已发生变化" }
-            validateCapturedFile(draft.type, file.length())
         }
+        ExerciseMediaPolicy.validateSelection(selected.map { draft ->
+            ExerciseMediaCandidate(
+                type = draft.type,
+                byteCount = draft.byteCount,
+                durationSeconds = draft.durationSeconds,
+                source = ExerciseMediaSource.CAMERA
+            )
+        }).getOrThrow()
         selected
     }
 
@@ -291,13 +291,14 @@ internal class SessionMediaDraftStore(
         check(resolveFile(target.key, original).canonicalFile == target.sourceFile.canonicalFile) {
             "原始媒体草稿已变化，请重新操作"
         }
-        validateCapturedFile(target.type, target.file.length())
+        val updatedDuration = durationSeconds ?: original.durationSeconds
+        validateCapturedFile(target.type, target.file.length(), updatedDuration)
 
         val updated = original.copy(
             fileName = target.file.name,
             capturedAtEpochMillis = if (target.replacesCapture) clock.nowEpochMillis() else original.capturedAtEpochMillis,
             byteCount = target.file.length(),
-            durationSeconds = durationSeconds?.takeIf { it >= 0.0 } ?: original.durationSeconds,
+            durationSeconds = updatedDuration,
             coverTimestampMillis = null
         )
         val updatedIndex = index.copy(drafts = index.drafts.map {
@@ -535,9 +536,9 @@ internal class SessionMediaDraftStore(
     ) {
         val count = drafts.count { it.type == type }
         val limit = if (type == ProofMediaType.Image) {
-            ProofUploadRule.maxImageCount
+            ExerciseMediaPolicy.MaxImageCount
         } else {
-            ProofUploadRule.maxVideoCount
+            ExerciseMediaPolicy.MaxVideoCount
         }
         check(count < limit) {
             if (type == ProofMediaType.Image) {
@@ -548,18 +549,41 @@ internal class SessionMediaDraftStore(
         }
     }
 
-    private fun validateCapturedFile(type: ProofMediaType, byteCount: Long) {
-        check(byteCount > 0L) { "拍摄文件为空" }
-        check(byteCount <= maxBytesFor(type)) {
-            if (type == ProofMediaType.Image) "照片超过 8MB" else "视频超过 100MB"
-        }
+    private fun validateCapturedFile(
+        type: ProofMediaType,
+        byteCount: Long,
+        durationSeconds: Double?
+    ) {
+        ExerciseMediaPolicy.validateCandidate(
+            ExerciseMediaCandidate(
+                type = type,
+                byteCount = byteCount,
+                durationSeconds = durationSeconds,
+                source = ExerciseMediaSource.CAMERA
+            )
+        ).getOrThrow()
+    }
+
+    private fun isCapturedFileValid(
+        type: ProofMediaType,
+        byteCount: Long,
+        durationSeconds: Double?
+    ): Boolean {
+        return ExerciseMediaPolicy.validateCandidate(
+            ExerciseMediaCandidate(
+                type = type,
+                byteCount = byteCount,
+                durationSeconds = durationSeconds,
+                source = ExerciseMediaSource.CAMERA
+            )
+        ).isSuccess
     }
 
     private fun maxBytesFor(type: ProofMediaType): Long {
         return if (type == ProofMediaType.Image) {
-            ProofUploadRule.maxImageBytes.toLong()
+            ExerciseMediaPolicy.MaxImageBytes
         } else {
-            ProofUploadRule.maxVideoBytes.toLong()
+            ExerciseMediaPolicy.MaxVideoBytes
         }
     }
 

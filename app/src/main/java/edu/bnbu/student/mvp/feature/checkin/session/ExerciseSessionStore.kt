@@ -138,13 +138,24 @@ internal fun ExerciseSessionSnapshot.toExerciseSessionStateOrNull(): ExerciseSes
             val pausedAt = pausedAtEpochMillis ?: return null
             if (pausedAt < startedAtEpochMillis) return null
             if (accumulatedActiveMillis !in 0L..MaximumExerciseMillis) return null
-            ExerciseSessionState.Paused(
-                sessionId = sessionId,
-                details = details,
-                startedAtEpochMillis = startedAtEpochMillis,
-                pausedAtEpochMillis = pausedAt,
-                accumulatedActiveMillis = accumulatedActiveMillis
-            )
+            if (accumulatedActiveMillis == MaximumExerciseMillis) {
+                ExerciseSessionState.Finished(
+                    sessionId = sessionId,
+                    details = details,
+                    startedAtEpochMillis = startedAtEpochMillis,
+                    endedAtEpochMillis = pausedAt,
+                    activeDurationMillis = MaximumExerciseMillis,
+                    creditedHours = 2
+                )
+            } else {
+                ExerciseSessionState.Paused(
+                    sessionId = sessionId,
+                    details = details,
+                    startedAtEpochMillis = startedAtEpochMillis,
+                    pausedAtEpochMillis = pausedAt,
+                    accumulatedActiveMillis = accumulatedActiveMillis
+                )
+            }
         }
 
         ExerciseSessionSnapshot.PhaseFinished -> {
