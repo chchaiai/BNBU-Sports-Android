@@ -42,6 +42,7 @@ import edu.bnbu.student.mvp.core.network.SubmitSportRecordRequest
 import edu.bnbu.student.mvp.core.network.UserDto
 import edu.bnbu.student.mvp.core.network.ContactStatusResponse
 import edu.bnbu.student.mvp.core.network.CourseJoinResponse
+import edu.bnbu.student.mvp.core.network.UploadProgress
 import edu.bnbu.student.mvp.core.network.StudentProfileResponse
 import java.io.File
 import java.time.Instant
@@ -165,6 +166,10 @@ class StudentAppState(
         private set
 
     var lastError by mutableStateOf<String?>(null)
+        private set
+
+    /** Actual bytes written while the current check-in proof request is uploading. */
+    var checkInUploadProgress by mutableStateOf<UploadProgress?>(null)
         private set
 
     /**
@@ -1197,13 +1202,21 @@ class StudentAppState(
         }
         isLoading = true
         lastError = null
+        checkInUploadProgress = null
         val generation = sessionGeneration
         launchSessionRequest {
             try {
                 val cDir = cacheDir ?: File(System.getProperty("java.io.tmpdir") ?: "/tmp")
                 val uploadedFiles = repo.uploadProofFiles(
                     proofAttachments = proofAttachments,
-                    cacheDir = cDir
+                    cacheDir = cDir,
+                    onProgress = { progress ->
+                        scope.launch {
+                            if (isCurrentSession(generation)) {
+                                checkInUploadProgress = progress
+                            }
+                        }
+                    }
                 ).getOrThrow()
                 if (!isCurrentSession(generation)) return@launchSessionRequest
                 check(uploadedFiles.size == proofAttachments.size) {
@@ -1299,7 +1312,10 @@ class StudentAppState(
                     onResult(Result.failure(IllegalStateException(message, e)))
                 }
             } finally {
-                if (isCurrentSession(generation)) isLoading = false
+                if (isCurrentSession(generation)) {
+                    isLoading = false
+                    checkInUploadProgress = null
+                }
             }
         }
     }

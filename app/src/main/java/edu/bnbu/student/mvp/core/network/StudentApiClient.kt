@@ -169,12 +169,18 @@ data class StudentApiClient(
         return parse(result, UploadProofResponse::class.java)
     }
 
-    suspend fun uploadProofFilesCancellable(files: List<File>): UploadProofResponse {
-        val result = httpClient.newCall(buildUploadRequest(files)).awaitBody()
+    suspend fun uploadProofFilesCancellable(
+        files: List<File>,
+        onProgress: (UploadProgress) -> Unit = {}
+    ): UploadProofResponse {
+        val result = httpClient.newCall(buildUploadRequest(files, onProgress)).awaitBody()
         return parse(result, UploadProofResponse::class.java)
     }
 
-    private fun buildUploadRequest(files: List<File>): Request {
+    private fun buildUploadRequest(
+        files: List<File>,
+        onProgress: (UploadProgress) -> Unit = {}
+    ): Request {
         val uploadReq = request(StudentEndpoint.UploadProof)
         val builder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
@@ -207,7 +213,7 @@ data class StudentApiClient(
                 uploadReq.headers.filterKeys { it != "Content-Type" }
                     .forEach { (k, v) -> addHeader(k, v) }
             }
-            .post(builder.build())
+            .post(ProgressRequestBody(builder.build(), onProgress))
             .build()
     }
 

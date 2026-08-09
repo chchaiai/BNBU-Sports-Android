@@ -1691,6 +1691,55 @@ private fun ExerciseFinishedContent(
             }
         }
         item {
+            if (isSubmitting) {
+                appState.checkInUploadProgress?.let { progress ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("checkIn.uploadProgress"),
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = MaterialTheme.shapes.large
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = if (progress.percent >= 100) {
+                                        interfaceText("凭证上传完成，正在提交记录", "Proof uploaded; submitting the record")
+                                    } else {
+                                        interfaceText("正在上传图片和视频", "Uploading photos and videos")
+                                    },
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "${progress.percent}%",
+                                    color = CheckInBlue,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            LinearProgressIndicator(
+                                progress = { progress.fraction },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = CheckInBlue,
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                            Text(
+                                text = formatUploadBytes(progress.bytesSent, progress.totalBytes),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
+            }
             Button(
                 onClick = {
                     if (isSubmitting) return@Button
@@ -2035,6 +2084,11 @@ private fun formatDuration(durationMillis: Long): String {
     val minutes = (totalSeconds % 3_600L) / 60L
     val seconds = totalSeconds % 60L
     return "%02d:%02d:%02d".format(hours, minutes, seconds)
+}
+
+private fun formatUploadBytes(sentBytes: Long, totalBytes: Long): String {
+    fun megabytes(bytes: Long): String = String.format(java.util.Locale.US, "%.1f MB", bytes / 1_048_576.0)
+    return "${megabytes(sentBytes)} / ${megabytes(totalBytes)}"
 }
 
 private fun formatStartTime(state: ExerciseSessionState): String {

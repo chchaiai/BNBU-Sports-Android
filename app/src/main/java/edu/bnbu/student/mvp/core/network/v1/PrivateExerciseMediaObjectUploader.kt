@@ -4,6 +4,8 @@ import edu.bnbu.student.mvp.core.exercise.ExerciseMediaObjectUploader
 import edu.bnbu.student.mvp.core.exercise.ExerciseMediaUploadMethod
 import edu.bnbu.student.mvp.core.exercise.ExerciseMediaUploadReceipt
 import edu.bnbu.student.mvp.core.exercise.UploadExerciseMediaObjectCommand
+import edu.bnbu.student.mvp.core.network.ProgressRequestBody
+import edu.bnbu.student.mvp.core.network.UploadProgress
 import java.io.IOException
 import java.time.Instant
 import kotlin.coroutines.resume
@@ -29,11 +31,19 @@ internal class PrivateExerciseMediaObjectUploader(
 
     override suspend fun upload(
         command: UploadExerciseMediaObjectCommand
+    ): ExerciseMediaUploadReceipt = upload(command) {}
+
+    override suspend fun upload(
+        command: UploadExerciseMediaObjectCommand,
+        onProgress: (UploadProgress) -> Unit
     ): ExerciseMediaUploadReceipt {
         require(command.uploadSession.expiresAtEpochMillis > clock().toEpochMilli()) {
             "Media upload session is expired."
         }
-        val requestBody = command.sourceFile.asRequestBody(command.mimeType.trim().lowercase().toMediaType())
+        val requestBody = ProgressRequestBody(
+            command.sourceFile.asRequestBody(command.mimeType.trim().lowercase().toMediaType()),
+            onProgress
+        )
         val request = Request.Builder()
             .url(command.uploadSession.uploadUrl.toURL())
             .apply {

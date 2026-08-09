@@ -38,6 +38,7 @@ import edu.bnbu.student.mvp.core.model.SystemModeStatus
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.shell.AppRootScreen
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
+import edu.bnbu.student.mvp.core.network.v1.createV1ExerciseGateway
 import edu.bnbu.student.mvp.R
 import com.google.android.play.core.appupdate.AppUpdateManager
 import com.google.android.play.core.appupdate.AppUpdateManagerFactory
@@ -299,7 +300,8 @@ class StudentAppStateViewModel(application: Application) : AndroidViewModel(appl
 
     internal val exerciseSessionController = ExerciseSessionController(
         localStore = localStore,
-        mediaRootDirectory = File(application.filesDir, "exercise_session_drafts")
+        mediaRootDirectory = File(application.filesDir, "exercise_session_drafts"),
+        exerciseGatewayProvider = { createV1ExerciseGateway(localStore) }
     )
 
     var isRestoringSession by mutableStateOf(true)

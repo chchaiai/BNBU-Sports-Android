@@ -3,6 +3,7 @@ package edu.bnbu.student.mvp.core.network.v1
 import com.google.gson.JsonParser
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionRecord
+import edu.bnbu.student.mvp.core.exercise.ExerciseCheckInNotRequiredException
 import edu.bnbu.student.mvp.core.exercise.ExerciseVersionConflictException
 import edu.bnbu.student.mvp.core.exercise.StartExerciseCommand
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentialStore
@@ -143,6 +144,25 @@ class V1ExerciseSessionGatewayTest {
         }
 
         assertTrue(thrown.cause is V1HttpException)
+    }
+
+    @Test
+    fun qualifiedDurationConflictBecomesAnAutomaticNoCheckInSignal() {
+        server.enqueue(error(409, "SESSION_ALREADY_COMPLETED", "req-qualified"))
+
+        val thrown = assertThrows(ExerciseCheckInNotRequiredException::class.java) {
+            runBlocking {
+                gateway.start(
+                    StartExerciseCommand(
+                        creditType = CreditType.General,
+                        sportType = "RUNNING"
+                    )
+                )
+            }
+        }
+
+        assertTrue(thrown.cause is V1HttpException)
+        assertEquals("/api/v1/exercise-sessions", server.takeRequest().path)
     }
 
     @Test
