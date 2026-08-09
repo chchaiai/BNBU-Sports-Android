@@ -1,7 +1,7 @@
 package edu.bnbu.student.mvp.feature.shell
 
-import android.app.Activity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -70,7 +70,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -806,7 +805,7 @@ private fun PrivacyConsentScreen(
     onDecline: () -> Unit
 ) {
     var showFullPrivacyPolicy by rememberSaveable { mutableStateOf(false) }
-    val activity = LocalContext.current as? Activity
+    val activity = LocalActivity.current
 
     if (showFullPrivacyPolicy) {
         PreLoginPrivacyScreen(onBack = { showFullPrivacyPolicy = false })

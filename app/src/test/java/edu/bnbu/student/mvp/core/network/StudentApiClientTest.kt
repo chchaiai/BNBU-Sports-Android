@@ -45,10 +45,10 @@ class StudentApiClientTest {
             StudentApiClient(baseUrl = "https://api.example.test")
         }
         assertThrows(IllegalArgumentException::class.java) {
-            StudentApiClient(baseUrl = "https://api.example.test/api?tenant=other")
+            StudentApiClient(baseUrl = "https://api.example.test/api/v1?tenant=other")
         }
         assertThrows(IllegalArgumentException::class.java) {
-            StudentApiClient(baseUrl = "https://user:secret@api.example.test/api")
+            StudentApiClient(baseUrl = "https://user:secret@api.example.test/api/v1")
         }
     }
 
@@ -67,7 +67,7 @@ class StudentApiClientTest {
         assertFalse(get.headers.containsKey("Content-Type"))
         assertEquals("application/json", post.headers["Content-Type"])
         assertFalse(post.headers.containsKey("Idempotency-Key"))
-        assertEquals("${server.url("/api").toString().trimEnd('/')}/auth/login", post.url)
+        assertEquals("${server.url("/api/v1").toString().trimEnd('/')}/auth/login", post.url)
     }
 
     @Test
@@ -139,8 +139,8 @@ class StudentApiClientTest {
 
         val first = server.takeRequest()
         val second = server.takeRequest()
-        assertEquals("/api/student/profile", first.path)
-        assertEquals("/api/student/profile", second.path)
+        assertEquals("/api/v1/student/profile", first.path)
+        assertEquals("/api/v1/student/profile", second.path)
         assertEquals(1, second.sequenceNumber)
         assertEquals("student-remote", profile.id)
         assertEquals("Class 2", profile.className)
@@ -205,7 +205,7 @@ class StudentApiClientTest {
         idempotencyKeyProvider: () -> String = { "test-idempotency-key" }
     ): StudentApiClient {
         return StudentApiClient(
-            baseUrl = server.url("/api").toString(),
+            baseUrl = server.url("/api/v1").toString(),
             bearerToken = bearerToken,
             httpClient = httpClient,
             idempotencyKeyProvider = idempotencyKeyProvider

@@ -142,7 +142,11 @@ internal object SessionMediaEditor {
                     0,
                     sampleSize,
                     (sampleTimeUs - firstPresentationTimeUs).coerceAtLeast(0L),
-                    extractor.sampleFlags
+                    if (extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+                        MediaCodec.BUFFER_FLAG_KEY_FRAME
+                    } else {
+                        0
+                    }
                 )
                 activeMuxer.writeSampleData(outputTrack, buffer, info)
                 wroteSample = true

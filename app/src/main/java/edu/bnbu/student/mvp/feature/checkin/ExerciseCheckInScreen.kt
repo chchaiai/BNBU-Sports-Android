@@ -89,6 +89,7 @@ import edu.bnbu.student.mvp.core.designsystem.ValidationPanel
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
+import edu.bnbu.student.mvp.core.exercise.MaxOtherSportNameLength
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.CheckInTimeWindow
 import edu.bnbu.student.mvp.core.model.ProofAttachment
@@ -525,7 +526,7 @@ private fun ExercisePreparationContent(
                         customSportName = customSportName,
                         onCustomSportNameChanged = {
                             if (selectedCreditType == CreditType.General) {
-                                generalCustomSportName = it.take(32)
+                                generalCustomSportName = it.take(MaxOtherSportNameLength)
                             }
                         }
                     )
@@ -1538,7 +1539,7 @@ private fun ExerciseFinishedContent(
                     supportingText = {
                         Column {
                             Text(interfaceText("已输入 ${state.details.description.length}/$MaxExerciseDescriptionLength", "${state.details.description.length}/$MaxExerciseDescriptionLength entered"))
-                            Text(interfaceText("其他运动必填，最多 $MaxExerciseDescriptionLength 字", "Required for other exercise; up to $MaxExerciseDescriptionLength characters."))
+                            Text(interfaceText("所有运动必填，1～$MaxExerciseDescriptionLength 字", "Required for every exercise; 1 to $MaxExerciseDescriptionLength characters."))
                         }
                     },
                     minLines = 3,

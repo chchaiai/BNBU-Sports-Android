@@ -1,5 +1,7 @@
 package edu.bnbu.student.mvp.feature.checkin.session
 
+import edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase
+import edu.bnbu.student.mvp.core.exercise.MaxOtherSportNameLength
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 
@@ -82,7 +84,8 @@ internal data class ExerciseSessionDetails(
         get() = creditType in setOf(CreditType.CourseRelated, CreditType.General) &&
             sportType in SupportedSportTypes &&
             if (sportType == OtherSportType) {
-                !customSportName.isNullOrBlank() && customSportName.length <= 32
+                !customSportName.isNullOrBlank() &&
+                    customSportName.length <= MaxOtherSportNameLength
             } else {
                 customSportName.isNullOrBlank()
             }
@@ -202,7 +205,7 @@ internal class ExerciseSessionMachine(
         }
         val now = clock.nowEpochMillis()
         if (state.effectiveDurationMillis(now) >= MaximumExerciseMillis) {
-            return ExerciseSessionTransition.Changed(state.pausedAtLimit())
+            return ExerciseSessionTransition.Changed(state.finishedAtLimit())
         }
         return ExerciseSessionTransition.Changed(
             ExerciseSessionState.Paused(
@@ -259,23 +262,38 @@ internal class ExerciseSessionMachine(
             }
 
             is ExerciseSessionState.Paused -> {
-                if (duration < MinimumValidExerciseMillis) {
-                    ExerciseSessionTransition.Discarded()
-                } else {
-                    ExerciseSessionTransition.Changed(state.finished(now, duration))
+                when {
+                    duration >= MaximumExerciseMillis -> {
+                        ExerciseSessionTransition.Changed(state.finishedAtLimit())
+                    }
+
+                    duration < MinimumValidExerciseMillis -> ExerciseSessionTransition.Discarded()
+
+                    else -> ExerciseSessionTransition.Changed(state.finished(now, duration))
                 }
             }
         }
     }
 
     fun autoFinishIfNeeded(state: ExerciseSessionState): ExerciseSessionTransition {
-        if (state !is ExerciseSessionState.Active) {
-            return ExerciseSessionTransition.Changed(state)
-        }
-        return if (state.effectiveDurationMillis(clock.nowEpochMillis()) >= MaximumExerciseMillis) {
-            ExerciseSessionTransition.Changed(state.pausedAtLimit())
-        } else {
-            ExerciseSessionTransition.Changed(state)
+        return when (state) {
+            is ExerciseSessionState.Active -> {
+                if (state.effectiveDurationMillis(clock.nowEpochMillis()) >= MaximumExerciseMillis) {
+                    ExerciseSessionTransition.Changed(state.finishedAtLimit())
+                } else {
+                    ExerciseSessionTransition.Changed(state)
+                }
+            }
+
+            is ExerciseSessionState.Paused -> {
+                if (state.accumulatedActiveMillis >= MaximumExerciseMillis) {
+                    ExerciseSessionTransition.Changed(state.finishedAtLimit())
+                } else {
+                    ExerciseSessionTransition.Changed(state)
+                }
+            }
+
+            else -> ExerciseSessionTransition.Changed(state)
         }
     }
 }
@@ -303,16 +321,14 @@ internal fun creditedExerciseHours(activeDurationMillis: Long): Int {
     }
 }
 
-private fun ExerciseSessionState.Active.pausedAtLimit(): ExerciseSessionState.Paused {
-    val remainingActiveMillis = (MaximumExerciseMillis - accumulatedActiveMillis).coerceAtLeast(0L)
-    val exactLimitEpochMillis = activeSegmentStartedAtEpochMillis + remainingActiveMillis
-    return ExerciseSessionState.Paused(
-        sessionId = sessionId,
-        details = details,
-        startedAtEpochMillis = startedAtEpochMillis,
-        pausedAtEpochMillis = exactLimitEpochMillis,
-        accumulatedActiveMillis = MaximumExerciseMillis
-    )
+internal fun ExerciseSessionState.toExerciseSessionPhaseOrNull(): ExerciseSessionPhase? {
+    return when (this) {
+        ExerciseSessionState.Idle,
+        is ExerciseSessionState.Submitted -> null
+        is ExerciseSessionState.Active -> ExerciseSessionPhase.ACTIVE
+        is ExerciseSessionState.Paused -> ExerciseSessionPhase.PAUSED
+        is ExerciseSessionState.Finished -> ExerciseSessionPhase.COMPLETED
+    }
 }
 
 private fun ExerciseSessionState.Active.finishedAtLimit(): ExerciseSessionState.Finished {
@@ -353,5 +369,16 @@ private fun ExerciseSessionState.Paused.finished(
         endedAtEpochMillis = endedAtEpochMillis,
         activeDurationMillis = durationMillis,
         creditedHours = creditedExerciseHours(durationMillis)
+    )
+}
+
+private fun ExerciseSessionState.Paused.finishedAtLimit(): ExerciseSessionState.Finished {
+    return ExerciseSessionState.Finished(
+        sessionId = sessionId,
+        details = details,
+        startedAtEpochMillis = startedAtEpochMillis,
+        endedAtEpochMillis = pausedAtEpochMillis,
+        activeDurationMillis = MaximumExerciseMillis,
+        creditedHours = 2
     )
 }

@@ -1,4 +1,5 @@
 import java.net.URI
+import java.security.MessageDigest
 import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -6,6 +7,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("org.openapi.generator")
 }
 
 // google-services.json identifies the Firebase project; it is intentionally
@@ -17,11 +19,16 @@ if (file("google-services.json").isFile) {
 fun String.asBuildConfigString(): String =
     "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
-val configuredApiBaseUrl = providers.gradleProperty("BNBU_API_BASE_URL")
-    .orElse(providers.environmentVariable("BNBU_API_BASE_URL"))
+fun configuredValue(name: String): String? = providers.gradleProperty(name)
+    .orElse(providers.environmentVariable(name))
     .orNull
     ?.trim()
     ?.takeIf { it.isNotEmpty() }
+
+val configuredLocalApiBaseUrl = configuredValue("BNBU_LOCAL_API_BASE_URL")
+val configuredStagingApiBaseUrl = configuredValue("BNBU_STAGING_API_BASE_URL")
+val configuredProductionApiBaseUrl =
+    configuredValue("BNBU_PRODUCTION_API_BASE_URL") ?: configuredValue("BNBU_API_BASE_URL")
 
 // Release signing material is deliberately external to source control.  CI must
 // supply these values as environment variables; a locally ignored
@@ -85,21 +92,42 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            buildConfigField("String", "BNBU_ENVIRONMENT", "local".asBuildConfigString())
+            buildConfigField("boolean", "BNBU_ALLOW_CLEARTEXT_API", "true")
             buildConfigField(
                 "String",
                 "BNBU_API_BASE_URL",
-                (configuredApiBaseUrl ?: "http://123.207.5.70:3334/api").asBuildConfigString()
+                (configuredLocalApiBaseUrl ?: "http://10.0.2.2:3000/api/v1")
+                    .asBuildConfigString()
+            )
+        }
+        create("staging") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".staging"
+            versionNameSuffix = "-staging"
+            matchingFallbacks += listOf("debug")
+            buildConfigField("String", "BNBU_ENVIRONMENT", "staging".asBuildConfigString())
+            buildConfigField("boolean", "BNBU_ALLOW_CLEARTEXT_API", "false")
+            buildConfigField(
+                "String",
+                "BNBU_API_BASE_URL",
+                (configuredStagingApiBaseUrl
+                    ?: "https://staging-configuration-required.invalid/api/v1")
+                    .asBuildConfigString()
             )
         }
         release {
             isMinifyEnabled = true
             signingConfig = signingConfigs.getByName("release")
+            buildConfigField("String", "BNBU_ENVIRONMENT", "production".asBuildConfigString())
+            buildConfigField("boolean", "BNBU_ALLOW_CLEARTEXT_API", "false")
             buildConfigField(
                 "String",
                 "BNBU_API_BASE_URL",
                 // preReleaseBuild requires an explicit HTTPS value. The
                 // placeholder only keeps IDE model/sync generation valid.
-                (configuredApiBaseUrl ?: "https://configuration-required.invalid/api")
+                (configuredProductionApiBaseUrl
+                    ?: "https://production-configuration-required.invalid/api/v1")
                     .asBuildConfigString()
             )
             proguardFiles(
@@ -118,6 +146,10 @@ android {
         compose = true
         buildConfig = true
     }
+
+    sourceSets.getByName("main").java.srcDir(
+        layout.buildDirectory.dir("generated/openapi/src/main/kotlin")
+    )
 }
 
 kotlin {
@@ -129,6 +161,7 @@ kotlin {
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.10.0")
+    implementation("androidx.fragment:fragment:1.8.5")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.material3:material3")
@@ -163,6 +196,197 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+val openApiSnapshotFile = layout.projectDirectory.file("openapi/openapi.snapshot.yaml")
+val openApiContractMetadataFile = layout.projectDirectory.file("openapi/contract.properties")
+val generatedOpenApiRoot = layout.buildDirectory.dir("generated/openapi")
+val openApiContractProperties = Properties().apply {
+    val metadata = openApiContractMetadataFile.asFile
+    check(metadata.isFile) { "Missing OpenAPI contract metadata: $metadata" }
+    metadata.inputStream().use(::load)
+}
+
+fun requiredOpenApiProperty(name: String): String =
+    openApiContractProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
+        ?: throw GradleException("Missing OpenAPI contract metadata property: $name")
+
+val verifyOpenApiContractBinding by tasks.registering {
+    group = "verification"
+    description = "Verifies the vendored OpenAPI snapshot, LF bytes, version, prefix, and operation count."
+    inputs.file(openApiSnapshotFile)
+    inputs.file(openApiContractMetadataFile)
+
+    doLast {
+        val snapshot = openApiSnapshotFile.asFile
+        check(snapshot.isFile) { "Missing vendored OpenAPI snapshot: $snapshot" }
+        val bytes = snapshot.readBytes()
+        check(bytes.none { it == '\r'.code.toByte() }) {
+            "OpenAPI snapshot must use LF line endings; do not accept a Windows CRLF hash."
+        }
+
+        val actualHash = MessageDigest.getInstance("SHA-256")
+            .digest(bytes)
+            .joinToString("") { byte ->
+                (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+            }
+        val expectedHash = requiredOpenApiProperty("sha256").lowercase()
+        check(actualHash == expectedHash) {
+            "OpenAPI SHA-256 mismatch. Expected $expectedHash but found $actualHash. " +
+                "Do not edit the snapshot or treat a CRLF hash as authoritative."
+        }
+
+        val text = bytes.toString(Charsets.UTF_8)
+        val expectedVersion = requiredOpenApiProperty("contractVersion")
+        check(Regex("(?m)^  version: ${Regex.escape(expectedVersion)}\\s*$").containsMatchIn(text)) {
+            "OpenAPI contract version does not match contract.properties: $expectedVersion"
+        }
+        check(Regex("(?m)^  - url: /api/v1\\s*$").containsMatchIn(text)) {
+            "OpenAPI snapshot must declare the single /api/v1 server prefix."
+        }
+        val actualOperationCount = Regex("(?m)^\\s+operationId:\\s+\\S+\\s*$")
+            .findAll(text)
+            .count()
+        val expectedOperationCount = requiredOpenApiProperty("operationCount").toInt()
+        check(actualOperationCount == expectedOperationCount) {
+            "OpenAPI operation count mismatch. Expected $expectedOperationCount but found $actualOperationCount."
+        }
+    }
+}
+
+openApiGenerate {
+    generatorName.set("kotlin")
+    library.set("jvm-okhttp4")
+    inputSpec.set(openApiSnapshotFile.asFile.absolutePath)
+    outputDir.set(generatedOpenApiRoot.get().asFile.absolutePath)
+    modelPackage.set(requiredOpenApiProperty("generatedPackage"))
+    apiPackage.set("edu.bnbu.student.mvp.core.network.v1.generated.api")
+    invokerPackage.set("edu.bnbu.student.mvp.core.network.v1.generated.infrastructure")
+    validateSpec.set(true)
+    globalProperties.set(
+        mapOf(
+            "models" to "",
+            "modelDocs" to "false",
+            "modelTests" to "false",
+            "apis" to "false",
+            "apiDocs" to "false",
+            "apiTests" to "false",
+            "supportingFiles" to "false"
+        )
+    )
+    configOptions.set(
+        mapOf(
+            "sourceFolder" to "src/main/kotlin",
+            "dateLibrary" to "java8",
+            "serializationLibrary" to "gson",
+            "collectionType" to "list",
+            "enumPropertyNaming" to "original",
+            "modelMutable" to "false"
+        )
+    )
+}
+
+tasks.named("openApiGenerate") {
+    dependsOn(verifyOpenApiContractBinding)
+    doFirst {
+        delete(generatedOpenApiRoot)
+    }
+}
+
+val normalizeGeneratedOpenApiModels by tasks.registering {
+    group = "build setup"
+    description = "Applies deterministic Kotlin-generator compatibility fixes without changing the OpenAPI snapshot."
+    dependsOn(tasks.named("openApiGenerate"))
+    inputs.property("contractSha256", requiredOpenApiProperty("sha256"))
+    inputs.property("generatorVersion", requiredOpenApiProperty("generatorVersion"))
+    outputs.upToDateWhen { false }
+
+    doLast {
+        val modelRoot = generatedOpenApiRoot.get().asFile.resolve(
+            "src/main/kotlin/" + requiredOpenApiProperty("generatedPackage").replace('.', '/')
+        )
+
+        fun rewriteModel(fileName: String, oldText: String, newText: String) {
+            val file = modelRoot.resolve(fileName)
+            check(file.isFile) { "Expected generated model is missing: $fileName" }
+            val current = file.readText(Charsets.UTF_8)
+            when {
+                oldText in current -> file.writeText(current.replace(oldText, newText), Charsets.UTF_8)
+                newText in current -> Unit
+                else -> error(
+                    "OpenAPI Generator output changed for $fileName. " +
+                        "Review the compatibility shim instead of editing generated code."
+                )
+            }
+        }
+
+        val generatedPackage = requiredOpenApiProperty("generatedPackage")
+        listOf("EmptyEnvelope.kt", "ReviewRecord.kt").forEach { fileName ->
+            rewriteModel(
+                fileName,
+                "import $generatedPackage.Null\n",
+                ""
+            )
+        }
+        rewriteModel(
+            "EmptyEnvelope.kt",
+            "val `data`: Null,",
+            "val `data`: kotlin.Nothing?,"
+        )
+        rewriteModel(
+            "ReviewRecord.kt",
+            "val creditedDurationOverrideSeconds: Null,",
+            "val creditedDurationOverrideSeconds: kotlin.Nothing?,"
+        )
+        rewriteModel(
+            "ScoreRuleCalculationDefinition.kt",
+            "_100Period0(\"100.0\");",
+            "_100Period0(java.math.BigDecimal(\"100.0\"));"
+        )
+        rewriteModel(
+            "UpdateCurrentProfileRequest.kt",
+            """data class UpdateCurrentProfileRequest (
+
+)""",
+            """data class UpdateCurrentProfileRequest (
+
+    @SerializedName("expectedVersion")
+    val expectedVersion: kotlin.Int,
+
+    @SerializedName("primaryEmail")
+    val primaryEmail: kotlin.String? = null,
+
+    @SerializedName("primaryPhone")
+    val primaryPhone: kotlin.String? = null
+
+)"""
+        )
+    }
+}
+
+val verifyGeneratedOpenApiModels by tasks.registering {
+    group = "verification"
+    description = "Ensures the OpenAPI task generated model-only Kotlin sources in the isolated v1 package."
+    dependsOn(normalizeGeneratedOpenApiModels)
+    inputs.file(openApiContractMetadataFile)
+    outputs.upToDateWhen { false }
+
+    doLast {
+        val generatedRoot = generatedOpenApiRoot.get().asFile
+        val kotlinFiles = generatedRoot.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .toList()
+        check(kotlinFiles.isNotEmpty()) { "OpenAPI generation produced no Kotlin models." }
+
+        val expectedPackage = "package ${requiredOpenApiProperty("generatedPackage")}"
+        val unexpectedPackages = kotlinFiles.filterNot { file ->
+            file.useLines { lines -> lines.any { it.trim() == expectedPackage } }
+        }
+        check(unexpectedPackages.isEmpty()) {
+            "OpenAPI generation produced non-model Kotlin sources: " +
+                unexpectedPackages.joinToString { it.relativeTo(generatedRoot).path }
+        }
+    }
 }
 
 /**
@@ -200,31 +424,61 @@ val verifyAppLocaleBoundary by tasks.registering {
 
 tasks.named("preBuild") {
     dependsOn(verifyAppLocaleBoundary)
+    dependsOn(verifyOpenApiContractBinding)
+    dependsOn(verifyGeneratedOpenApiModels)
+}
+
+fun validateRemoteApiBaseUrl(environment: String, propertyName: String, value: String?) {
+    val resolved = value
+        ?: throw GradleException(
+            "$environment builds require -P$propertyName=https://your-$environment-domain/api/v1 " +
+                "or the $propertyName environment variable."
+        )
+    val uri = runCatching { URI(resolved) }.getOrNull()
+    if (uri?.scheme?.equals("https", ignoreCase = true) != true || uri.host.isNullOrBlank()) {
+        throw GradleException("$environment $propertyName must be a valid HTTPS URL: $resolved")
+    }
+    if (uri.userInfo != null || uri.rawQuery != null || uri.rawFragment != null) {
+        throw GradleException(
+            "$environment $propertyName must not contain credentials, a query, or a fragment: $resolved"
+        )
+    }
+    if (!(uri.path ?: "").trimEnd('/').equals("/api/v1", ignoreCase = false)) {
+        throw GradleException("$environment $propertyName must end with /api/v1: $resolved")
+    }
+    if (
+        uri.host.equals("localhost", ignoreCase = true) ||
+        uri.host == "127.0.0.1" ||
+        uri.host == "10.0.2.2" ||
+        uri.host.endsWith(".invalid")
+    ) {
+        throw GradleException("$environment $propertyName must use an approved remote host: $resolved")
+    }
+}
+
+val validateStagingApiBaseUrl by tasks.registering {
+    group = "verification"
+    description = "Requires an explicit HTTPS BNBU_STAGING_API_BASE_URL for staging builds."
+    inputs.property("BNBU_STAGING_API_BASE_URL", configuredStagingApiBaseUrl ?: "")
+    doLast {
+        validateRemoteApiBaseUrl(
+            environment = "Staging",
+            propertyName = "BNBU_STAGING_API_BASE_URL",
+            value = configuredStagingApiBaseUrl
+        )
+    }
 }
 
 val validateReleaseApiBaseUrl by tasks.registering {
     group = "verification"
-    description = "Requires an explicit HTTPS BNBU_API_BASE_URL for release builds."
-    inputs.property("BNBU_API_BASE_URL", configuredApiBaseUrl ?: "")
+    description = "Requires an explicit HTTPS production API URL for release builds."
+    inputs.property("BNBU_PRODUCTION_API_BASE_URL", configuredProductionApiBaseUrl ?: "")
     doLast {
-        val value = configuredApiBaseUrl
-            ?: throw GradleException(
-                "Release builds require -PBNBU_API_BASE_URL=https://your-production-domain/api " +
-                    "or the BNBU_API_BASE_URL environment variable."
-            )
-        val uri = runCatching { URI(value) }.getOrNull()
-        if (uri?.scheme?.equals("https", ignoreCase = true) != true || uri.host.isNullOrBlank()) {
-            throw GradleException("Release BNBU_API_BASE_URL must be a valid HTTPS URL: $value")
-        }
-        if (uri.userInfo != null || uri.rawQuery != null || uri.rawFragment != null) {
-            throw GradleException("Release BNBU_API_BASE_URL must not contain credentials, a query, or a fragment: $value")
-        }
-        if (!(uri.path ?: "").trimEnd('/').endsWith("/api")) {
-            throw GradleException("Release BNBU_API_BASE_URL must end with /api: $value")
-        }
-        if (uri.host.equals("localhost", ignoreCase = true) || uri.host == "127.0.0.1" || uri.host == "10.0.2.2" || uri.host.endsWith(".invalid")) {
-            throw GradleException("Release BNBU_API_BASE_URL must use the real production host: $value")
-        }
+        validateRemoteApiBaseUrl(
+            environment = "Production",
+            propertyName = "BNBU_PRODUCTION_API_BASE_URL",
+            value = configuredProductionApiBaseUrl
+        )
     }
 }
 
@@ -256,6 +510,9 @@ val validateReleaseSigningConfiguration by tasks.registering {
 }
 
 tasks.configureEach {
+    if (name == "preStagingBuild") {
+        dependsOn(validateStagingApiBaseUrl)
+    }
     if (name == "preReleaseBuild") {
         dependsOn(validateReleaseApiBaseUrl)
         dependsOn(validateReleaseFirebaseConfiguration)
