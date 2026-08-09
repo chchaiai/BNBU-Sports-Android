@@ -44,6 +44,10 @@ internal class ExerciseVersionConflictException(
     message: String = "Exercise session version conflict."
 ) : IllegalStateException(message)
 
+internal class ExerciseCheckInNotRequiredException(
+    message: String = "The required valid exercise duration has already been reached."
+) : IllegalStateException(message)
+
 /**
  * Coordinates the server-authoritative session mirror without depending on HTTP.
  * Failed mutations retain the last confirmed state and are always safe to retry.

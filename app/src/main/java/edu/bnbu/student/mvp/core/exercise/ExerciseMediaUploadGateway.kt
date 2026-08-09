@@ -1,6 +1,7 @@
 package edu.bnbu.student.mvp.core.exercise
 
 import edu.bnbu.student.mvp.core.model.ProofMediaType
+import edu.bnbu.student.mvp.core.network.UploadProgress
 import java.net.URI
 import java.io.File
 
@@ -18,6 +19,11 @@ internal interface ExerciseMediaUploadGateway {
 
 internal interface ExerciseMediaObjectUploader {
     suspend fun upload(command: UploadExerciseMediaObjectCommand): ExerciseMediaUploadReceipt
+
+    suspend fun upload(
+        command: UploadExerciseMediaObjectCommand,
+        onProgress: (UploadProgress) -> Unit
+    ): ExerciseMediaUploadReceipt = upload(command)
 }
 
 internal data class InitiateExerciseMediaUploadCommand(

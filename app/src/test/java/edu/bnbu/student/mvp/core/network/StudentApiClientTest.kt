@@ -1,6 +1,7 @@
 package edu.bnbu.student.mvp.core.network
 
 import edu.bnbu.student.mvp.BuildConfig
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.async
@@ -195,6 +196,37 @@ class StudentApiClientTest {
             delay(25)
         }
         assertEquals(0, httpClient.dispatcher.runningCallsCount())
+    }
+
+    @Test
+    fun cancellableUploadReportsMonotonicActualRequestBodyProgress() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"files":[{"url":"https://media.invalid/proof.jpg","cosKey":"redacted","mediaType":"image","mimeType":"image/jpeg","size":131072}],"count":1}"""
+            )
+        )
+        val source = File.createTempFile("student-upload-progress", ".jpg")
+        source.writeBytes(ByteArray(128 * 1_024) { index -> (index % 251).toByte() })
+        val events = mutableListOf<UploadProgress>()
+
+        try {
+            val response = client().uploadProofFilesCancellable(listOf(source), events::add)
+
+            assertEquals(1, response.count)
+            assertTrue(events.isNotEmpty())
+            assertEquals(0L, events.first().bytesSent)
+            assertEquals(100, events.last().percent)
+            assertEquals(events.last().totalBytes, events.last().bytesSent)
+            assertTrue(events.zipWithNext().all { (left, right) ->
+                left.bytesSent <= right.bytesSent && left.totalBytes == right.totalBytes
+            })
+            val request = server.takeRequest()
+            assertEquals("/api/v1/upload/proof", request.path)
+            assertTrue(request.bodySize > source.length())
+            assertEquals(request.bodySize, events.last().totalBytes)
+        } finally {
+            source.delete()
+        }
     }
 
     private fun client(

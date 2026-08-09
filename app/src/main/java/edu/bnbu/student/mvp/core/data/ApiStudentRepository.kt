@@ -39,6 +39,7 @@ import edu.bnbu.student.mvp.core.network.SubmitRecordResponse
 import edu.bnbu.student.mvp.core.network.SubmitSportRecordRequest
 import edu.bnbu.student.mvp.core.network.UploadProofResponse
 import edu.bnbu.student.mvp.core.network.UploadedProofFile
+import edu.bnbu.student.mvp.core.network.UploadProgress
 import edu.bnbu.student.mvp.core.network.UserDto
 import edu.bnbu.student.mvp.core.network.EnduranceScoreResponse
 import edu.bnbu.student.mvp.core.network.ExemptionResponse
@@ -699,7 +700,8 @@ class ApiStudentRepository(
      */
     suspend fun uploadProofFiles(
         proofAttachments: List<ProofAttachment>,
-        cacheDir: File
+        cacheDir: File,
+        onProgress: (UploadProgress) -> Unit = {}
     ): Result<List<UploadedProofFile>> {
         return withContext(Dispatchers.IO) {
             val tempFiles = mutableListOf<File>()
@@ -752,7 +754,7 @@ class ApiStudentRepository(
                     )
                 }
 
-                val response = apiClient.uploadProofFilesCancellable(tempFiles)
+                val response = apiClient.uploadProofFilesCancellable(tempFiles, onProgress)
                 if (response.files.size != proofAttachments.size) {
                     throw IOException(
                         "Server accepted ${response.files.size} of ${proofAttachments.size} upload files"

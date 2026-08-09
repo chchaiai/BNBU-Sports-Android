@@ -12,6 +12,7 @@ import edu.bnbu.student.mvp.core.exercise.ExerciseMediaUploadGateway
 import edu.bnbu.student.mvp.core.exercise.InitiateExerciseMediaUploadCommand
 import edu.bnbu.student.mvp.core.exercise.UploadExerciseMediaObjectCommand
 import edu.bnbu.student.mvp.core.model.ProofMediaType
+import edu.bnbu.student.mvp.core.network.UploadProgress
 import java.io.File
 import java.security.MessageDigest
 import kotlin.math.ceil
@@ -26,7 +27,8 @@ internal class SessionMediaUploadCoordinator(
     suspend fun uploadAndBind(
         sessionId: String,
         draft: SessionMediaDraft,
-        sourceFile: File
+        sourceFile: File,
+        onProgress: (UploadProgress) -> Unit = {}
     ): ExerciseMediaEvidence {
         require(sessionId.isNotBlank()) { "Exercise session ID cannot be blank." }
         require(draft.status == SessionMediaDraftStatus.Ready) {
@@ -69,7 +71,8 @@ internal class SessionMediaUploadCoordinator(
                 sourceFile = sourceFile,
                 mimeType = mimeType,
                 expectedFileSizeBytes = draft.byteCount
-            )
+            ),
+            onProgress
         )
         val confirmed = gateway.confirmUpload(
             ConfirmExerciseMediaUploadCommand(

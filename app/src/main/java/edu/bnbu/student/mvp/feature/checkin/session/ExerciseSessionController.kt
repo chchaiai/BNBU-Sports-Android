@@ -11,6 +11,7 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import edu.bnbu.student.mvp.core.exercise.ExerciseGateway
+import edu.bnbu.student.mvp.core.exercise.ExerciseCheckInNotRequiredException
 import edu.bnbu.student.mvp.core.exercise.ExerciseOperationRejection
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionCoordinator
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionOperationResult
@@ -47,7 +48,8 @@ internal class ExerciseSessionController(
     mediaRootDirectory: File,
     private val clock: ExerciseClock = SystemExerciseClock,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val exerciseGateway: ExerciseGateway? = null
+    private val exerciseGateway: ExerciseGateway? = null,
+    private val exerciseGatewayProvider: (() -> ExerciseGateway?)? = null
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val machine = ExerciseSessionMachine(clock)
@@ -58,7 +60,7 @@ internal class ExerciseSessionController(
     private var persistenceJob: Job? = null
     private var locationRequestGeneration = 0L
     private var locationCancellationSource: CancellationTokenSource? = null
-    private var serverCoordinator = exerciseGateway?.let(::ExerciseSessionCoordinator)
+    private var serverCoordinator = resolveExerciseGateway()?.let(::ExerciseSessionCoordinator)
     private var automaticFinishSessionId: String? = null
     private val _locationStatus = MutableStateFlow<LocationStatus>(LocationStatus.Unknown)
 
@@ -92,6 +94,7 @@ internal class ExerciseSessionController(
      */
     fun bindAccount(accountId: String, preserveExistingDrafts: Boolean = false) {
         val normalized = accountId.trim()
+        val resolvedGateway = resolveExerciseGateway()
         if (normalized.isEmpty()) {
             val previousAccountId = boundAccountId
             bindingGeneration += 1
@@ -101,7 +104,7 @@ internal class ExerciseSessionController(
             isRestoring = false
             isSessionBusy = false
             shouldShowHealthReminder = false
-            serverCoordinator = exerciseGateway?.let(::ExerciseSessionCoordinator)
+            serverCoordinator = null
             automaticFinishSessionId = null
             resetLocationStatus()
             if (previousAccountId != null && !preserveExistingDrafts) {
@@ -111,10 +114,17 @@ internal class ExerciseSessionController(
             }
             return
         }
-        if (boundAccountId == normalized && !isRestoring) return
+        if (
+            boundAccountId == normalized &&
+            !isRestoring &&
+            (
+                (resolvedGateway == null && serverCoordinator == null) ||
+                    (resolvedGateway != null && serverCoordinator != null)
+                )
+        ) return
         val previousAccountId = boundAccountId
         boundAccountId = normalized
-        serverCoordinator = exerciseGateway?.let(::ExerciseSessionCoordinator)
+        serverCoordinator = resolvedGateway?.let(::ExerciseSessionCoordinator)
         automaticFinishSessionId = null
         shouldShowHealthReminder = !localStore.hasShownHealthReminder(normalized)
         bindingGeneration += 1
@@ -775,6 +785,14 @@ internal class ExerciseSessionController(
                 }
 
                 is ExerciseSessionOperationResult.Failed -> {
+                    if (result.cause is ExerciseCheckInNotRequiredException) {
+                        message = interfaceText(
+                            "已达到合格打卡时长，无需继续打卡。",
+                            "You have reached the required check-in duration. No further check-in is needed."
+                        )
+                        isSessionBusy = false
+                        return@launch
+                    }
                     if (result.cause is ExerciseVersionConflictException) {
                         val mapped = runCatching {
                             result.retainedSession?.toLocalState(clock.nowEpochMillis())
@@ -811,6 +829,9 @@ internal class ExerciseSessionController(
         "服务端返回的运动状态无法识别，已保留本地状态。",
         "The server returned an invalid exercise state. The local state was retained."
     )
+
+    private fun resolveExerciseGateway(): ExerciseGateway? =
+        exerciseGatewayProvider?.invoke() ?: exerciseGateway
 
     private fun applyTransition(transition: ExerciseSessionTransition) {
         when (transition) {

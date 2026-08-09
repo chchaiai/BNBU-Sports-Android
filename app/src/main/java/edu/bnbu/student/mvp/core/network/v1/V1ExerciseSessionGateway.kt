@@ -9,6 +9,7 @@ import edu.bnbu.student.mvp.core.exercise.ExerciseRecordDraft
 import edu.bnbu.student.mvp.core.exercise.ExerciseRecordVersionConflictException
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionRecord
+import edu.bnbu.student.mvp.core.exercise.ExerciseCheckInNotRequiredException
 import edu.bnbu.student.mvp.core.exercise.ExerciseVersionConflictException
 import edu.bnbu.student.mvp.core.exercise.StartExerciseCommand
 import edu.bnbu.student.mvp.core.exercise.SubmitExerciseRecordCommand
@@ -335,6 +336,14 @@ internal class V1ExerciseSessionGateway(
             clearObservedAt(scope)
         }
     } catch (error: V1HttpException) {
+        if (
+            operationId == "startExerciseSession" &&
+            error.error.code.value == "SESSION_ALREADY_COMPLETED"
+        ) {
+            mutationRegistry.complete(intent)
+            clearObservedAt(scope)
+            throw ExerciseCheckInNotRequiredException().also { it.initCause(error) }
+        }
         if (error.error.code.value in RefreshableSessionConflictCodes) {
             mutationRegistry.complete(intent)
             clearObservedAt(scope)
