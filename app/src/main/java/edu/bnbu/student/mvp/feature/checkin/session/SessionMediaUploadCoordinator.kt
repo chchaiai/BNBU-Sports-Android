@@ -35,6 +35,9 @@ internal class SessionMediaUploadCoordinator(
             "Only a ready local camera draft can be uploaded."
         }
         require(draft.selected) { "Only a selected local camera draft can be uploaded." }
+        require(draft.type != ProofMediaType.Video || draft.compressedForUpload) {
+            "Uncompressed exercise video cannot be uploaded."
+        }
         require(sourceFile.isFile && sourceFile.name == draft.fileName) {
             "The local media draft file is missing or mismatched."
         }

@@ -115,8 +115,6 @@ internal fun ProofAttachmentPanel(
     val context = LocalContext.current
     var notice by remember { mutableStateOf<String?>(null) }
     var pendingPhoto by remember { mutableStateOf<File?>(null) }
-    var pendingVideo by remember { mutableStateOf<File?>(null) }
-    var showVideoRecordingNotice by remember { mutableStateOf(false) }
     val photoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         val file = pendingPhoto
         pendingPhoto = null
@@ -134,25 +132,10 @@ internal fun ProofAttachmentPanel(
             notice = interfaceText("已添加现场照片。", "On-site photo added.")
         }
     }
-    val videoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { success ->
-        val file = pendingVideo
-        pendingVideo = null
-        if (!success || file == null || file.length() <= 0L) {
-            file?.delete()
-            if (success) notice = interfaceText("现场视频保存失败，请重试。", "Could not save the on-site video. Try again.")
-            return@rememberLauncherForActivityResult
-        }
-        val attachment = file.toCameraProofAttachment(context, ProofMediaType.Video)
-        if (attachment.validationMessage != null) {
-            file.delete()
-            notice = attachment.validationMessage
-        } else {
-            onProofAttachmentsChanged(proofAttachments + attachment)
-            notice = interfaceText("已添加现场视频。", "On-site video added.")
-        }
-    }
-
     fun launchCamera(type: ProofMediaType) {
+        require(type == ProofMediaType.Image) {
+            "Legacy proof panel cannot record video; use ExerciseVideoRecorderDialog."
+        }
         runCatching {
             val file = context.createCheckInCameraFile(type)
             val uri = FileProvider.getUriForFile(
@@ -163,30 +146,15 @@ internal fun ProofAttachmentPanel(
             file to uri
         }.fold(
             onSuccess = { (file, uri) ->
-                if (type == ProofMediaType.Image) {
-                    pendingPhoto = file
-                    photoLauncher.launch(uri)
-                } else {
-                    pendingVideo = file
-                    videoLauncher.launch(uri)
-                }
+                pendingPhoto = file
+                photoLauncher.launch(uri)
             },
             onFailure = { notice = interfaceText("无法打开系统相机，请检查相机是否可用。", "Could not open the system camera. Check that it is available.") }
         )
     }
 
-    if (showVideoRecordingNotice) {
-        SystemCameraVideoRecordingNotice(
-            onContinue = {
-                showVideoRecordingNotice = false
-                launchCamera(ProofMediaType.Video)
-            },
-            onDismiss = { showVideoRecordingNotice = false }
-        )
-    }
-
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        val isCaptureInProgress = pendingPhoto != null || pendingVideo != null
+        val isCaptureInProgress = pendingPhoto != null
         Text(interfaceText("凭证必须现场拍摄，不支持从相册或文件中选择。", "Proof must be captured on site; photos and files cannot be selected."), style = MaterialTheme.typography.bodySmall)
         Text(ProofUploadRule.summaryText, style = MaterialTheme.typography.bodySmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -197,12 +165,6 @@ internal fun ProofAttachmentPanel(
                 onClick = { launchCamera(ProofMediaType.Image) },
                 modifier = Modifier.weight(1f)
             ) { Text(interfaceText("现场拍照", "Take photo")) }
-            Button(
-                enabled = enabled && !isCaptureInProgress && totalProofCount < ProofUploadRule.maxAttachmentCount &&
-                    (existingProofs + proofAttachments).none { it.type == ProofMediaType.Video },
-                onClick = { showVideoRecordingNotice = true },
-                modifier = Modifier.weight(1f)
-            ) { Text(interfaceText("现场录像", "Record video")) }
         }
         notice?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
         proofAttachments.forEach { attachment ->
@@ -226,9 +188,8 @@ internal fun ProofAttachmentPanel(
 }
 
 /**
- * A just-in-time disclosure for every flow that delegates video capture to the
- * device camera.  The app never asks for or accesses microphone permission;
- * any audio belongs to the system camera's own permission and settings.
+ * Just-in-time disclosure before the in-app CameraX recorder requests camera
+ * and microphone access.
  */
 @Composable
 internal fun SystemCameraVideoRecordingNotice(
@@ -241,8 +202,8 @@ internal fun SystemCameraVideoRecordingNotice(
         text = {
             Text(
                 interfaceText(
-                    "继续后将打开设备的系统相机录制视频。本应用不申请或直接使用 RECORD_AUDIO（麦克风）权限；是否录入环境声音由系统相机及其设置决定。你可取消录制、在系统相机中关闭录音（如可用），或在提交前删除草稿。视频仅在你明确提交后才会上传。",
-                    "Continuing opens your device's system camera to record video. This app does not request or directly use the RECORD_AUDIO (microphone) permission; whether ambient sound is recorded is controlled by the system camera and its settings. You can cancel, mute if that camera offers it, or remove the draft before submitting. The video is uploaded only after you explicitly submit it."
+                    "继续后将在应用内请求相机和麦克风权限，并同时录制画面与声音。有效录制累计最多 15 秒，暂停期间不计时，可提前结束；达到 15 秒会自动结束并在本机压缩。压缩成功且你明确提交后才会上传。",
+                    "Continuing requests camera and microphone access for in-app video with audio. Active recording is limited to 15 seconds; paused time is excluded, you may stop early, and recording stops automatically at the limit before local compression. Upload occurs only after compression succeeds and you submit."
                 )
             )
         },

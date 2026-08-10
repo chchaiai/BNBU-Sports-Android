@@ -30,6 +30,7 @@ import edu.bnbu.student.mvp.core.designsystem.BNBUStudentTheme
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.network.MinimumAppVersionResponse
+import edu.bnbu.student.mvp.core.network.SharedHttpClient
 import edu.bnbu.student.mvp.core.network.StudentApiClient
 import edu.bnbu.student.mvp.core.network.StudentEndpoint
 import edu.bnbu.student.mvp.core.network.SystemHealthResponse
@@ -38,6 +39,11 @@ import edu.bnbu.student.mvp.core.model.SystemModeStatus
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.shell.AppRootScreen
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
+import edu.bnbu.student.mvp.feature.checkin.session.SessionMediaUploadCoordinator
+import edu.bnbu.student.mvp.feature.checkin.session.SessionVideoCompressor
+import edu.bnbu.student.mvp.core.network.v1.PrivateExerciseMediaObjectUploader
+import edu.bnbu.student.mvp.core.network.v1.V1AuthorizedApiClient
+import edu.bnbu.student.mvp.core.network.v1.V1ExerciseMediaUploadGateway
 import edu.bnbu.student.mvp.core.network.v1.createV1ExerciseGateway
 import edu.bnbu.student.mvp.R
 import com.google.android.play.core.appupdate.AppUpdateManager
@@ -301,7 +307,15 @@ class StudentAppStateViewModel(application: Application) : AndroidViewModel(appl
     internal val exerciseSessionController = ExerciseSessionController(
         localStore = localStore,
         mediaRootDirectory = File(application.filesDir, "exercise_session_drafts"),
-        exerciseGatewayProvider = { createV1ExerciseGateway(localStore) }
+        exerciseGatewayProvider = { createV1ExerciseGateway(localStore) },
+        mediaUploadCoordinatorProvider = {
+            val authorizedClient = V1AuthorizedApiClient.create(localStore)
+            SessionMediaUploadCoordinator(
+                gateway = V1ExerciseMediaUploadGateway(authorizedClient),
+                objectUploader = PrivateExerciseMediaObjectUploader(SharedHttpClient.instance)
+            )
+        },
+        videoCompressor = SessionVideoCompressor(application)
     )
 
     var isRestoringSession by mutableStateOf(true)

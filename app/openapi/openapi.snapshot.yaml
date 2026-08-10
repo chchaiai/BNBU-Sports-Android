@@ -2240,6 +2240,7 @@ paths:
     post:
       tags: [Media Uploads]
       operationId: initiateMediaUpload
+      x-error-codes: [MEDIA_VIDEO_DURATION_EXCEEDED]
       x-access-policy:
         policyId: MEDIA-UPLOAD-INITIATE
         authentication: ACCESS_TOKEN
@@ -2291,6 +2292,7 @@ paths:
     post:
       tags: [Media Uploads]
       operationId: confirmMediaUpload
+      x-error-codes: [MEDIA_VIDEO_DURATION_EXCEEDED, MEDIA_AUDIO_TRACK_REQUIRED]
       x-access-policy:
         policyId: MEDIA-UPLOAD-CONFIRM
         authentication: ACCESS_TOKEN
@@ -5789,9 +5791,9 @@ components:
         recordId: { oneOf: [{ $ref: '#/components/schemas/OpaqueId' }, { type: 'null' }] }
         businessPurpose: { $ref: '#/components/schemas/MediaBusinessPurpose' }
         mediaType: { $ref: '#/components/schemas/MediaType' }
-        declaredMimeType: { type: string, maxLength: 127, description: Untrusted client declaration captured at initiation. }
+        declaredMimeType: { type: string, maxLength: 127, description: Untrusted client declaration captured at initiation. Exercise-record video format is not a business limit. }
         verifiedMimeType: { type: [string, 'null'], maxLength: 127, description: Null until trusted byte-level processing succeeds. }
-        declaredFileSizeBytes: { type: integer, minimum: 1, description: Untrusted client declaration captured at initiation. }
+        declaredFileSizeBytes: { type: integer, minimum: 1, description: Untrusted client declaration captured at initiation. It is a transport and integrity fact; exercise-record video has no business size maximum. }
         verifiedFileSizeBytes: { type: [integer, 'null'], minimum: 1, description: Null until the private object is read and validated by the server. }
         captureSource: { $ref: '#/components/schemas/CaptureSource', description: EXERCISE_RECORD requires IN_APP_CAMERA. EXEMPTION_APPLICATION permits IN_APP_CAMERA or FILE_PICKER; SYSTEM_IMPORT is not accepted by this student endpoint. }
         uploadStatus: { $ref: '#/components/schemas/MediaUploadStatus' }
@@ -5799,8 +5801,8 @@ components:
         boundAt: { type: [string, 'null'], format: date-time }
         declaredContentSha256: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }], description: Optional untrusted client declaration. }
         verifiedContentSha256: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }], description: The only public integrity hash; written only after trusted byte-level validation succeeds and null beforehand. }
-        declaredDurationSeconds: { type: [integer, 'null'], minimum: 1, description: Untrusted client declaration; required for VIDEO and null for IMAGE. }
-        verifiedDurationSeconds: { type: [integer, 'null'], minimum: 1, description: Trusted parsed duration for VIDEO and null for IMAGE or before processing. }
+        declaredDurationSeconds: { type: [integer, 'null'], minimum: 1, description: Untrusted client declaration; required for VIDEO and null for IMAGE. EXERCISE_RECORD VIDEO is limited to 15 cumulative recorded seconds. }
+        verifiedDurationSeconds: { type: [integer, 'null'], minimum: 1, description: Trusted parsed duration for VIDEO and null for IMAGE or before processing; this value finally enforces the 15-second exercise-video cap. }
         version: { $ref: '#/components/schemas/PositiveVersion' }
       required: [id, organizationId, ownerStudentId, sessionId, enrollmentId, recordId, businessPurpose, mediaType, declaredMimeType, verifiedMimeType, declaredFileSizeBytes, verifiedFileSizeBytes, captureSource, uploadStatus, uploadedAt, boundAt, declaredContentSha256, verifiedContentSha256, declaredDurationSeconds, verifiedDurationSeconds, version]
       description: Declared and verified facts are intentionally distinct. storageKey and thumbnailStorageKey are never exposed.
@@ -6343,11 +6345,11 @@ components:
         enrollmentId: { $ref: '#/components/schemas/OpaqueId' }
         businessPurpose: { $ref: '#/components/schemas/MediaBusinessPurpose' }
         mediaType: { $ref: '#/components/schemas/MediaType' }
-        mimeType: { type: string, minLength: 1, maxLength: 127 }
-        fileSizeBytes: { type: integer, minimum: 1 }
+        mimeType: { type: string, minLength: 1, maxLength: 127, description: Transport declaration. Exercise-record source-video format is device-defined and not a business restriction. }
+        fileSizeBytes: { type: integer, minimum: 1, description: Exact upload length used for transport integrity. No business maximum applies to EXERCISE_RECORD VIDEO. }
         captureSource: { $ref: '#/components/schemas/CaptureSource', x-runtime-enum: [IN_APP_CAMERA, FILE_PICKER], description: EXERCISE_RECORD requires IN_APP_CAMERA. EXEMPTION_APPLICATION permits IN_APP_CAMERA or FILE_PICKER; SYSTEM_IMPORT is not accepted by this student endpoint. }
         declaredContentSha256: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }], description: Optional and untrusted client declaration; it is not an integrity fact. }
-        durationSeconds: { type: [integer, 'null'], minimum: 1, description: Required and positive for VIDEO; omit or null for IMAGE. Runtime validation enforces the media-type condition. }
+        durationSeconds: { type: [integer, 'null'], minimum: 1, description: Required and positive for VIDEO; omit or null for IMAGE. EXERCISE_RECORD VIDEO has a fixed maximum of 15 cumulative recorded seconds; pauses are excluded. Runtime validation enforces the media-type and purpose conditions. }
       oneOf:
         - properties:
             businessPurpose: { const: EXERCISE_RECORD }
@@ -6359,6 +6361,16 @@ components:
             enrollmentId: { $ref: '#/components/schemas/OpaqueId' }
           required: [enrollmentId]
           not: { properties: { sessionId: {} }, required: [sessionId] }
+      allOf:
+        - if:
+            properties:
+              businessPurpose: { const: EXERCISE_RECORD }
+              mediaType: { const: VIDEO }
+            required: [businessPurpose, mediaType]
+          then:
+            properties:
+              durationSeconds: { type: integer, minimum: 1, maximum: 15 }
+            required: [durationSeconds]
       description: EXERCISE_RECORD media is scoped to an owned ExerciseSession. EXEMPTION_APPLICATION media is scoped to an owned active Enrollment before atomic association with an application draft.
     ConfirmMediaUploadRequest:
       type: object

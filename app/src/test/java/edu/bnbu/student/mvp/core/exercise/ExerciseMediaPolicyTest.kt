@@ -6,10 +6,10 @@ import org.junit.Test
 
 class ExerciseMediaPolicyTest {
     @Test
-    fun acceptsFilesAtTheConfiguredSizeAndDurationLimits() {
+    fun acceptsImageLimitAndLargeVideoAtFifteenSeconds() {
         val image = cameraImage(ExerciseMediaPolicy.MaxImageBytes)
         val video = cameraVideo(
-            ExerciseMediaPolicy.MaxVideoBytes,
+            250L * 1_024L * 1_024L,
             ExerciseMediaPolicy.MaxVideoDurationSeconds
         )
 
@@ -18,19 +18,14 @@ class ExerciseMediaPolicyTest {
     }
 
     @Test
-    fun rejectsFilesAboveTheConfiguredLimits() {
+    fun rejectsLargeImageAndVideoAboveFifteenSeconds() {
         val image = cameraImage(ExerciseMediaPolicy.MaxImageBytes + 1L)
-        val videoBySize = cameraVideo(
-            ExerciseMediaPolicy.MaxVideoBytes + 1L,
-            ExerciseMediaPolicy.MaxVideoDurationSeconds
-        )
         val videoByDuration = cameraVideo(
-            ExerciseMediaPolicy.MaxVideoBytes,
+            250L * 1_024L * 1_024L,
             ExerciseMediaPolicy.MaxVideoDurationSeconds + 0.01
         )
 
         assertTrue(ExerciseMediaPolicy.validateCandidate(image).isFailure)
-        assertTrue(ExerciseMediaPolicy.validateCandidate(videoBySize).isFailure)
         assertTrue(ExerciseMediaPolicy.validateCandidate(videoByDuration).isFailure)
     }
 

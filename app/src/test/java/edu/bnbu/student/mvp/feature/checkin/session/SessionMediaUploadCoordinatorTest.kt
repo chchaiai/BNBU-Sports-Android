@@ -110,6 +110,7 @@ class SessionMediaUploadCoordinatorTest {
         capturedAtEpochMillis = 1_000L,
         byteCount = file.length(),
         durationSeconds = durationSeconds,
+        compressedForUpload = true,
         selected = true,
         status = SessionMediaDraftStatus.Ready
     )

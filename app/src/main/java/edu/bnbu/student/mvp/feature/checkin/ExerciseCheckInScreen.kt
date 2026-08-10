@@ -92,12 +92,11 @@ import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.exercise.MaxOtherSportNameLength
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.CheckInTimeWindow
-import edu.bnbu.student.mvp.core.time.BeijingCheckInZoneId
-import edu.bnbu.student.mvp.core.time.toBeijingBusinessDate
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
 import edu.bnbu.student.mvp.core.model.ProofUploadRule
 import edu.bnbu.student.mvp.core.model.hourText
+import edu.bnbu.student.mvp.core.network.UploadProgress
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionDetails
@@ -116,8 +115,10 @@ import edu.bnbu.student.mvp.feature.checkin.session.creditedExerciseHours
 import edu.bnbu.student.mvp.feature.checkin.session.effectiveDurationMillis
 import edu.bnbu.student.mvp.feature.dashboard.CourseJoinEntryPanel
 import java.text.DateFormat
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.Date
 import kotlinx.coroutines.delay
@@ -154,11 +155,11 @@ internal data class CheckInReadiness(
  * Evaluates the client-side prerequisites currently available in [StudentAppState].
  *
  * The server supplies course lifecycle state and time-window policy. The client
- * applies the same policy before starting, and the server repeats it when creating the session.
+ * applies the same policy before starting, and the server repeats it on submission.
  */
 internal fun evaluateCheckInReadiness(
     appState: StudentAppState,
-    now: ZonedDateTime = ZonedDateTime.now(BeijingCheckInZoneId)
+    now: ZonedDateTime = ZonedDateTime.now(ShanghaiZoneId)
 ): CheckInReadiness {
     if (!appState.workspace.student.accountStatus.equals("ACTIVE", ignoreCase = true)) {
         return CheckInReadiness(false, interfaceText("账号状态异常，无法打卡", "Account status prevents check-in."))
@@ -468,20 +469,20 @@ private fun ExercisePreparationContent(
             sportType == ExerciseSessionDetails.OtherSportType
         }
     )
-    var currentShanghaiTime by remember { mutableStateOf(ZonedDateTime.now(BeijingCheckInZoneId)) }
+    var currentShanghaiTime by remember { mutableStateOf(ZonedDateTime.now(ShanghaiZoneId)) }
     val today = currentShanghaiTime.toLocalDate()
     val hasSubmittedToday = appState.hasSubmittedCheckInToday(today)
     val todayRecordHours = appState.workspace.records
         .asSequence()
         .filter { it.creditType != CreditType.OrganizationOffset }
-        .filter { it.submittedAt.toBeijingBusinessDate() == today }
+        .filter { it.submittedAt.toLocalExerciseCheckInDate() == today }
         .sumOf { it.hours }
     val timeWindow = appState.checkInTimeWindow
     val readiness = evaluateCheckInReadiness(appState, currentShanghaiTime)
     val startBlockedReason = readiness.blockedReason
     LaunchedEffect(Unit) {
         while (true) {
-            currentShanghaiTime = ZonedDateTime.now(BeijingCheckInZoneId)
+            currentShanghaiTime = ZonedDateTime.now(ShanghaiZoneId)
             delay(60_000L)
         }
     }
@@ -539,7 +540,7 @@ private fun ExercisePreparationContent(
             enabled = details.isValid && startBlockedReason == null,
             blockedReason = startBlockedReason,
             onClick = {
-                currentShanghaiTime = ZonedDateTime.now(BeijingCheckInZoneId)
+                currentShanghaiTime = ZonedDateTime.now(ShanghaiZoneId)
                 if (evaluateCheckInReadiness(appState, currentShanghaiTime).canStart) {
                     controller.start(details)
                     if (hasLocationPermission(context)) {
@@ -1053,24 +1054,30 @@ private fun formatExcludedDates(excludedDates: List<String>): String {
         if (uniqueDates.size > displayedDates.size) interfaceText(" 等", " etc.") else ""
 }
 
+private val ShanghaiZoneId: ZoneId = ZoneId.of("Asia/Shanghai")
+
 /** Returns a user-facing reason when an exercise session may not be started. */
 internal fun CheckInTimeWindow.canStartExercise(
-    now: ZonedDateTime = ZonedDateTime.now(BeijingCheckInZoneId)
+    now: ZonedDateTime = ZonedDateTime.now(ShanghaiZoneId)
 ): String? {
     if (windowMode == "unavailable") {
         return interfaceText("打卡规则尚未从服务器加载，请刷新后重试", "Check-in rules have not loaded from the server. Refresh and try again.")
     }
     val today = now.toLocalDate()
     val currentTime = now.toLocalTime()
-    val configuredDailyStart = runCatching { LocalTime.parse(dailyStartTime) }.getOrNull()
+    val dailyStart = runCatching { LocalTime.parse(dailyStartTime) }.getOrNull()
         ?: return interfaceText("打卡时间配置无效，请联系管理员", "The check-in time configuration is invalid. Contact an administrator.")
-    val configuredDailyEnd = runCatching { LocalTime.parse(dailyEndTime) }.getOrNull()
+    val dailyEnd = runCatching { LocalTime.parse(dailyEndTime) }.getOrNull()
         ?: return interfaceText("打卡时间配置无效，请联系管理员", "The check-in time configuration is invalid. Contact an administrator.")
-    val dailyStart = maxOf(configuredDailyStart, LocalTime.of(6, 0))
-    val dailyEnd = minOf(configuredDailyEnd, LocalTime.of(22, 0))
-    val isWithinDailyWindow = currentTime >= dailyStart && currentTime <= dailyEnd
+
+    val isWithinDailyWindow = if (dailyStart <= dailyEnd) {
+        currentTime >= dailyStart && currentTime <= dailyEnd
+    } else {
+        // A cross-midnight period remains valid if such a policy is configured later.
+        currentTime >= dailyStart || currentTime <= dailyEnd
+    }
     if (!isWithinDailyWindow) {
-        return interfaceText("当前不在可运动时段（$dailyStart - $dailyEnd，北京时间）", "Exercise is unavailable now ($dailyStart - $dailyEnd, Beijing time).")
+        return interfaceText("当前不在可运动时段（$dailyStartTime - $dailyEndTime）", "Exercise is unavailable now ($dailyStartTime - $dailyEndTime).")
     }
     if (today.toString() in excludedDates) {
         return interfaceText("今日为特殊排除日，不可开始运动", "Today is an excluded date; exercise cannot be started.")
@@ -1449,6 +1456,7 @@ private fun ExerciseFinishedContent(
     var showAbandonConfirm by remember { mutableStateOf(false) }
     var confirmed by remember { mutableStateOf(false) }
     var isSubmitting by remember { mutableStateOf(false) }
+    var uploadProgress by remember { mutableStateOf<UploadProgress?>(null) }
     var replacementDraft by remember { mutableStateOf<SessionMediaDraft?>(null) }
     val selectedImageCount = controller.drafts.count {
         it.selected && it.type == ProofMediaType.Image
@@ -1686,7 +1694,7 @@ private fun ExerciseFinishedContent(
         }
         item {
             if (isSubmitting) {
-                appState.checkInUploadProgress?.let { progress ->
+                uploadProgress?.let { progress ->
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1737,55 +1745,33 @@ private fun ExerciseFinishedContent(
             Button(
                 onClick = {
                     if (isSubmitting) return@Button
-                    controller.validateSelectedProofs().fold(
-                        onSuccess = { selectedDrafts ->
-                            val proofAttachments = selectedDrafts.mapNotNull { draft ->
-                                controller.resolveDraftFile(draft)
-                                    ?.takeIf { it.isFile }
-                                    ?.let { file -> draft.toProofAttachment(file) }
-                            }
-                            if (proofAttachments.size != selectedDrafts.size) {
-                                localMessage = interfaceText("部分本地凭证已丢失，请重新拍摄后提交", "Some local proof is missing. Capture it again before submitting.")
-                                return@fold
-                            }
-                            isSubmitting = true
-                            appState.submitExerciseCheckIn(
-                                creditType = state.details.creditType,
-                                hours = state.creditedHours.toDouble(),
-                                startedAtEpochMillis = state.startedAtEpochMillis,
-                                endedAtEpochMillis = state.endedAtEpochMillis,
-                                actualDurationSeconds = state.activeDurationMillis / 1_000L,
-                                note = state.details.description,
-                                remark = state.details.remark,
-                                sportType = sportLabel(state.details),
-                                proofAttachments = proofAttachments
-                            ) { result ->
-                                isSubmitting = false
-                                result.fold(
-                                    onSuccess = {
-                                        controller.markSubmitted(
-                                            SubmissionSummary(
-                                                date = formatDate(state.startedAtEpochMillis),
-                                                startTime = formatTime(state.startedAtEpochMillis),
-                                                endTime = formatTime(state.endedAtEpochMillis),
-                                                duration = formatDuration(state.activeDurationMillis),
-                                                creditedHours = state.creditedHours,
-                                                creditType = state.details.creditType.displayLabel(),
-                                                sportType = sportLabel(state.details),
-                                                proofCount = proofAttachments.size
-                                            )
-                                        )
-                                    },
-                                    onFailure = { error ->
-                                        localMessage = error.message ?: interfaceText("打卡提交失败，请重试", "Check-in submission failed. Try again.")
-                                    }
+                    isSubmitting = true
+                    uploadProgress = null
+                    controller.submitSelectedProofs(
+                        onProgress = { uploadProgress = it }
+                    ) { result ->
+                        isSubmitting = false
+                        uploadProgress = null
+                        result.fold(
+                            onSuccess = { proofCount ->
+                                controller.markSubmitted(
+                                    SubmissionSummary(
+                                        date = formatDate(state.startedAtEpochMillis),
+                                        startTime = formatTime(state.startedAtEpochMillis),
+                                        endTime = formatTime(state.endedAtEpochMillis),
+                                        duration = formatDuration(state.activeDurationMillis),
+                                        creditedHours = state.creditedHours,
+                                        creditType = state.details.creditType.displayLabel(),
+                                        sportType = sportLabel(state.details),
+                                        proofCount = proofCount
+                                    )
                                 )
+                            },
+                            onFailure = { error ->
+                                localMessage = error.message ?: interfaceText("打卡提交失败，请重试", "Check-in submission failed. Try again.")
                             }
-                        },
-                        onFailure = { error ->
-                            localMessage = error.message ?: interfaceText("凭证选择不完整", "Proof selection is incomplete.")
-                        }
-                    )
+                        )
+                    }
                 },
                 enabled = confirmed && !isSubmitting && appState.isWriteAllowed,
                 modifier = Modifier
@@ -1849,42 +1835,55 @@ private fun MediaCaptureActions(
     var pendingVideo by remember { mutableStateOf<SessionCaptureTarget?>(null) }
     var pendingPhotoReplacement by remember { mutableStateOf<SessionMediaFileUpdateTarget?>(null) }
     var pendingVideoReplacement by remember { mutableStateOf<SessionMediaFileUpdateTarget?>(null) }
+    var newVideoAwaitingPermission by remember { mutableStateOf(false) }
+    var replacementAwaitingPermission by remember { mutableStateOf<SessionMediaDraft?>(null) }
     var launchError by remember { mutableStateOf<String?>(null) }
     var showVideoRecordingNotice by rememberSaveable { mutableStateOf(false) }
+    var isVideoProcessing by remember { mutableStateOf(false) }
     val photoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         pendingPhoto?.let { controller.completeCapture(it, success) }
         pendingPhotoReplacement?.let { controller.completeReplacementCapture(it, success) }
         pendingPhoto = null
         pendingPhotoReplacement = null
     }
-    val videoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { success ->
-        pendingVideo?.let { controller.completeCapture(it, success) }
-        pendingVideoReplacement?.let { controller.completeReplacementCapture(it, success) }
-        pendingVideo = null
-        pendingVideoReplacement = null
+
+    fun hasVideoPermissions(): Boolean = listOf(
+        Manifest.permission.CAMERA,
+        Manifest.permission.RECORD_AUDIO
+    ).all { permission ->
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }
 
-    fun launchVideoRecorder() {
+    lateinit var launchVideoRecorder: () -> Unit
+    lateinit var launchReplacementCapture: (SessionMediaDraft) -> Unit
+    val videoPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val granted = grants[Manifest.permission.CAMERA] == true &&
+            grants[Manifest.permission.RECORD_AUDIO] == true
+        if (!granted) {
+            newVideoAwaitingPermission = false
+            replacementAwaitingPermission = null
+            launchError = interfaceText(
+                "录像需要同时允许相机和麦克风权限；拒绝后仍可正常拍照。",
+                "Video recording requires both camera and microphone permission. Photos remain available if denied."
+            )
+        } else {
+            val replacement = replacementAwaitingPermission
+            replacementAwaitingPermission = null
+            if (replacement != null) {
+                launchReplacementCapture(replacement)
+            } else if (newVideoAwaitingPermission) {
+                newVideoAwaitingPermission = false
+                launchVideoRecorder()
+            }
+        }
+    }
+
+    launchVideoRecorder = {
         controller.prepareCapture(ProofMediaType.Video) { result ->
             result.fold(
-                onSuccess = { target ->
-                    runCatching {
-                        FileProvider.getUriForFile(
-                            context,
-                            "${context.packageName}.fileprovider",
-                            target.file
-                        )
-                    }.fold(
-                        onSuccess = { uri: Uri ->
-                            pendingVideo = target
-                            videoLauncher.launch(uri)
-                        },
-                        onFailure = {
-                            controller.completeCapture(target, false)
-                            launchError = interfaceText("无法打开系统录像", "Unable to open the system video recorder.")
-                        }
-                    )
-                },
+                onSuccess = { target -> pendingVideo = target },
                 onFailure = {
                     launchError = interfaceText("无法准备现场录像，请稍后重试。", "Unable to prepare on-site video recording. Try again later.")
                 }
@@ -1892,11 +1891,19 @@ private fun MediaCaptureActions(
         }
     }
 
-    fun launchReplacementCapture(draft: SessionMediaDraft) {
+    launchReplacementCapture = { draft ->
+        if (draft.type == ProofMediaType.Video && !hasVideoPermissions()) {
+            replacementAwaitingPermission = draft
+            videoPermissionLauncher.launch(
+                arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+            )
+        } else {
         controller.prepareReplacementCapture(draft.id) { result ->
             result.fold(
                 onSuccess = { target ->
-                    runCatching {
+                    if (target.type == ProofMediaType.Video) {
+                        pendingVideoReplacement = target
+                    } else runCatching {
                         FileProvider.getUriForFile(
                             context,
                             "${context.packageName}.fileprovider",
@@ -1904,13 +1911,8 @@ private fun MediaCaptureActions(
                         )
                     }.fold(
                         onSuccess = { uri: Uri ->
-                            if (target.type == ProofMediaType.Image) {
-                                pendingPhotoReplacement = target
-                                photoLauncher.launch(uri)
-                            } else {
-                                pendingVideoReplacement = target
-                                videoLauncher.launch(uri)
-                            }
+                            pendingPhotoReplacement = target
+                            photoLauncher.launch(uri)
                         },
                         onFailure = {
                             controller.completeReplacementCapture(target, false)
@@ -1920,6 +1922,7 @@ private fun MediaCaptureActions(
                 },
                 onFailure = { launchError = interfaceText("无法准备替换媒体", "Unable to prepare media replacement.") }
             )
+        }
         }
     }
 
@@ -1933,9 +1936,98 @@ private fun MediaCaptureActions(
         SystemCameraVideoRecordingNotice(
             onContinue = {
                 showVideoRecordingNotice = false
-                launchVideoRecorder()
+                if (hasVideoPermissions()) {
+                    launchVideoRecorder()
+                } else {
+                    newVideoAwaitingPermission = true
+                    videoPermissionLauncher.launch(
+                        arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+                    )
+                }
             },
             onDismiss = { showVideoRecordingNotice = false }
+        )
+    }
+
+    if (isVideoProcessing) {
+        AlertDialog(
+            onDismissRequest = {},
+            confirmButton = {},
+            title = { Text(interfaceText("正在处理视频", "Processing video")) },
+            text = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = interfaceText(
+                                "正在保存并压缩视频，请稍候…",
+                                "Saving and compressing the video. Please wait…"
+                            ),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = interfaceText(
+                                "完成后会自动返回凭证页面",
+                                "You will return to the proof page automatically when it is ready."
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        )
+    }
+
+    pendingVideo?.let { target ->
+        ExerciseVideoRecorderDialog(
+            outputFile = target.file,
+            onCompleted = { duration ->
+                isVideoProcessing = true
+                pendingVideo = null
+                controller.completeVideoCapture(
+                    target = target,
+                    success = true,
+                    recordedDurationSeconds = duration,
+                    onFinished = { isVideoProcessing = false }
+                )
+            },
+            onCancelled = {
+                pendingVideo = null
+                controller.completeVideoCapture(target, success = false, recordedDurationSeconds = 0.0)
+            },
+            onError = {
+                pendingVideo = null
+                controller.completeVideoCapture(target, success = false, recordedDurationSeconds = 0.0)
+                launchError = interfaceText("录像失败，请重试。", "Video recording failed. Try again.")
+            }
+        )
+    }
+    pendingVideoReplacement?.let { target ->
+        ExerciseVideoRecorderDialog(
+            outputFile = target.file,
+            onCompleted = { duration ->
+                isVideoProcessing = true
+                pendingVideoReplacement = null
+                controller.completeReplacementVideoCapture(
+                    target = target,
+                    success = true,
+                    recordedDurationSeconds = duration,
+                    onFinished = { isVideoProcessing = false }
+                )
+            },
+            onCancelled = {
+                pendingVideoReplacement = null
+                controller.completeReplacementVideoCapture(target, success = false, recordedDurationSeconds = 0.0)
+            },
+            onError = {
+                pendingVideoReplacement = null
+                controller.completeReplacementVideoCapture(target, success = false, recordedDurationSeconds = 0.0)
+                launchError = interfaceText("重新录像失败，已保留原视频。", "Re-recording failed; the original video was kept.")
+            }
         )
     }
 
@@ -1944,7 +2036,8 @@ private fun MediaCaptureActions(
         pendingVideo != null ||
         pendingPhotoReplacement != null ||
         pendingVideoReplacement != null ||
-        showVideoRecordingNotice
+        showVideoRecordingNotice ||
+        isVideoProcessing
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -2217,6 +2310,15 @@ private fun ExerciseSubmittedContent(
             }
         }
     }
+}
+
+private fun String.toLocalExerciseCheckInDate(): LocalDate? {
+    val value = trim()
+    return runCatching {
+        Instant.parse(value).atZone(ZoneId.systemDefault()).toLocalDate()
+    }.getOrNull() ?: value.take(10)
+        .takeIf { it.matches(Regex("\\d{4}-\\d{2}-\\d{2}")) }
+        ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
 }
 
 @Composable

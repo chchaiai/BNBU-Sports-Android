@@ -176,6 +176,15 @@ dependencies {
     implementation("com.google.android.play:app-update-ktx:2.1.0")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.core:core-splashscreen:1.0.1")
+    // Last stable lines compatible with this checkout's compileSdk 35 / AGP 8.7.
+    implementation("androidx.camera:camera-core:1.5.3")
+    implementation("androidx.camera:camera-camera2:1.5.3")
+    implementation("androidx.camera:camera-lifecycle:1.5.3")
+    implementation("androidx.camera:camera-video:1.5.3")
+    implementation("androidx.camera:camera-view:1.5.3")
+    implementation("androidx.media3:media3-common:1.8.0")
+    implementation("androidx.media3:media3-effect:1.8.0")
+    implementation("androidx.media3:media3-transformer:1.8.0")
 
     // Firebase BoM keeps Google Play services / FCM artifacts mutually compatible.
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))

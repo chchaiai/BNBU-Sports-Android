@@ -60,9 +60,6 @@ internal data class InitiateExerciseMediaUploadCommand(
                 require(normalizedMimeType in AllowedExerciseVideoMimeTypes) {
                     "Exercise video MIME type is not allowed."
                 }
-                require(fileSizeBytes <= ExerciseMediaPolicy.MaxVideoBytes) {
-                    "Exercise video exceeds its size limit."
-                }
                 val duration = requireNotNull(durationSeconds) {
                     "Exercise video duration is required."
                 }

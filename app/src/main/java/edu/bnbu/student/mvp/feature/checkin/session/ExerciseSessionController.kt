@@ -12,7 +12,13 @@ import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import edu.bnbu.student.mvp.core.exercise.ExerciseGateway
 import edu.bnbu.student.mvp.core.exercise.ExerciseCheckInNotRequiredException
+import edu.bnbu.student.mvp.core.exercise.ExerciseMediaEvidence
+import edu.bnbu.student.mvp.core.exercise.ExerciseMediaServerStatus
 import edu.bnbu.student.mvp.core.exercise.ExerciseOperationRejection
+import edu.bnbu.student.mvp.core.exercise.ExerciseRecordCoordinator
+import edu.bnbu.student.mvp.core.exercise.ExerciseRecordForm
+import edu.bnbu.student.mvp.core.exercise.ExerciseRecordOperationResult
+import edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionCoordinator
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionOperationResult
 import edu.bnbu.student.mvp.core.exercise.ExerciseVersionConflictException
@@ -22,6 +28,7 @@ import edu.bnbu.student.mvp.core.local.LocalStoreReadStatus
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.ProofMediaType
+import edu.bnbu.student.mvp.core.network.UploadProgress
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CoroutineDispatcher
@@ -30,6 +37,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -49,7 +57,10 @@ internal class ExerciseSessionController(
     private val clock: ExerciseClock = SystemExerciseClock,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val exerciseGateway: ExerciseGateway? = null,
-    private val exerciseGatewayProvider: (() -> ExerciseGateway?)? = null
+    private val exerciseGatewayProvider: (() -> ExerciseGateway?)? = null,
+    private val mediaUploadCoordinatorProvider: (() -> SessionMediaUploadCoordinator?)? = null,
+    private val videoCompressor: SessionVideoCompressor? = null,
+    private val mediaPollDelayMillis: Long = DefaultMediaPollDelayMillis
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val machine = ExerciseSessionMachine(clock)
@@ -61,6 +72,7 @@ internal class ExerciseSessionController(
     private var locationRequestGeneration = 0L
     private var locationCancellationSource: CancellationTokenSource? = null
     private var serverCoordinator = resolveExerciseGateway()?.let(::ExerciseSessionCoordinator)
+    private var serverMediaUploadCoordinator = mediaUploadCoordinatorProvider?.invoke()
     private var automaticFinishSessionId: String? = null
     private val _locationStatus = MutableStateFlow<LocationStatus>(LocationStatus.Unknown)
 
@@ -105,6 +117,7 @@ internal class ExerciseSessionController(
             isSessionBusy = false
             shouldShowHealthReminder = false
             serverCoordinator = null
+            serverMediaUploadCoordinator = null
             automaticFinishSessionId = null
             resetLocationStatus()
             if (previousAccountId != null && !preserveExistingDrafts) {
@@ -125,6 +138,7 @@ internal class ExerciseSessionController(
         val previousAccountId = boundAccountId
         boundAccountId = normalized
         serverCoordinator = resolvedGateway?.let(::ExerciseSessionCoordinator)
+        serverMediaUploadCoordinator = mediaUploadCoordinatorProvider?.invoke()
         automaticFinishSessionId = null
         shouldShowHealthReminder = !localStore.hasShownHealthReminder(normalized)
         bindingGeneration += 1
@@ -362,6 +376,92 @@ internal class ExerciseSessionController(
         }
     }
 
+    /** Saves the raw camera result first, then replaces it only after verified local compression. */
+    fun completeVideoCapture(
+        target: SessionCaptureTarget,
+        success: Boolean,
+        recordedDurationSeconds: Double,
+        onFinished: () -> Unit = {}
+    ) {
+        if (isMediaBusy) {
+            onFinished()
+            return
+        }
+        isMediaBusy = true
+        scope.launch {
+            try {
+                val result = runCatching {
+                    if (!success) {
+                        withContext(ioDispatcher) { mediaStore.completeCapture(target, false) }.getOrThrow()
+                    }
+                    val raw = withContext(ioDispatcher) {
+                        mediaStore.completeCapture(
+                            target = target,
+                            success = true,
+                            durationSeconds = recordedDurationSeconds.coerceAtMost(15.0)
+                        )
+                    }.getOrThrow()
+                    compressVideoDraft(raw.id).getOrThrow()
+                }
+                refreshDrafts()
+                message = result.fold(
+                    onSuccess = { interfaceText("现场视频已压缩并保存为本地草稿。", "On-site video compressed and saved as a local draft.") },
+                    onFailure = {
+                        if (!success) null else interfaceText(
+                            "视频压缩失败，原视频已保留。请重试压缩或重拍；未压缩视频不会上传。",
+                            "Video compression failed and the original was kept. Retry compression or record again; uncompressed video is never uploaded."
+                        )
+                    }
+                )
+            } finally {
+                isMediaBusy = false
+                onFinished()
+            }
+        }
+    }
+
+    fun retryVideoCompression(draftId: String) {
+        if (isMediaBusy) return
+        isMediaBusy = true
+        scope.launch {
+            val result = compressVideoDraft(draftId)
+            refreshDrafts()
+            isMediaBusy = false
+            message = result.fold(
+                onSuccess = { interfaceText("视频压缩完成，可以上传。", "Video compression completed and is ready to upload.") },
+                onFailure = { interfaceText("视频压缩仍未成功，原视频已保留。", "Video compression still failed; the original was kept.") }
+            )
+        }
+    }
+
+    private suspend fun compressVideoDraft(draftId: String): Result<SessionMediaDraft> {
+        val accountId = boundAccountId
+            ?: return Result.failure(IllegalStateException("No account is bound."))
+        val key = currentDraftKey(accountId, state)
+            ?: return Result.failure(IllegalStateException("No exercise draft is active."))
+        val compressor = videoCompressor
+            ?: return Result.failure(IllegalStateException("Video compressor is unavailable."))
+        val target = withContext(ioDispatcher) { mediaStore.prepareEdit(key, draftId) }
+            .getOrElse { return Result.failure(it) }
+        if (target.type != ProofMediaType.Video) {
+            withContext(ioDispatcher) { mediaStore.cancelFileUpdate(target) }
+            return Result.failure(IllegalArgumentException("Only video drafts can be compressed."))
+        }
+        return runCatching {
+            val compressed = compressor.compress(target.sourceFile, target.file)
+            check(compressed.containsAudio) { "Compressed exercise video must contain audio." }
+            withContext(ioDispatcher) {
+                mediaStore.commitFileUpdate(
+                    target = target,
+                    durationSeconds = compressed.durationSeconds,
+                    compressedForUpload = true
+                )
+            }.getOrThrow()
+        }.onFailure {
+            withContext(ioDispatcher) { runCatching { mediaStore.cancelFileUpdate(target) } }
+        }
+    }
+
     fun setDraftSelected(draftId: String, selected: Boolean) {
         val key = boundAccountId?.let { currentDraftKey(it, state) } ?: return
         scope.launch {
@@ -452,6 +552,50 @@ internal class ExerciseSessionController(
                     if (success) interfaceText("替换媒体失败，已保留原内容。", "Could not replace the media. The original was kept.") else null
                 }
             )
+        }
+    }
+
+    fun completeReplacementVideoCapture(
+        target: SessionMediaFileUpdateTarget,
+        success: Boolean,
+        recordedDurationSeconds: Double,
+        onFinished: () -> Unit = {}
+    ) {
+        if (isMediaBusy) {
+            onFinished()
+            return
+        }
+        isMediaBusy = true
+        scope.launch {
+            try {
+                val result = runCatching {
+                    if (!success) {
+                        withContext(ioDispatcher) { mediaStore.cancelFileUpdate(target) }
+                        error("Capture cancelled")
+                    }
+                    val raw = withContext(ioDispatcher) {
+                        mediaStore.commitFileUpdate(
+                            target = target,
+                            durationSeconds = recordedDurationSeconds.coerceAtMost(15.0),
+                            compressedForUpload = false
+                        )
+                    }.getOrThrow()
+                    compressVideoDraft(raw.id).getOrThrow()
+                }
+                refreshDrafts()
+                message = result.fold(
+                    onSuccess = { interfaceText("现场视频已重新录制并压缩。", "On-site video re-recorded and compressed.") },
+                    onFailure = {
+                        if (!success) null else interfaceText(
+                            "新视频压缩失败，已保留可重试的原始录像。",
+                            "The new video could not be compressed; its original recording was kept for retry."
+                        )
+                    }
+                )
+            } finally {
+                isMediaBusy = false
+                onFinished()
+            }
         }
     }
 
@@ -654,6 +798,107 @@ internal class ExerciseSessionController(
         val key = boundAccountId?.let { currentDraftKey(it, state) }
             ?: return Result.failure(IllegalStateException(interfaceText("当前没有待提交的运动会话", "There is no exercise session ready to submit.")))
         return mediaStore.selectedForSubmission(key)
+    }
+
+    /** Uses only the private v1 media lifecycle; legacy multipart is intentionally unreachable. */
+    fun submitSelectedProofs(
+        onProgress: (UploadProgress) -> Unit = {},
+        onResult: (Result<Int>) -> Unit
+    ) {
+        if (isSessionBusy) {
+            onResult(Result.failure(IllegalStateException(interfaceText("正在处理上一项请求。", "Another request is in progress."))))
+            return
+        }
+        val selected = validateSelectedProofs().getOrElse {
+            onResult(Result.failure(it))
+            return
+        }
+        val finished = state as? ExerciseSessionState.Finished ?: run {
+            onResult(Result.failure(IllegalStateException("Exercise session is not completed.")))
+            return
+        }
+        val completedSession = serverCoordinator?.state?.session?.takeIf {
+            it.phase == ExerciseSessionPhase.COMPLETED && it.sessionId == finished.sessionId
+        } ?: run {
+            onResult(Result.failure(IllegalStateException(interfaceText(
+                "服务端尚未确认运动结束，请联网重试。",
+                "The server has not confirmed the completed exercise. Reconnect and try again."
+            ))))
+            return
+        }
+        val gateway = resolveExerciseGateway()
+        val mediaCoordinator = serverMediaUploadCoordinator
+        if (gateway == null || mediaCoordinator == null) {
+            onResult(Result.failure(IllegalStateException(interfaceText(
+                "尚未连接服务器，请重新登录。",
+                "The server is not connected. Sign in again."
+            ))))
+            return
+        }
+        val accountId = boundAccountId
+        val key = accountId?.let { currentDraftKey(it, finished) }
+        if (key == null) {
+            onResult(Result.failure(IllegalStateException("Exercise media draft is unavailable.")))
+            return
+        }
+
+        isSessionBusy = true
+        scope.launch {
+            val result = runCatching {
+                val totalBytes = selected.sumOf(SessionMediaDraft::byteCount)
+                check(totalBytes > 0L) { "Selected media is empty." }
+                var completedBytes = 0L
+                val availableMedia = mutableListOf<ExerciseMediaEvidence>()
+                for (draft in selected) {
+                    val file = withContext(ioDispatcher) { mediaStore.resolveFile(key, draft) }
+                    var evidence = mediaCoordinator.uploadAndBind(
+                        sessionId = finished.sessionId,
+                        draft = draft,
+                        sourceFile = file
+                    ) { itemProgress ->
+                        onProgress(
+                            UploadProgress(
+                                bytesSent = (completedBytes + itemProgress.bytesSent).coerceAtMost(totalBytes),
+                                totalBytes = totalBytes
+                            )
+                        )
+                    }
+                    completedBytes += draft.byteCount
+                    onProgress(UploadProgress(completedBytes.coerceAtMost(totalBytes), totalBytes))
+
+                    var pollAttempt = 0
+                    while (evidence.status != ExerciseMediaServerStatus.AVAILABLE) {
+                        check(evidence.status != ExerciseMediaServerStatus.FAILED) {
+                            "Server rejected the uploaded media."
+                        }
+                        check(pollAttempt < MaximumMediaPollAttempts) {
+                            "Media is still processing. Try submission again shortly."
+                        }
+                        pollAttempt += 1
+                        delay(mediaPollDelayMillis)
+                        evidence = mediaCoordinator.refresh(evidence)
+                    }
+                    availableMedia += evidence
+                }
+
+                val record = ExerciseRecordCoordinator(gateway)
+                record.begin(completedSession).requireRecordSuccess("begin")
+                record.edit(
+                    ExerciseRecordForm(
+                        description = finished.details.description,
+                        remark = finished.details.remark,
+                        sportType = finished.details.sportType,
+                        otherSportName = finished.details.customSportName
+                    )
+                ).requireRecordSuccess("edit")
+                record.attachAvailableMedia(availableMedia).requireRecordSuccess("attach media")
+                record.updateDraft().requireRecordSuccess("save record draft")
+                record.submit().requireRecordSuccess("submit record")
+                availableMedia.size
+            }
+            isSessionBusy = false
+            onResult(result)
+        }
     }
 
     fun resolveDraftFile(draft: SessionMediaDraft): File? {
@@ -908,3 +1153,14 @@ internal class ExerciseSessionController(
         return SessionDraftKey(accountId = accountId, sessionId = sessionId)
     }
 }
+
+private fun ExerciseRecordOperationResult.requireRecordSuccess(action: String) {
+    when (this) {
+        is ExerciseRecordOperationResult.Success -> Unit
+        is ExerciseRecordOperationResult.Rejected -> error("Exercise record $action rejected: $reason")
+        is ExerciseRecordOperationResult.Failed -> throw cause
+    }
+}
+
+private const val DefaultMediaPollDelayMillis = 1_000L
+private const val MaximumMediaPollAttempts = 90

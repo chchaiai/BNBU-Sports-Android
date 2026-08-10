@@ -18,20 +18,17 @@ internal object ExerciseMediaPolicy {
     const val MaxImageCount = 6
     const val MaxVideoCount = 1
     const val MaxImageBytes = 10L * 1_024L * 1_024L
-    const val MaxVideoBytes = 50L * 1_024L * 1_024L
-    const val MaxVideoDurationSeconds = 300.0
+    const val MaxVideoDurationSeconds = 15.0
 
     fun validateCandidate(candidate: ExerciseMediaCandidate): Result<Unit> = runCatching {
         require(candidate.source == ExerciseMediaSource.CAMERA) {
             "Check-in evidence must be captured with the camera."
         }
         require(candidate.byteCount > 0L) { "Captured media cannot be empty." }
-        val maxBytes = when (candidate.type) {
-            ProofMediaType.Image -> MaxImageBytes
-            ProofMediaType.Video -> MaxVideoBytes
-        }
-        require(candidate.byteCount <= maxBytes) {
-            "Captured media exceeds its size limit."
+        if (candidate.type == ProofMediaType.Image) {
+            require(candidate.byteCount <= MaxImageBytes) {
+                "Captured image exceeds its size limit."
+            }
         }
         when (candidate.type) {
             ProofMediaType.Image -> require(candidate.durationSeconds == null) {

@@ -60,13 +60,13 @@ class SessionMediaDraftStoreTest {
     }
 
     @Test
-    fun videoLongerThanFiveMinutesIsRejectedAndRemoved() {
+    fun videoLongerThanFifteenSecondsIsRejectedAndRemoved() {
         val store = SessionMediaDraftStore(temporaryFolder.newFolder("drafts"), clock)
         val key = SessionDraftKey("student-1", "session-1")
         val target = store.prepareCapture(key, ProofMediaType.Video).getOrThrow()
         target.file.writeBytes(byteArrayOf(1, 2, 3))
 
-        val result = store.completeCapture(target, success = true, durationSeconds = 300.01)
+        val result = store.completeCapture(target, success = true, durationSeconds = 15.01)
 
         assertTrue(result.isFailure)
         assertFalse(target.file.exists())
@@ -95,7 +95,17 @@ class SessionMediaDraftStoreTest {
         val store = SessionMediaDraftStore(temporaryFolder.newFolder("drafts"), clock)
         val key = SessionDraftKey("student-1", "session-1")
         val photo = capture(store, key, ProofMediaType.Image)
-        val video = capture(store, key, ProofMediaType.Video)
+        val rawVideo = capture(store, key, ProofMediaType.Video)
+        assertTrue(store.setSelected(key, rawVideo.id, true))
+        assertTrue(store.selectedForSubmission(key).isFailure)
+        assertTrue(store.setSelected(key, rawVideo.id, false))
+        val compression = store.prepareEdit(key, rawVideo.id).getOrThrow()
+        compression.file.writeBytes(byteArrayOf(7, 8, 9))
+        val video = store.commitFileUpdate(
+            compression,
+            durationSeconds = 15.0,
+            compressedForUpload = true
+        ).getOrThrow()
 
         assertTrue(store.selectedForSubmission(key).isFailure)
         assertTrue(store.setSelected(key, video.id, true))
@@ -246,7 +256,7 @@ class SessionMediaDraftStoreTest {
     ): SessionMediaDraft {
         val target = store.prepareCapture(key, type).getOrThrow()
         target.file.writeBytes(byteArrayOf(1, 2, 3))
-        val durationSeconds = if (type == ProofMediaType.Video) 60.0 else null
+        val durationSeconds = if (type == ProofMediaType.Video) 15.0 else null
         return store.completeCapture(
             target,
             success = true,

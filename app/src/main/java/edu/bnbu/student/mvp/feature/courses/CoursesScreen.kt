@@ -68,13 +68,15 @@ import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
-import edu.bnbu.student.mvp.core.time.studentLocalRecordDateText
-import edu.bnbu.student.mvp.core.time.studentLocalRecordTimeText
 import edu.bnbu.student.mvp.core.model.CheckInRecord
 import edu.bnbu.student.mvp.core.model.Course
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.state.StudentAppState
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 
 private val CourseCardShape = RoundedCornerShape(18.dp)
 private val CourseControlShape = RoundedCornerShape(14.dp)
@@ -1056,8 +1058,7 @@ private fun Course.isHistorical(): Boolean =
         enrollmentStatus.trim().lowercase() in setOf("completed", "withdrawn", "removed", "exited", "disabled")
 
 private fun CheckInRecord.submittedDate(): String =
-    submittedAt.studentLocalRecordDateText(AppLanguagePreferences.currentLocale)
-        ?: interfaceText("未提供", "Not available")
+    submittedAt.substringBefore(' ').ifBlank { interfaceText("未提供", "Not available") }
 
 private fun String.localizedCheckInTaskTitle(): String = when (trim()) {
     "", "运动打卡", "Exercise check-in" -> interfaceText("运动打卡", "Exercise check-in")
@@ -1083,8 +1084,15 @@ private fun CheckInRecord.localizedProofSummary(): String {
 }
 
 private fun String?.recordTimeText(): String {
-    return studentLocalRecordTimeText(AppLanguagePreferences.currentLocale)
-        ?: interfaceText("未提供", "Not available")
+    val value = this?.takeIf { it.isNotBlank() } ?: return interfaceText("未提供", "Not available")
+    return runCatching {
+        Instant.parse(value)
+            .atZone(ZoneId.systemDefault())
+            .format(
+                DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
+                    .withLocale(AppLanguagePreferences.currentLocale)
+            )
+    }.getOrElse { value.substringAfter('T').substringBeforeLast('Z').take(5).ifBlank { value } }
 }
 
 private fun CheckInRecord.actualDurationText(): String {

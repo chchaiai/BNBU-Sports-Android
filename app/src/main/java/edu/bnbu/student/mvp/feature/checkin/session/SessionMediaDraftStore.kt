@@ -30,6 +30,8 @@ internal data class SessionMediaDraft(
     val capturedAtEpochMillis: Long,
     val byteCount: Long,
     val durationSeconds: Double? = null,
+    /** True only after the in-app video has been transcoded to the upload copy. */
+    val compressedForUpload: Boolean = false,
     /** A persisted video-frame position used by the thumbnail renderer. */
     val coverTimestampMillis: Long? = null,
     val selected: Boolean = false,
@@ -127,6 +129,7 @@ internal class SessionMediaDraftStore(
         val ready = pending.copy(
             byteCount = actualBytes,
             durationSeconds = durationSeconds?.takeIf { it >= 0.0 },
+            compressedForUpload = target.type != ProofMediaType.Video,
             status = SessionMediaDraftStatus.Ready
         )
         check(writeIndex(target.key, index.copy(
@@ -220,6 +223,9 @@ internal class SessionMediaDraftStore(
         selected.forEach { draft ->
             val file = resolveFile(key, draft)
             check(file.isFile && file.length() == draft.byteCount) { "凭证文件不存在或已发生变化" }
+            check(draft.type != ProofMediaType.Video || draft.compressedForUpload) {
+                "视频压缩尚未完成，不能上传"
+            }
         }
         ExerciseMediaPolicy.validateSelection(selected.map { draft ->
             ExerciseMediaCandidate(
@@ -269,7 +275,8 @@ internal class SessionMediaDraftStore(
     @Synchronized
     fun commitFileUpdate(
         target: SessionMediaFileUpdateTarget,
-        durationSeconds: Double? = null
+        durationSeconds: Double? = null,
+        compressedForUpload: Boolean? = null
     ): Result<SessionMediaDraft> = runCatching {
         validateKey(target.key)
         val directory = sessionDirectory(target.key).canonicalFile
@@ -299,6 +306,13 @@ internal class SessionMediaDraftStore(
             capturedAtEpochMillis = if (target.replacesCapture) clock.nowEpochMillis() else original.capturedAtEpochMillis,
             byteCount = target.file.length(),
             durationSeconds = updatedDuration,
+            compressedForUpload = compressedForUpload
+                ?: if (target.replacesCapture && target.type == ProofMediaType.Video) false
+                else original.compressedForUpload,
+            selected = if (
+                target.replacesCapture && target.type == ProofMediaType.Video &&
+                compressedForUpload != true
+            ) false else original.selected,
             coverTimestampMillis = null
         )
         val updatedIndex = index.copy(drafts = index.drafts.map {
@@ -396,7 +410,7 @@ internal class SessionMediaDraftStore(
             }
             when (draft.status) {
                 SessionMediaDraftStatus.Ready -> {
-                    if (!file.isFile || file.length() <= 0L || file.length() > maxBytesFor(draft.type)) {
+                    if (!file.isFile || !isFileSizeValid(draft.type, file.length())) {
                         safeDelete(file, sessionDirectory(key))
                         changed = true
                         null
@@ -410,7 +424,7 @@ internal class SessionMediaDraftStore(
 
                 SessionMediaDraftStatus.PendingCapture -> {
                     when {
-                        file.isFile && file.length() > 0L && file.length() <= maxBytesFor(draft.type) -> {
+                        file.isFile && isFileSizeValid(draft.type, file.length()) -> {
                             changed = true
                             draft.copy(
                                 byteCount = file.length(),
@@ -579,13 +593,9 @@ internal class SessionMediaDraftStore(
         ).isSuccess
     }
 
-    private fun maxBytesFor(type: ProofMediaType): Long {
-        return if (type == ProofMediaType.Image) {
-            ExerciseMediaPolicy.MaxImageBytes
-        } else {
-            ExerciseMediaPolicy.MaxVideoBytes
-        }
-    }
+    private fun isFileSizeValid(type: ProofMediaType, byteCount: Long): Boolean =
+        byteCount > 0L &&
+            (type == ProofMediaType.Video || byteCount <= ExerciseMediaPolicy.MaxImageBytes)
 
     private fun validateKey(key: SessionDraftKey) {
         require(key.accountId.isNotBlank()) { "账号不能为空" }

@@ -96,8 +96,8 @@ class V1ExerciseMediaUploadGatewayTest {
                 sessionId = "session-1",
                 mediaType = ProofMediaType.Video,
                 mimeType = " VIDEO/MP4 ",
-                fileSizeBytes = ExerciseMediaPolicy.MaxVideoBytes,
-                durationSeconds = 300L,
+                fileSizeBytes = 250L * 1_024L * 1_024L,
+                durationSeconds = 15L,
                 declaredContentSha256 = uppercaseHash
             )
         )
@@ -105,7 +105,7 @@ class V1ExerciseMediaUploadGatewayTest {
         val body = JsonParser.parseString(server.takeRequest().body.readUtf8()).asJsonObject
         assertEquals("VIDEO", body["mediaType"].asString)
         assertEquals("video/mp4", body["mimeType"].asString)
-        assertEquals(300L, body["durationSeconds"].asLong)
+        assertEquals(15L, body["durationSeconds"].asLong)
         assertEquals(uppercaseHash.lowercase(), body["declaredContentSha256"].asString)
     }
 

@@ -705,7 +705,6 @@ class ApiStudentRepository(
     ): Result<List<UploadedProofFile>> {
         return withContext(Dispatchers.IO) {
             val tempFiles = mutableListOf<File>()
-            var preparedBytes = 0L
             try {
                 if (proofAttachments.isEmpty()) {
                     return@withContext Result.success(emptyList())
@@ -731,18 +730,16 @@ class ApiStudentRepository(
                     tempFiles.add(tempFile)
                     openAttachmentStream(attachment).use { input ->
                         tempFile.outputStream().use { output ->
-                            val maximumBytes = if (attachment.type == ProofMediaType.Video) {
-                                ProofUploadRule.maxVideoBytes.toLong()
-                            } else {
-                                ProofUploadRule.maxImageBytes.toLong()
+                            // This legacy multipart helper remains only for image-only
+                            // feedback and exemption attachments. Exercise video uses
+                            // the private /api/v1 media lifecycle instead.
+                            require(attachment.type == ProofMediaType.Image) {
+                                "Exercise video must use the private media upload flow"
                             }
+                            val maximumBytes = ProofUploadRule.maxImageBytes.toLong()
                             val copied = copyWithLimit(input, output, maximumBytes)
                             if (copied == 0L) {
                                 throw IOException("Upload file is empty: ${attachment.fileName}")
-                            }
-                            preparedBytes += copied
-                            if (preparedBytes > ProofUploadRule.maxRequestBytes.toLong()) {
-                                throw IOException("Upload request exceeds 120MB")
                             }
                         }
                     }

@@ -18,7 +18,7 @@ To provide account and teaching services, we may process your student ID, name, 
 
 ## 3. Android permissions
 
-The CAMERA permission is used only to scan a course invitation QR code after you enter the scan page and grant permission. You may enter an invitation code manually if you decline it. The app does not request RECORD_AUDIO, broad media-storage, background location, contacts, SMS, call logs or installed-app-list permissions. Photo and video selection uses the system picker for files you choose.
+CAMERA is used after your action to scan a course invitation QR code or record on-site check-in evidence. RECORD_AUDIO is requested only together with CAMERA when you choose in-app video recording, because check-in video must contain sound. Active recording is limited to 15 seconds, paused time is excluded, and the result is compressed on-device before upload. Denying either recording permission prevents video recording but does not affect on-site photos or manual invitation-code entry. The app does not request broad media-storage, background location, contacts, SMS, call logs or installed-app-list permissions. Photo and video selection uses the system picker for files you choose.
 
 ## 4. Course, check-in and application processing
 

@@ -414,6 +414,7 @@ private fun MediaDraftThumbnail(
                     Checkbox(
                         checked = draft.selected,
                         onCheckedChange = onSelectedChange,
+                        enabled = draft.type != ProofMediaType.Video || draft.compressedForUpload,
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(1.dp)
@@ -430,7 +431,11 @@ private fun MediaDraftThumbnail(
                 text = if (draft.type == ProofMediaType.Image) {
                     interfaceText("现场照片", "On-site photo")
                 } else {
-                    interfaceText("现场视频", "On-site video")
+                    if (draft.compressedForUpload) {
+                        interfaceText("现场视频", "On-site video")
+                    } else {
+                        interfaceText("视频待压缩", "Video needs compression")
+                    }
                 },
                 modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 6.dp),
                 style = MaterialTheme.typography.labelMedium,
@@ -930,6 +935,36 @@ private fun VideoDraftPreviewDialog(
                 }
                 Surface(color = Color(0xFF1C1C1E)) {
                     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        if (!draft.compressedForUpload) {
+                            Surface(
+                                color = Color(0xFF3A2D00),
+                                shape = MaterialTheme.shapes.medium
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text(
+                                        interfaceText(
+                                            "原视频已安全保留，但压缩尚未完成，当前不能上传。",
+                                            "The original video is retained, but compression has not completed and it cannot be uploaded."
+                                        ),
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                    Button(
+                                        onClick = { controller.retryVideoCompression(draft.id) },
+                                        enabled = !controller.isMediaBusy,
+                                        colors = ButtonDefaults.buttonColors(containerColor = MediaManagerBlue)
+                                    ) {
+                                        if (controller.isMediaBusy) {
+                                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                            Spacer(Modifier.width(6.dp))
+                                        }
+                                        Text(interfaceText("重试压缩", "Retry compression"))
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                        }
                         playbackError?.let {
                             Text(it, color = Color(0xFFFF6961), style = MaterialTheme.typography.bodySmall)
                             Spacer(Modifier.height(6.dp))

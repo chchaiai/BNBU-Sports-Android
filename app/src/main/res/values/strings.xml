@@ -20,7 +20,7 @@
     <string name="privacy_consent_title">开始使用前，请确认</string>
     <string name="privacy_consent_intro">请阅读并同意隐私政策。我们会以清晰、必要的方式处理信息，为你提供体育教学服务。</string>
     <string name="privacy_consent_summary_title">我们如何处理你的信息</string>
-    <string name="privacy_consent_summary">为完成体育教学服务，我们会处理学号、姓名、课程、成绩和运动打卡记录。仅在你主动使用相关功能时调用相机、读取你选择的图片或视频，并在前台单次获取位置。现场录像会打开设备的系统相机；本应用不申请 RECORD_AUDIO，系统相机是否录入声音由其设置和你的操作决定。系统通知使用 Firebase Cloud Messaging 的安装标识和推送令牌完成。上述信息不用于广告或个性化推荐。</string>
+    <string name="privacy_consent_summary">为完成体育教学服务，我们会处理学号、姓名、课程、成绩和运动打卡记录。仅在你主动使用相关功能时调用相机和麦克风录制含声音的现场视频、读取你选择的图片或视频，并在前台单次获取位置。视频累计录制最多 15 秒并在本机压缩，只有压缩成功且你明确提交后才上传。系统通知使用 Firebase Cloud Messaging 的安装标识和推送令牌完成。上述信息不用于广告或个性化推荐。</string>
     <string name="privacy_consent_full_policy">查看完整隐私政策</string>
     <string name="privacy_consent_agree">同意并继续</string>
     <string name="privacy_consent_decline">不同意并退出</string>

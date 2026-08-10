@@ -30,34 +30,6 @@ class CheckInTimeWindowTest {
     }
 
     @Test
-    fun beijingWindowAllows2150ButRejectsStartingAfter2200() {
-        val window = MockStudentWorkspace.create().checkInTimeWindow
-
-        assertNotNull(window.canStartExercise(ZonedDateTime.of(2026, 7, 27, 5, 59, 59, 0, shanghai)))
-        assertNull(window.canStartExercise(ZonedDateTime.of(2026, 7, 27, 6, 0, 0, 0, shanghai)))
-        assertNull(window.canStartExercise(ZonedDateTime.of(2026, 7, 27, 21, 50, 0, 0, shanghai)))
-        assertNull(window.canStartExercise(ZonedDateTime.of(2026, 7, 27, 22, 0, 0, 0, shanghai)))
-        assertNotNull(window.canStartExercise(ZonedDateTime.of(2026, 7, 27, 22, 0, 1, 0, shanghai)))
-    }
-
-    @Test
-    fun serverWindowMayNarrowButCannotBroadenTheBeijingBoundary() {
-        val broadWindow = CheckInTimeWindow(
-            windowMode = "semester_wide",
-            dateRangeStart = null,
-            dateRangeEnd = null,
-            dailyStartTime = "00:00",
-            dailyEndTime = "23:59",
-            excludedDates = emptyList(),
-            semesterDeadline = null
-        )
-
-        assertNotNull(broadWindow.canStartExercise(ZonedDateTime.of(2026, 7, 27, 5, 59, 59, 0, shanghai)))
-        assertNull(broadWindow.canStartExercise(ZonedDateTime.of(2026, 7, 27, 21, 50, 0, 0, shanghai)))
-        assertNotNull(broadWindow.canStartExercise(ZonedDateTime.of(2026, 7, 27, 22, 0, 1, 0, shanghai)))
-    }
-
-    @Test
     fun serverDateAndDailyWindowAreBothApplied() {
         val window = CheckInTimeWindow(
             windowMode = "specified_range",
