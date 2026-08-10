@@ -33,6 +33,8 @@ import edu.bnbu.student.mvp.core.model.SyncOperationStatus
 import edu.bnbu.student.mvp.core.model.SyncOperationType
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.model.withRecordedCheckIn
+import edu.bnbu.student.mvp.core.time.currentBeijingBusinessDate
+import edu.bnbu.student.mvp.core.time.toBeijingBusinessDate
 import edu.bnbu.student.mvp.core.network.StudentApiClient
 import edu.bnbu.student.mvp.core.network.ApiHttpException
 import edu.bnbu.student.mvp.core.push.FcmPushRegistrar
@@ -47,7 +49,6 @@ import edu.bnbu.student.mvp.core.network.StudentProfileResponse
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -1320,10 +1321,10 @@ class StudentAppState(
         }
     }
 
-    fun hasSubmittedCheckInToday(today: LocalDate = LocalDate.now()): Boolean {
+    fun hasSubmittedCheckInToday(today: LocalDate = currentBeijingBusinessDate()): Boolean {
         return workspace.records.any { record ->
             record.creditType != CreditType.OrganizationOffset &&
-                record.submittedAt.toLocalSubmissionDate() == today
+                record.submittedAt.toBeijingBusinessDate() == today
         }
     }
 
@@ -1988,13 +1989,4 @@ class StudentAppState(
             status = SyncOperationStatus.LocalOnly
         )
     }
-}
-
-private fun String.toLocalSubmissionDate(): LocalDate? {
-    val value = trim()
-    return runCatching {
-        Instant.parse(value).atZone(ZoneId.systemDefault()).toLocalDate()
-    }.getOrNull() ?: value.take(10)
-        .takeIf { it.matches(Regex("\\d{4}-\\d{2}-\\d{2}")) }
-        ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
 }

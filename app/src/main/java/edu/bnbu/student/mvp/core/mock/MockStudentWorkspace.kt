@@ -124,14 +124,13 @@ object MockStudentWorkspace {
             teachers = listOf(TeacherInfo(badminton.teacherId, badminton.teacher), TeacherInfo(yoga.teacherId, yoga.teacher)),
             syncOperations = listOf(SyncOperation("sync-mock-workspace", SyncOperationType.ResetLocalData, "Mock 用户数据已加载", "林若晴 · 2025-2026 学年第二学期", "2026-07-26 18:00", SyncOperationStatus.LocalOnly)),
             exemptions = listOf(Exemption("exemption-800m-2026", studentId, student.name, "800m", "physical_test", reason = "因踝关节扭伤申请本学期 800 米测试缓测。", status = "审核中", proofFiles = listOf("mock://proof/medical_note.pdf"), reviewComment = "已收到校医院证明，正在审核。", reviewerName = "体育部教务组", createdAt = "2026-07-21 11:05", updatedAt = "2026-07-21 11:20")),
-            // Mock sessions do not have a backend policy endpoint. Keep the
-            // local check-in flow usable at any time for UI verification.
+            // Mock sessions mirror the BNBU Beijing-time start window.
             checkInTimeWindow = CheckInTimeWindow(
                 windowMode = "semester_wide",
                 dateRangeStart = null,
                 dateRangeEnd = null,
-                dailyStartTime = "00:00",
-                dailyEndTime = "23:59",
+                dailyStartTime = "06:00",
+                dailyEndTime = "22:00",
                 excludedDates = emptyList(),
                 semesterDeadline = null
             )
