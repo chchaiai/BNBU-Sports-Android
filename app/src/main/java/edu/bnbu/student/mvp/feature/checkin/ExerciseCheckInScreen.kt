@@ -92,6 +92,8 @@ import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.exercise.MaxOtherSportNameLength
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.CheckInTimeWindow
+import edu.bnbu.student.mvp.core.time.BeijingCheckInZoneId
+import edu.bnbu.student.mvp.core.time.toBeijingBusinessDate
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
 import edu.bnbu.student.mvp.core.model.ProofUploadRule
@@ -114,10 +116,8 @@ import edu.bnbu.student.mvp.feature.checkin.session.creditedExerciseHours
 import edu.bnbu.student.mvp.feature.checkin.session.effectiveDurationMillis
 import edu.bnbu.student.mvp.feature.dashboard.CourseJoinEntryPanel
 import java.text.DateFormat
-import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
-import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.Date
 import kotlinx.coroutines.delay
@@ -154,11 +154,11 @@ internal data class CheckInReadiness(
  * Evaluates the client-side prerequisites currently available in [StudentAppState].
  *
  * The server supplies course lifecycle state and time-window policy. The client
- * applies the same policy before starting, and the server repeats it on submission.
+ * applies the same policy before starting, and the server repeats it when creating the session.
  */
 internal fun evaluateCheckInReadiness(
     appState: StudentAppState,
-    now: ZonedDateTime = ZonedDateTime.now(ShanghaiZoneId)
+    now: ZonedDateTime = ZonedDateTime.now(BeijingCheckInZoneId)
 ): CheckInReadiness {
     if (!appState.workspace.student.accountStatus.equals("ACTIVE", ignoreCase = true)) {
         return CheckInReadiness(false, interfaceText("账号状态异常，无法打卡", "Account status prevents check-in."))
@@ -468,20 +468,20 @@ private fun ExercisePreparationContent(
             sportType == ExerciseSessionDetails.OtherSportType
         }
     )
-    var currentShanghaiTime by remember { mutableStateOf(ZonedDateTime.now(ShanghaiZoneId)) }
+    var currentShanghaiTime by remember { mutableStateOf(ZonedDateTime.now(BeijingCheckInZoneId)) }
     val today = currentShanghaiTime.toLocalDate()
     val hasSubmittedToday = appState.hasSubmittedCheckInToday(today)
     val todayRecordHours = appState.workspace.records
         .asSequence()
         .filter { it.creditType != CreditType.OrganizationOffset }
-        .filter { it.submittedAt.toLocalExerciseCheckInDate() == today }
+        .filter { it.submittedAt.toBeijingBusinessDate() == today }
         .sumOf { it.hours }
     val timeWindow = appState.checkInTimeWindow
     val readiness = evaluateCheckInReadiness(appState, currentShanghaiTime)
     val startBlockedReason = readiness.blockedReason
     LaunchedEffect(Unit) {
         while (true) {
-            currentShanghaiTime = ZonedDateTime.now(ShanghaiZoneId)
+            currentShanghaiTime = ZonedDateTime.now(BeijingCheckInZoneId)
             delay(60_000L)
         }
     }
@@ -539,7 +539,7 @@ private fun ExercisePreparationContent(
             enabled = details.isValid && startBlockedReason == null,
             blockedReason = startBlockedReason,
             onClick = {
-                currentShanghaiTime = ZonedDateTime.now(ShanghaiZoneId)
+                currentShanghaiTime = ZonedDateTime.now(BeijingCheckInZoneId)
                 if (evaluateCheckInReadiness(appState, currentShanghaiTime).canStart) {
                     controller.start(details)
                     if (hasLocationPermission(context)) {
@@ -1053,30 +1053,24 @@ private fun formatExcludedDates(excludedDates: List<String>): String {
         if (uniqueDates.size > displayedDates.size) interfaceText(" 等", " etc.") else ""
 }
 
-private val ShanghaiZoneId: ZoneId = ZoneId.of("Asia/Shanghai")
-
 /** Returns a user-facing reason when an exercise session may not be started. */
 internal fun CheckInTimeWindow.canStartExercise(
-    now: ZonedDateTime = ZonedDateTime.now(ShanghaiZoneId)
+    now: ZonedDateTime = ZonedDateTime.now(BeijingCheckInZoneId)
 ): String? {
     if (windowMode == "unavailable") {
         return interfaceText("打卡规则尚未从服务器加载，请刷新后重试", "Check-in rules have not loaded from the server. Refresh and try again.")
     }
     val today = now.toLocalDate()
     val currentTime = now.toLocalTime()
-    val dailyStart = runCatching { LocalTime.parse(dailyStartTime) }.getOrNull()
+    val configuredDailyStart = runCatching { LocalTime.parse(dailyStartTime) }.getOrNull()
         ?: return interfaceText("打卡时间配置无效，请联系管理员", "The check-in time configuration is invalid. Contact an administrator.")
-    val dailyEnd = runCatching { LocalTime.parse(dailyEndTime) }.getOrNull()
+    val configuredDailyEnd = runCatching { LocalTime.parse(dailyEndTime) }.getOrNull()
         ?: return interfaceText("打卡时间配置无效，请联系管理员", "The check-in time configuration is invalid. Contact an administrator.")
-
-    val isWithinDailyWindow = if (dailyStart <= dailyEnd) {
-        currentTime >= dailyStart && currentTime <= dailyEnd
-    } else {
-        // A cross-midnight period remains valid if such a policy is configured later.
-        currentTime >= dailyStart || currentTime <= dailyEnd
-    }
+    val dailyStart = maxOf(configuredDailyStart, LocalTime.of(6, 0))
+    val dailyEnd = minOf(configuredDailyEnd, LocalTime.of(22, 0))
+    val isWithinDailyWindow = currentTime >= dailyStart && currentTime <= dailyEnd
     if (!isWithinDailyWindow) {
-        return interfaceText("当前不在可运动时段（$dailyStartTime - $dailyEndTime）", "Exercise is unavailable now ($dailyStartTime - $dailyEndTime).")
+        return interfaceText("当前不在可运动时段（$dailyStart - $dailyEnd，北京时间）", "Exercise is unavailable now ($dailyStart - $dailyEnd, Beijing time).")
     }
     if (today.toString() in excludedDates) {
         return interfaceText("今日为特殊排除日，不可开始运动", "Today is an excluded date; exercise cannot be started.")
@@ -2223,15 +2217,6 @@ private fun ExerciseSubmittedContent(
             }
         }
     }
-}
-
-private fun String.toLocalExerciseCheckInDate(): LocalDate? {
-    val value = trim()
-    return runCatching {
-        Instant.parse(value).atZone(ZoneId.systemDefault()).toLocalDate()
-    }.getOrNull() ?: value.take(10)
-        .takeIf { it.matches(Regex("\\d{4}-\\d{2}-\\d{2}")) }
-        ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
 }
 
 @Composable
