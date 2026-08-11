@@ -27,7 +27,6 @@ import edu.bnbu.student.mvp.core.designsystem.AppleTextButton as TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -38,8 +37,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import edu.bnbu.student.mvp.core.network.StudentApiClient
-import edu.bnbu.student.mvp.core.network.StudentEndpoint
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import kotlinx.coroutines.CancellationException
@@ -55,7 +52,7 @@ import kotlinx.coroutines.launch
 fun EnterInviteCodeScreen(
     onInviteResolved: (inviteCode: String, course: CourseJoinInfo) -> Unit,
     onBack: () -> Unit,
-    apiClient: StudentApiClient = remember { StudentApiClient() }
+    resolveInvite: suspend (inviteCode: String) -> CourseJoinInfo
 ) {
     val appLanguage = AppLanguagePreferences.currentLanguage
     var code by rememberSaveable { mutableStateOf("") }
@@ -81,12 +78,7 @@ fun EnterInviteCodeScreen(
         isResolving = true
         scope.launch {
             try {
-                val response = apiClient.executeAndParseCancellable(
-                    apiClient.request(StudentEndpoint.CourseInviteLookup(normalizedCode)),
-                    CourseInviteLookupResponse::class.java
-                )
-                response.validateForDirectJoin()
-                onInviteResolved(normalizedCode, response.toCourseJoinInfo())
+                onInviteResolved(normalizedCode, resolveInvite(normalizedCode))
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {

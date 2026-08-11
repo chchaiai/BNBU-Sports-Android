@@ -12,12 +12,17 @@ import org.junit.Test
 class DirectCourseJoinTest {
     @Test
     fun validatesRequiredIdentityFields() {
-        assertNotNull(validateDirectCourseJoin("", "20260001", "male", "2026", ""))
-        assertNotNull(validateDirectCourseJoin("Student", "bad", "male", "2026", ""))
-        assertNotNull(validateDirectCourseJoin("Student", "20260001", "", "2026", ""))
-        assertNotNull(validateDirectCourseJoin("Student", "20260001", "female", "", ""))
-        assertNotNull(validateDirectCourseJoin("Student", "20260001", "female", "2026", "bad-email"))
-        assertNull(validateDirectCourseJoin("Student", "20260001", "other", "2026", "student@example.com"))
+        assertNotNull(validateDirectCourseJoin("", "20260001", "male", "2026"))
+        assertNotNull(validateDirectCourseJoin("Student", "bad", "male", "2026"))
+        assertNotNull(validateDirectCourseJoin("Student", "20260001", "", "2026"))
+        assertNotNull(validateDirectCourseJoin("Student", "20260001", "female", ""))
+        assertNotNull(validateDirectCourseJoin("Student", "20260001", "female", "freshman"))
+        assertNotNull(validateDirectCourseJoin("Student", "20260001", "female", "999"))
+        assertNotNull(validateDirectCourseJoin("Student", "20260001", "female", "10000"))
+        assertNotNull(validateDirectCourseJoin("Student", "20260001", "other", "2026"))
+        assertNull(validateDirectCourseJoin("Student", "20260001", "male", "2021"))
+        assertNull(validateDirectCourseJoin("Student", "20260001", "female", "2028"))
+        assertNull(validateDirectCourseJoin("Student", "20260001", "female", "9999"))
     }
 
     @Test
@@ -38,6 +43,7 @@ class DirectCourseJoinTest {
         assertEquals("active", response.resolvedMembership()?.status)
         assertEquals("qr", response.resolvedMembership()?.joinMethod)
         assertEquals("20260001", response.resolvedStudent()?.studentNumber)
+        assertEquals("PENDING_CONTACT_BINDING", response.resolvedStudent()?.accountStatus)
     }
 
     @Test

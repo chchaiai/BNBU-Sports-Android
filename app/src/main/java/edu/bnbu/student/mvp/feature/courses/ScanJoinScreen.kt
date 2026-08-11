@@ -79,7 +79,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.google.gson.annotations.SerializedName
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.ResultPoint
 import com.journeyapps.barcodescanner.BarcodeCallback
@@ -87,12 +86,10 @@ import com.journeyapps.barcodescanner.BarcodeResult
 import com.journeyapps.barcodescanner.DecoratedBarcodeView
 import com.journeyapps.barcodescanner.DefaultDecoderFactory
 import edu.bnbu.student.mvp.core.network.ApiHttpException
-import edu.bnbu.student.mvp.core.network.StudentApiClient
-import edu.bnbu.student.mvp.core.network.StudentEndpoint
+import edu.bnbu.student.mvp.core.network.v1.V1HttpException
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import java.io.IOException
 import java.net.URI
-import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -126,7 +123,7 @@ internal val DemoStudentScanCourse = CourseJoinInfo(
 fun ScanJoinScreen(
     onInviteResolved: (inviteCode: String, course: CourseJoinInfo) -> Unit,
     onBack: () -> Unit,
-    apiClient: StudentApiClient = remember { StudentApiClient() }
+    resolveInvite: suspend (inviteCode: String) -> CourseJoinInfo
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -164,12 +161,7 @@ fun ScanJoinScreen(
         isResolving = true
         scope.launch {
             try {
-                val response = apiClient.executeAndParseCancellable(
-                    apiClient.request(StudentEndpoint.CourseInviteLookup(code)),
-                    CourseInviteLookupResponse::class.java
-                )
-                response.validateForDirectJoin()
-                onInviteResolved(code, response.toCourseJoinInfo())
+                onInviteResolved(code, resolveInvite(code))
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
@@ -805,27 +797,12 @@ internal fun inviteCodeFromQr(rawValue: String): String? {
 internal fun isInviteCode(value: String): Boolean = InviteCodePattern.matches(value.trim())
 
 internal fun inviteLookupErrorMessage(error: Throwable): String = when {
-        error is InviteLookupException.Expired -> interfaceText(
-            "该课程二维码或邀请码已过期，请向教师获取新的加入凭证。",
-            "This course QR code or invitation code has expired. Ask the teacher for a new credential."
-        )
-        error is InviteLookupException.Revoked -> interfaceText(
-            "该课程二维码或邀请码已被停用，请向教师获取新的加入凭证。",
-            "This course QR code or invitation code has been disabled. Ask the teacher for a new credential."
-        )
-        error is InviteLookupException.Closed -> interfaceText(
+        error.message?.contains("ENROLLMENT_CLOSED") == true -> interfaceText(
             "该课程已关闭加入，请联系教师。",
             "This course is closed to new members. Contact the teacher."
         )
-        error is InviteLookupException.Invalid -> interfaceText(
-            "课程二维码或邀请码无效，请确认后重试。",
-            "The course QR code or invitation code is invalid. Check it and try again."
-        )
-        error is InvalidInviteLookupResponseException -> interfaceText(
-            "\u8bfe\u7a0b\u4fe1\u606f\u4e0d\u5b8c\u6574\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u6216\u8054\u7cfb\u6559\u5e08",
-            "Course information was incomplete. Try again later or contact your teacher."
-        )
-        error is ApiHttpException && error.statusCode == 404 -> interfaceText(
+        (error is ApiHttpException && error.statusCode == 404) ||
+            (error is V1HttpException && error.statusCode == 404) -> interfaceText(
             "课程或加入凭证不存在，请联系教师确认。",
             "The course or join credential does not exist. Contact the teacher to confirm it."
         )
@@ -833,11 +810,12 @@ internal fun inviteLookupErrorMessage(error: Throwable): String = when {
             "该课程二维码或邀请码已过期或被停用，请向教师获取新的加入凭证。",
             "This course QR code or invitation code has expired or was disabled. Ask the teacher for a new credential."
         )
-        error is ApiHttpException && error.statusCode >= 500 -> interfaceText(
+        (error is ApiHttpException && error.statusCode >= 500) ||
+            (error is V1HttpException && error.statusCode >= 500) -> interfaceText(
             "\u670d\u52a1\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5",
             "The service is temporarily unavailable. Try again shortly."
         )
-        error is ApiHttpException -> interfaceText(
+        error is ApiHttpException || error is V1HttpException -> interfaceText(
             "\u65e0\u6cd5\u9a8c\u8bc1\u9080\u8bf7\u7801\uff0c\u8bf7\u68c0\u67e5\u540e\u91cd\u8bd5",
             "The invitation could not be verified. Check it and try again."
         )
@@ -849,111 +827,23 @@ internal fun inviteLookupErrorMessage(error: Throwable): String = when {
 }
 
 internal fun isRetryableInviteLookupError(error: Throwable): Boolean =
-    error is IOException && error !is InviteLookupException &&
-        (error !is ApiHttpException || error.statusCode >= 500)
+    error is IOException &&
+        (error !is ApiHttpException || error.statusCode >= 500) &&
+        (error !is V1HttpException || error.statusCode >= 500)
 
 /** True only for a server-confirmed invitation expiration or revocation. */
 internal fun isInviteUnavailableError(error: Throwable): Boolean {
-    val apiError = error as? ApiHttpException ?: return false
-    val response = apiError.responseBody.uppercase()
-    return apiError.statusCode == 404 ||
-        apiError.statusCode == 410 ||
+    val statusCode = when (error) {
+        is ApiHttpException -> error.statusCode
+        is V1HttpException -> error.statusCode
+        else -> return false
+    }
+    val response = when (error) {
+        is ApiHttpException -> error.responseBody
+        is V1HttpException -> error.error.code.value
+        else -> ""
+    }.uppercase()
+    return statusCode == 410 ||
         response.contains("EXPIRED") ||
-        response.contains("REVOKED") ||
-        response.contains("已过期") ||
-        response.contains("已撤销")
+        response.contains("REVOKED")
 }
-
-/** DTO for GET /api/v1/course-invites/{code}.  The data wrapper is accepted too. */
-data class CourseInviteLookupResponse(
-    val code: String = "",
-    val courseId: String = "",
-    val courseName: String = "",
-    val courseCode: String = "",
-    val section: String = "",
-    val className: String = "",
-    val teacherName: String = "",
-    val teacher: String = "",
-    val semester: String = "",
-    val status: String = "",
-    val inviteStatus: String = "",
-    val expiresAt: String = "",
-    val joinEnabled: Boolean? = null,
-    val course: CourseInviteCourseResponse? = null,
-    val data: CourseInviteCourseResponse? = null,
-    @SerializedName("invite") val invite: CourseInviteCourseResponse? = null
-) {
-    fun hasCourseDetails(): Boolean {
-        val nested = data ?: invite ?: course
-        val resolvedId = courseId.ifBlank { nested?.courseId.orEmpty() }.ifBlank { nested?.id.orEmpty() }
-        val resolvedName = courseName.ifBlank { nested?.name.orEmpty() }
-        val resolvedCode = courseCode.ifBlank { nested?.code.orEmpty() }
-        return resolvedId.isNotBlank() && resolvedName.isNotBlank() && resolvedCode.isNotBlank()
-    }
-
-    fun validateForDirectJoin() {
-        val nested = data ?: invite ?: course
-        val normalizedStatus = inviteStatus.ifBlank { status }
-            .ifBlank { nested?.inviteStatus.orEmpty() }
-            .ifBlank { nested?.status.orEmpty() }
-            .trim()
-            .uppercase()
-        val resolvedExpiry = expiresAt.ifBlank { nested?.expiresAt.orEmpty() }
-        when {
-            normalizedStatus in ExpiredInviteStatuses -> throw InviteLookupException.Expired()
-            normalizedStatus in RevokedInviteStatuses -> throw InviteLookupException.Revoked()
-            normalizedStatus in InvalidInviteStatuses -> throw InviteLookupException.Invalid()
-            resolvedExpiry.isPastInstant() -> throw InviteLookupException.Expired()
-            joinEnabled == false || nested?.joinEnabled == false || normalizedStatus in ClosedInviteStatuses ->
-                throw InviteLookupException.Closed()
-            !hasCourseDetails() -> throw InvalidInviteLookupResponseException()
-        }
-    }
-
-    fun toCourseJoinInfo(): CourseJoinInfo {
-        val nested = data ?: invite ?: course
-        return CourseJoinInfo(
-            id = courseId.ifBlank { nested?.courseId.orEmpty() }.ifBlank { nested?.id.orEmpty() },
-            name = courseName.ifBlank { nested?.name.orEmpty() }.orDash(),
-            courseNumber = courseCode.ifBlank { nested?.code.orEmpty() }.orDash(),
-            section = section.ifBlank { nested?.section ?: className }.orDash(),
-            teacher = teacherName.ifBlank { teacher }.ifBlank { nested?.teacherName.orEmpty() }.orDash(),
-            semester = semester.ifBlank { nested?.semester.orEmpty() }.orDash()
-        )
-    }
-}
-
-data class CourseInviteCourseResponse(
-    val id: String = "",
-    val courseId: String = "",
-    val name: String = "",
-    val code: String = "",
-    val section: String = "",
-    val teacherName: String = "",
-    val semester: String = "",
-    val status: String = "",
-    val inviteStatus: String = "",
-    val expiresAt: String = "",
-    val joinEnabled: Boolean? = null
-)
-
-private class InvalidInviteLookupResponseException : IOException("Course invite response has no course details")
-
-internal sealed class InviteLookupException(message: String) : IOException(message) {
-    class Expired : InviteLookupException("INVITE_EXPIRED")
-    class Revoked : InviteLookupException("INVITE_REVOKED")
-    class Closed : InviteLookupException("COURSE_JOIN_CLOSED")
-    class Invalid : InviteLookupException("INVITE_INVALID")
-}
-
-private val ExpiredInviteStatuses = setOf("EXPIRED", "INVITE_EXPIRED", "QR_EXPIRED")
-private val RevokedInviteStatuses = setOf("REVOKED", "DISABLED", "INVITE_REVOKED", "QR_REVOKED")
-private val ClosedInviteStatuses = setOf("CLOSED", "JOIN_CLOSED", "COURSE_CLOSED", "ENROLLMENT_CLOSED")
-private val InvalidInviteStatuses = setOf("INVALID", "INVALID_INVITE", "INVALID_QR")
-
-private fun String.isPastInstant(): Boolean =
-    takeIf { it.isNotBlank() }
-        ?.let { value -> runCatching { Instant.parse(value) }.getOrNull() }
-        ?.isBefore(Instant.now()) == true
-
-private fun String.orDash(): String = ifBlank { "—" }

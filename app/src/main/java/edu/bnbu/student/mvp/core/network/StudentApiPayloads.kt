@@ -22,28 +22,6 @@ data class UpdateLanguagePreferenceRequest(
     val language: String
 )
 
-/** Payload used to verify an email login code. Codes are six digits and single-use. */
-data class EmailLoginRequest(
-    val email: String,
-    val code: String
-)
-
-/** Payload used to request an email login code. */
-data class SendEmailCodeRequest(
-    val email: String
-)
-
-/** Payload used to verify a phone login code. Codes are six digits and single-use. */
-data class PhoneLoginRequest(
-    val phone: String,
-    val code: String
-)
-
-/** Payload used to request a phone login code. */
-data class SendPhoneCodeRequest(
-    val phone: String
-)
-
 /** Request body for direct enrollment through POST /courses/{courseId}/join. */
 data class CourseJoinRequestBody(
     val studentName: String,

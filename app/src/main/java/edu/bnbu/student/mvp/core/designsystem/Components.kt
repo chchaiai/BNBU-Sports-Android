@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -456,13 +457,16 @@ fun PrimaryActionButton(
 @Composable
 fun <T> SegmentedControl(
     values: List<T>,
-    selected: T,
+    selected: T?,
     label: @Composable (T) -> String,
-    onSelected: (T) -> Unit
+    onSelected: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    optionTestTag: ((T) -> String)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .selectableGroup()
             .background(cs.surfaceContainerHighest, MaterialTheme.shapes.small)
@@ -487,17 +491,21 @@ fun <T> SegmentedControl(
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 44.dp)
-                    .pressScale(interactionSource)
+                    .pressScale(interactionSource, enabled)
                     .background(
                         backgroundColor,
                         MaterialTheme.shapes.small
                     )
                     .selectable(
                         selected = isSelected,
+                        enabled = enabled,
                         role = Role.Tab,
                         interactionSource = interactionSource,
                         indication = indication,
                         onClick = { onSelected(value) }
+                    )
+                    .then(
+                        optionTestTag?.let { Modifier.testTag(it(value)) } ?: Modifier
                     )
                     .padding(horizontal = 8.dp),
                 contentAlignment = Alignment.Center

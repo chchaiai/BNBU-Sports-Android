@@ -51,10 +51,6 @@ import edu.bnbu.student.mvp.core.network.StudentCourseDetailResponse
 import edu.bnbu.student.mvp.core.network.StudentCoursesResponse
 import edu.bnbu.student.mvp.core.network.CheckInTimeWindowResponse
 import edu.bnbu.student.mvp.core.network.StudentGradesResponse
-import edu.bnbu.student.mvp.core.network.SendEmailContactCodeRequest
-import edu.bnbu.student.mvp.core.network.VerifyEmailContactCodeRequest
-import edu.bnbu.student.mvp.core.network.SendPhoneContactCodeRequest
-import edu.bnbu.student.mvp.core.network.VerifyPhoneContactCodeRequest
 import edu.bnbu.student.mvp.core.network.FeedbackTicketListResponse
 import edu.bnbu.student.mvp.core.network.FeedbackTicketResponse
 import edu.bnbu.student.mvp.core.network.HelpArticleResponse
@@ -918,46 +914,6 @@ class ApiStudentRepository(
                 apiClient.request(StudentEndpoint.FeedbackTickets),
                 FeedbackTicketListResponse::class.java
             ).tickets
-        }
-    }
-
-    suspend fun sendEmailContactCode(email: String) {
-        withContext(Dispatchers.IO) {
-            apiClient.executeCancellable(
-                apiClient.request(StudentEndpoint.SendEmailContactCode, SendEmailContactCodeRequest(email))
-            )
-        }
-    }
-
-    suspend fun verifyEmailContactCode(email: String, code: String): StudentProfileResponse {
-        return withContext(Dispatchers.IO) {
-            apiClient.executeAndParseCancellable(
-                apiClient.request(
-                    StudentEndpoint.VerifyEmailContactCode,
-                    VerifyEmailContactCodeRequest(email, code)
-                ),
-                StudentProfileResponse::class.java
-            )
-        }
-    }
-
-    suspend fun sendPhoneContactCode(phone: String) {
-        withContext(Dispatchers.IO) {
-            apiClient.executeCancellable(
-                apiClient.request(StudentEndpoint.SendPhoneContactCode, SendPhoneContactCodeRequest(phone))
-            )
-        }
-    }
-
-    suspend fun verifyPhoneContactCode(phone: String, code: String): StudentProfileResponse {
-        return withContext(Dispatchers.IO) {
-            apiClient.executeAndParseCancellable(
-                apiClient.request(
-                    StudentEndpoint.VerifyPhoneContactCode,
-                    VerifyPhoneContactCodeRequest(phone, code)
-                ),
-                StudentProfileResponse::class.java
-            )
         }
     }
 

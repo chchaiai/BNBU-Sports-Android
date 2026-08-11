@@ -15,8 +15,6 @@ sealed class StudentEndpoint(val method: HttpMethod) {
     /** Public availability policy, checked at startup before authentication. */
     data object Health : StudentEndpoint(HttpMethod.GET)
     data object Login : StudentEndpoint(HttpMethod.POST)
-    data object EmailLogin : StudentEndpoint(HttpMethod.POST)
-    data object PhoneLogin : StudentEndpoint(HttpMethod.POST)
     data object SportSummary : StudentEndpoint(HttpMethod.GET)
     data object SportRecords : StudentEndpoint(HttpMethod.POST)
     data object SportRecordsList : StudentEndpoint(HttpMethod.GET)   // GET list with filters
@@ -51,29 +49,17 @@ sealed class StudentEndpoint(val method: HttpMethod) {
     data object CheckInTimeWindow : StudentEndpoint(HttpMethod.GET)
     data object StudentProfile : StudentEndpoint(HttpMethod.GET)
     data object UpdateStudentProfile : StudentEndpoint(HttpMethod.PUT)
-    /** Used before authentication when a student has lost both login contacts. */
-    data object RecoveryRequests : StudentEndpoint(HttpMethod.POST)
     data object UploadProof : StudentEndpoint(HttpMethod.POST)
     data object StudentGrades : StudentEndpoint(HttpMethod.GET)
-    data object SendEmailContactCode : StudentEndpoint(HttpMethod.POST)
-    data object VerifyEmailContactCode : StudentEndpoint(HttpMethod.POST)
-    data object SendPhoneContactCode : StudentEndpoint(HttpMethod.POST)
-    data object VerifyPhoneContactCode : StudentEndpoint(HttpMethod.POST)
     /** Service-feedback contract. The backend owns the final field schema. */
     data object SubmitFeedback : StudentEndpoint(HttpMethod.POST)
     data object FeedbackTickets : StudentEndpoint(HttpMethod.GET)
-    /** Public lookup used before a student directly joins a course. */
-    data class CourseInviteLookup(val code: String) : StudentEndpoint(HttpMethod.GET)
-    /** Atomically validates the invite and creates or returns the active membership. */
-    data class CourseJoin(val courseId: String) : StudentEndpoint(HttpMethod.POST)
 
     val path: String
         get() = when (this) {
             MinimumAppVersion -> "/config/minimum-app-version"
             Health -> "/health"
             Login -> "/auth/login"
-            EmailLogin -> "/auth/login/email"
-            PhoneLogin -> "/auth/login/phone"
             SportSummary -> "/sport/summary"
             SportRecords -> "/sport/records"
             SportRecordsList -> "/sport/records"
@@ -106,16 +92,9 @@ sealed class StudentEndpoint(val method: HttpMethod) {
             CheckInTimeWindow -> "/student/checkin-time-window"
             StudentProfile -> "/student/profile"
             UpdateStudentProfile -> "/student/profile"
-            RecoveryRequests -> "/student/recovery-requests"
             UploadProof -> "/upload/proof"
             StudentGrades -> "/student/grades"
-            SendEmailContactCode -> "/student/contacts/email/send-code"
-            VerifyEmailContactCode -> "/student/contacts/email/verify"
-            SendPhoneContactCode -> "/student/contacts/phone/send-code"
-            VerifyPhoneContactCode -> "/student/contacts/phone/verify"
             SubmitFeedback, FeedbackTickets -> "/student/feedback"
-            is CourseInviteLookup -> "/course-invites/${code.pathSegment()}"
-            is CourseJoin -> "/courses/${courseId.pathSegment()}/join"
         }
 }
 

@@ -51,7 +51,6 @@ class V1StudentApiTest {
         val challenge = api.requestSignInCode(
             organizationCode = "BNBU",
             account = "student@example.edu",
-            channel = StudentSignInCodeRequest.Channel.EMAIL,
             locale = StudentSignInCodeRequest.Locale.zhMinusCN,
             intent = intent
         )
@@ -77,7 +76,6 @@ class V1StudentApiTest {
                 api.requestSignInCode(
                     organizationCode = "bnbu",
                     account = "student@example.edu",
-                    channel = StudentSignInCodeRequest.Channel.EMAIL,
                     locale = StudentSignInCodeRequest.Locale.zhMinusCN,
                     intent = intent("requestStudentSignInCode", "invalid-organization")
                 )
@@ -178,7 +176,7 @@ class V1StudentApiTest {
             inviteToken = inviteToken,
             fullName = "Student Name",
             studentNumber = "20260001",
-            gender = Gender.OTHER,
+            gender = Gender.FEMALE,
             gradeYear = 2026,
             intent = intent("issueJoinCapability", "student=20260001")
         )
@@ -189,6 +187,7 @@ class V1StudentApiTest {
         )
 
         assertEquals("section-1", completed.classSection.id)
+        assertEquals("PENDING_CONTACT_BINDING", completed.currentUser.user.status.value)
         assertEquals("user-1", store.session?.principalUserId)
         assertEquals("enrollment-1", store.session?.enrollmentId)
         assertEquals("access-new", store.session?.accessToken)
@@ -203,6 +202,63 @@ class V1StudentApiTest {
         assertEquals(capabilitySecret, joinRequest.getHeader("X-Join-Capability"))
         assertNull(joinRequest.getHeader("Authorization"))
         assertEquals("intent-key", joinRequest.getHeader("Idempotency-Key"))
+    }
+
+    @Test
+    fun qrJoinRejectsOtherGenderBeforeSendingARequest() = runBlocking {
+        val api = api(FakeStore(null))
+
+        val failure = runCatching {
+            api.issueJoinCapability(
+                inviteToken = "invite-token-1234",
+                fullName = "Student Name",
+                studentNumber = "20260001",
+                gender = Gender.OTHER,
+                gradeYear = 2026,
+                intent = intent("issueJoinCapability", "student=unsupported-gender")
+            )
+        }.exceptionOrNull()
+
+        assertTrue(failure is IllegalArgumentException)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun qrJoinRejectsUnsupportedAccountStatusBeforePersistingSession() {
+        val store = FakeStore(null)
+        val api = api(store)
+        server.enqueue(
+            success(
+                201,
+                "req-capability-locked",
+                """{
+                    "joinCapability":"capability-secret-value-1234567890",
+                    "classSectionId":"section-1",
+                    "expiresAt":"2026-08-07T12:00:00Z"
+                }""".trimIndent()
+            )
+        )
+        server.enqueue(success(201, "req-join-locked", joinResultJson("LOCKED")))
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking {
+                val capability = api.issueJoinCapability(
+                    inviteToken = "invite-token-1234",
+                    fullName = "Student Name",
+                    studentNumber = "20260001",
+                    gender = Gender.FEMALE,
+                    gradeYear = 2026,
+                    intent = intent("issueJoinCapability", "student=locked")
+                )
+                api.joinClassSection(
+                    inviteToken = "invite-token-1234",
+                    capability = capability,
+                    intent = intent("joinClassSectionWithInvite", "invite=locked")
+                )
+            }
+        }
+
+        assertNull(store.session)
     }
 
     @Test
@@ -353,18 +409,19 @@ class V1StudentApiTest {
             )
     }
 
-    private fun joinResultJson(): String =
+    private fun joinResultJson(userStatus: String = "PENDING_CONTACT_BINDING"): String =
         """{
             "studentProfile":$studentProfileJson,
             "enrollment":$enrollmentJson,
             "course":$courseJson,
             "classSection":$classSectionJson,
-            "authSession":${authSessionJson()}
+            "authSession":${authSessionJson(userStatus = userStatus)}
         }""".trimIndent()
 
     private fun authSessionJson(
         sessionId: String? = "session-new",
-        enrollmentId: String? = "enrollment-1"
+        enrollmentId: String? = "enrollment-1",
+        userStatus: String = "ACTIVE"
     ): String {
         val sessionIdJson = sessionId?.let { "\"$it\"" } ?: "null"
         val enrollmentIdJson = enrollmentId?.let { "\"$it\"" } ?: "null"
@@ -376,20 +433,17 @@ class V1StudentApiTest {
             "tokenType":"Bearer",
             "accessTokenExpiresAt":"2026-08-06T13:00:00Z",
             "refreshTokenExpiresAt":"2026-08-13T12:00:00Z",
-            "user":$userJson
+            "user":${userJson(userStatus)}
         }""".trimIndent()
     }
 
-    private val userJson: String
-        get() = """{
+    private fun userJson(status: String): String = """{
             "id":"user-1",
             "organizationId":"org-1",
             "role":"STUDENT",
-            "status":"ACTIVE",
+            "status":"$status",
             "primaryEmailMasked":null,
-            "primaryPhoneMasked":null,
             "emailVerified":false,
-            "phoneVerified":false,
             "version":1
         }""".trimIndent()
 

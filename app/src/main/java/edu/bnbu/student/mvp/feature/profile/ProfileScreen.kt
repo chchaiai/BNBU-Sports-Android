@@ -24,7 +24,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.AlertDialog
@@ -492,7 +492,7 @@ private fun SettingsPanel(
                 GroupLabel(stringResource(R.string.profile_account_security), modifier = Modifier.padding(bottom = 4.dp))
                 NavigationSettingRow(
                     title = stringResource(R.string.profile_login_contacts),
-                    icon = Icons.Filled.Phone,
+                    icon = Icons.Filled.Email,
                     onClick = onOpenContactBinding
                 )
             }

@@ -46,6 +46,9 @@ import edu.bnbu.student.mvp.core.network.ContactStatusResponse
 import edu.bnbu.student.mvp.core.network.CourseJoinResponse
 import edu.bnbu.student.mvp.core.network.UploadProgress
 import edu.bnbu.student.mvp.core.network.StudentProfileResponse
+import edu.bnbu.student.mvp.core.network.ContactMethodResponse
+import edu.bnbu.student.mvp.core.network.v1.V1StudentApi
+import edu.bnbu.student.mvp.core.network.v1.generated.CurrentUserData
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -136,6 +139,10 @@ class StudentAppState(
 
     /** Server-authoritative, masked state used by the activation and contact-management UI. */
     var contactStatus by mutableStateOf(ContactStatusResponse())
+        private set
+
+    /** Optimistic-lock version returned by the authoritative /me projection. */
+    var currentUserVersion by mutableStateOf(1L)
         private set
 
     /** Keeps the activation screen visible until the newly active workspace is ready. */
@@ -534,6 +541,25 @@ class StudentAppState(
         launchSessionRequest {
             try {
                 val loaded = ensureInitialLocalState()
+                val v1Session = localStore.loadAuthSession()
+                if (v1Session?.refreshToken != null) {
+                    val current = V1StudentApi.create(localStore).getCurrentUser().data
+                        ?: error("CURRENT_USER_DATA_MISSING")
+                    if (!isCurrentSession(generation)) return@launchSessionRequest
+                    applyV1CurrentUser(current, loaded.workspace)
+                    val latestAccessToken = localStore.loadAuthSession()?.accessToken
+                        ?: error("ACCESS_TOKEN_MISSING")
+                    val repository = ApiStudentRepository(
+                        apiClient = StudentApiClient().withToken(latestAccessToken),
+                        userProfile = current.toLegacyUserDto()
+                    )
+                    apiRepository = repository
+                    if (AccountStatus.from(workspace.student.accountStatus) == AccountStatus.ACTIVE) {
+                        hydrateV1ActiveWorkspace(repository, generation)
+                    }
+                    onResult(true)
+                    return@launchSessionRequest
+                }
                 val savedToken = loaded.authToken
                 val savedUserJson = loaded.userProfileJson
                 if (savedToken == null || savedUserJson == null) {
@@ -620,6 +646,106 @@ class StudentAppState(
     }
 
     /**
+     * Adopts a session that was already persisted by [V1StudentApi.verifySignInCode].
+     * The authoritative /me projection decides whether the account is pending or active;
+     * no cached profile can bypass email activation.
+     */
+    fun acceptV1Authentication(current: CurrentUserData) {
+        invalidateSessionGeneration()
+        val generation = beginSessionGeneration()
+        localSessionInvalidated = false
+        isUsingMockUser = false
+        applyV1CurrentUser(current, cachedWorkspace = null)
+        val accessToken = localStore?.loadAuthSession()?.accessToken
+        val repository = accessToken?.let {
+            ApiStudentRepository(
+                apiClient = StudentApiClient().withToken(it),
+                userProfile = current.toLegacyUserDto()
+            )
+        }
+        apiRepository = repository
+        if (
+            repository != null &&
+            AccountStatus.from(workspace.student.accountStatus) == AccountStatus.ACTIVE
+        ) {
+            isLoading = true
+            launchSessionRequest {
+                try {
+                    hydrateV1ActiveWorkspace(repository, generation)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    if (!isCurrentSession(generation)) return@launchSessionRequest
+                    lastError = errorMessage(error)
+                } finally {
+                    if (isCurrentSession(generation)) isLoading = false
+                }
+            }
+        }
+    }
+
+    /**
+     * Keeps the mandatory activation route locked after email verification until
+     * the newly ACTIVE student's full workspace has been loaded successfully.
+     * A failed load therefore cannot reveal the authenticated app shell.
+     */
+    fun acceptV1ContactActivation(current: CurrentUserData) {
+        val accountStatus = AccountStatus.requireKnown(current.user.status.value)
+        if (accountStatus != AccountStatus.ACTIVE) {
+            acceptV1Authentication(current)
+            contactActivationLoadError = interfaceText(
+                "邮箱验证尚未生效，请稍后重试。",
+                "Email verification is not active yet. Try again shortly."
+            )
+            return
+        }
+
+        invalidateSessionGeneration()
+        val generation = beginSessionGeneration()
+        localSessionInvalidated = false
+        isUsingMockUser = false
+        isAuthenticated = true
+        isPreparingActivatedWorkspace = true
+        contactActivationLoadError = null
+        val store = localStore
+        if (store == null) {
+            isPreparingActivatedWorkspace = false
+            contactActivationLoadError = interfaceText(
+                "无法读取登录会话，请退出后重新登录。",
+                "The authenticated session could not be read. Sign out and sign in again."
+            )
+            return
+        }
+
+        launchSessionRequest {
+            try {
+                val confirmed = V1StudentApi.create(store).getCurrentUser().data
+                    ?: throw IllegalStateException("CURRENT_USER_DATA_MISSING")
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                if (AccountStatus.requireKnown(confirmed.user.status.value) != AccountStatus.ACTIVE) {
+                    applyV1CurrentUser(confirmed, cachedWorkspace = null)
+                    contactActivationLoadError = interfaceText(
+                        "邮箱验证尚未生效，请稍后重试。",
+                        "Email verification is not active yet. Try again shortly."
+                    )
+                    return@launchSessionRequest
+                }
+                val repository = prepareActivatedWorkspace(confirmed)
+                    ?: throw IllegalStateException("AUTH_SESSION_MISSING")
+                hydrateV1ActiveWorkspace(repository, generation)
+                if (isCurrentSession(generation)) contactActivationLoadError = null
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (!isCurrentSession(generation)) return@launchSessionRequest
+                contactActivationLoadError = errorMessage(error)
+            } finally {
+                if (isCurrentSession(generation)) isPreparingActivatedWorkspace = false
+            }
+        }
+    }
+
+    /**
      * Retry loading the workspace after an error. Uses the existing
      * [apiRepository] (must be set via prior login).
      */
@@ -699,6 +825,7 @@ class StudentAppState(
         require(membership.studentId.isBlank() || membership.studentId == student.id) {
             "JOIN_RESPONSE_STUDENT_MISMATCH"
         }
+        val authoritativeAccountStatus = AccountStatus.requireKnown(student.accountStatus)
 
         val token = response.resolvedToken().ifBlank {
             apiRepository?.bearerToken.orEmpty()
@@ -718,7 +845,7 @@ class StudentAppState(
             status = student.status,
             gender = student.gender,
             gradeLevel = student.grade,
-            accountStatus = student.accountStatus
+            accountStatus = authoritativeAccountStatus.name
         )
         val course = Course(
             id = joinedCourse.id,
@@ -807,59 +934,29 @@ class StudentAppState(
         }
     }
 
-    fun sendEmailContactBindingCode(email: String, onResult: (Result<Unit>) -> Unit) {
-        if (!allowWrite("sendEmailContactBindingCode", onResult)) return
-        runContactBindingRequest(onResult) { sendEmailContactCode(email) }
-    }
-
-    fun verifyEmailContactBindingCode(
-        email: String,
-        code: String,
-        onResult: (Result<Unit>) -> Unit
-    ) {
-        if (!allowWrite("verifyEmailContactBindingCode", onResult)) return
-        runContactVerificationRequest(onResult) {
-            verifyEmailContactCode(email, code)
-        }
-    }
-
-    fun sendPhoneContactBindingCode(phone: String, onResult: (Result<Unit>) -> Unit) {
-        if (!allowWrite("sendPhoneContactBindingCode", onResult)) return
-        runContactBindingRequest(onResult) { sendPhoneContactCode(phone) }
-    }
-
-    fun verifyPhoneContactBindingCode(
-        phone: String,
-        code: String,
-        onResult: (Result<Unit>) -> Unit
-    ) {
-        if (!allowWrite("verifyPhoneContactBindingCode", onResult)) return
-        runContactVerificationRequest(onResult) {
-            verifyPhoneContactCode(phone, code)
-        }
-    }
-
-    /** Retries only the post-verification workspace hydration, never the consumed code. */
+    /** Re-reads /me and retries workspace hydration, never the consumed verification code. */
     fun retryContactActivationWorkspace() {
-        val repository = apiRepository ?: return
+        val store = localStore ?: return
         if (!isAuthenticated || !requiresContactBinding || isPreparingActivatedWorkspace) return
         val generation = sessionGeneration
         isPreparingActivatedWorkspace = true
         contactActivationLoadError = null
         val job = launchAuthenticatedRequest {
             try {
-                val profile = repository.fetchProfile()
+                val current = V1StudentApi.create(store).getCurrentUser().data
+                    ?: throw IllegalStateException("CURRENT_USER_DATA_MISSING")
                 if (!isCurrentSession(generation)) return@launchAuthenticatedRequest
-                contactStatus = profile.contacts
-                if (AccountStatus.from(profile.accountStatus) != AccountStatus.ACTIVE) {
-                    applyContactProfile(profile)
+                if (AccountStatus.requireKnown(current.user.status.value) != AccountStatus.ACTIVE) {
+                    applyV1CurrentUser(current, cachedWorkspace = null)
                     contactActivationLoadError = interfaceText(
                         "联系方式验证尚未生效，请稍后再试。",
                         "Contact verification is not active yet. Try again shortly."
                     )
                     return@launchAuthenticatedRequest
                 }
-                hydrateActivatedWorkspace(repository, profile, generation)
+                val repository = prepareActivatedWorkspace(current)
+                    ?: throw IllegalStateException("AUTH_SESSION_MISSING")
+                hydrateV1ActiveWorkspace(repository, generation)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -936,6 +1033,7 @@ class StudentAppState(
         isLoading = false
         workspace = StudentWorkspace.empty()
         contactStatus = ContactStatusResponse()
+        currentUserVersion = 1L
         isPreparingActivatedWorkspace = false
         contactActivationLoadError = null
     }
@@ -1337,8 +1435,8 @@ class StudentAppState(
         if (isContactBindingRequired(e)) {
             forceContactActivation()
             return interfaceText(
-                "请先验证手机号或邮箱后再继续使用。",
-                "Verify a mobile number or email address to continue."
+                "请先验证邮箱后再继续使用。",
+                "Verify your email address to continue."
             )
         }
         val msg = e.message.orEmpty()
@@ -1393,6 +1491,139 @@ class StudentAppState(
                 accountStatus = user.accountStatus
             )
         )
+    }
+
+    private fun applyV1CurrentUser(
+        current: CurrentUserData,
+        cachedWorkspace: StudentWorkspace?
+    ) {
+        val profile = current.studentProfile
+            ?: throw IllegalStateException("STUDENT_PROFILE_REQUIRED")
+        currentUserVersion = current.user.version
+        val accountStatus = AccountStatus.requireKnown(current.user.status.value).name
+        val student = StudentProfile(
+            id = profile.id,
+            name = profile.fullName,
+            studentNumber = profile.studentNumber,
+            email = current.user.primaryEmailMasked.orEmpty(),
+            college = profile.collegeName.orEmpty(),
+            className = profile.administrativeClassName.orEmpty(),
+            status = profile.status,
+            gender = profile.gender.value.lowercase(),
+            gradeLevel = profile.gradeYear.toString(),
+            accountStatus = accountStatus
+        )
+        val mayReuseCache =
+            accountStatus == AccountStatus.ACTIVE.name && cachedWorkspace?.student?.id == profile.id
+        workspace = if (mayReuseCache) {
+            cachedWorkspace!!.copy(student = student)
+        } else {
+            StudentWorkspace.empty().copy(student = student)
+        }
+        contactStatus = ContactStatusResponse(
+            email = ContactMethodResponse(
+                masked = current.user.primaryEmailMasked,
+                verified = current.user.emailVerified
+            )
+        )
+        isPreparingActivatedWorkspace = false
+        contactActivationLoadError = null
+        isAuthenticated = true
+        isShowingCachedData = mayReuseCache
+        lastError = null
+
+        val user = UserDto(
+            id = current.user.id,
+            name = profile.fullName,
+            studentNumber = profile.studentNumber,
+            email = current.user.primaryEmailMasked.orEmpty(),
+            role = current.user.role.value,
+            college = profile.collegeName.orEmpty(),
+            status = profile.status,
+            gender = profile.gender.value.lowercase(),
+            gradeLevel = profile.gradeYear.toString(),
+            className = profile.administrativeClassName.orEmpty(),
+            accountStatus = accountStatus,
+            contacts = contactStatus
+        )
+        persistUnit(event = "save v1 authenticated profile") {
+            saveUserProfile(gson.toJson(user)) &&
+                if (accountStatus == AccountStatus.PENDING_CONTACT_BINDING.name) {
+                    clearWorkspaceCache()
+                } else {
+                    saveWorkspace(workspace)
+                }
+        }
+    }
+
+    private fun CurrentUserData.toLegacyUserDto(): UserDto {
+        val profile = studentProfile ?: throw IllegalStateException("STUDENT_PROFILE_REQUIRED")
+        return UserDto(
+            id = user.id,
+            name = profile.fullName,
+            studentNumber = profile.studentNumber,
+            email = user.primaryEmailMasked.orEmpty(),
+            role = user.role.value,
+            college = profile.collegeName.orEmpty(),
+            status = profile.status,
+            gender = profile.gender.value.lowercase(),
+            gradeLevel = profile.gradeYear.toString(),
+            className = profile.administrativeClassName.orEmpty(),
+            accountStatus = user.status.value,
+            contacts = ContactStatusResponse(
+                email = ContactMethodResponse(
+                    masked = user.primaryEmailMasked,
+                    verified = user.emailVerified
+                )
+            )
+        )
+    }
+
+    private fun prepareActivatedWorkspace(current: CurrentUserData): ApiStudentRepository? {
+        require(AccountStatus.requireKnown(current.user.status.value) == AccountStatus.ACTIVE) {
+            "ACTIVE_ACCOUNT_REQUIRED"
+        }
+        currentUserVersion = current.user.version
+        contactStatus = ContactStatusResponse(
+            email = ContactMethodResponse(
+                masked = current.user.primaryEmailMasked,
+                verified = current.user.emailVerified
+            )
+        )
+        val user = current.toLegacyUserDto()
+        val repository = localStore?.loadAuthSession()?.accessToken?.let { accessToken ->
+            ApiStudentRepository(
+                apiClient = StudentApiClient().withToken(accessToken),
+                userProfile = user
+            )
+        }
+        apiRepository = repository
+        isAuthenticated = true
+        isPreparingActivatedWorkspace = true
+        contactActivationLoadError = null
+        isShowingCachedData = false
+        persistUnit(event = "save verified contact profile before workspace activation") {
+            saveUserProfile(gson.toJson(user)) && clearWorkspaceCache()
+        }
+        return repository
+    }
+
+    private suspend fun hydrateV1ActiveWorkspace(
+        repository: ApiStudentRepository,
+        generation: Long
+    ) {
+        val remoteWorkspace = repository.loadWorkspaceAsync()
+        if (!isCurrentSession(generation)) return
+        workspace = remoteWorkspace.copy(
+            student = remoteWorkspace.student.copy(
+                accountStatus = AccountStatus.ACTIVE.name
+            )
+        )
+        isShowingCachedData = false
+        val now = currentSyncTimestamp()
+        lastSyncTimestamp = now
+        saveWorkspaceNow(event = "v1 workspace loaded", expectedGeneration = generation)
+        repository.bearerToken?.let { syncPushToken(StudentApiClient().withToken(it)) }
     }
 
     private fun applyContactProfile(profile: StudentProfileResponse) {
@@ -1531,6 +1762,7 @@ class StudentAppState(
             isLoading = false
             workspace = StudentWorkspace.empty()
             contactStatus = ContactStatusResponse()
+            currentUserVersion = 1L
             isPreparingActivatedWorkspace = false
             contactActivationLoadError = null
             withLocalStoreOnIo(
@@ -1544,152 +1776,6 @@ class StudentAppState(
     }
 
     private fun Throwable.asException(): Exception = this as? Exception ?: Exception(this)
-
-    private fun runContactBindingRequest(
-        onResult: (Result<Unit>) -> Unit,
-        refreshAccountStatus: Boolean = false,
-        request: suspend ApiStudentRepository.() -> Unit
-    ) {
-        val repository = apiRepository
-        if (repository == null || !isAuthenticated) {
-            onResult(
-                Result.failure(
-                    IllegalStateException(
-                        interfaceText("登录状态已失效，请重新登录", "Your sign-in session is no longer valid. Sign in again.")
-                    )
-                )
-            )
-            return
-        }
-        val generation = sessionGeneration
-        val job = launchAuthenticatedRequest {
-            try {
-                repository.request()
-                if (refreshAccountStatus) {
-                    // Verification responses are intentionally not coupled to a
-                    // particular JSON envelope. The profile is the authority for
-                    // account_status after either contact is verified.
-                    val profile = repository.fetchProfile()
-                    if (!isCurrentSession(generation)) return@launchAuthenticatedRequest
-                    workspace = workspace.copy(
-                        student = workspace.student.copy(accountStatus = profile.accountStatus)
-                    )
-                    saveWorkspaceNow(
-                        event = "联系方式绑定状态已更新",
-                        expectedGeneration = generation
-                    )
-                }
-                onResult(Result.success(Unit))
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                if (!isCurrentSession(generation)) return@launchAuthenticatedRequest
-                if (isUnauthorized(error)) {
-                    expireSession(
-                        interfaceText("登录已过期，请重新登录", "Your sign-in has expired. Sign in again.")
-                    )
-                } else if (isContactBindingRequired(error)) {
-                    forceContactActivation()
-                }
-                onResult(Result.failure(error))
-            }
-        }
-        if (job == null) {
-            onResult(
-                Result.failure(
-                    IllegalStateException(
-                        interfaceText("登录状态已失效，请重新登录", "Your sign-in session is no longer valid. Sign in again.")
-                    )
-                )
-            )
-        }
-    }
-
-    /**
-     * A successful verification response is authoritative. Pending sessions
-     * become fully usable only after the response says ACTIVE and the complete
-     * workspace has been loaded without using local cached data.
-     */
-    private fun runContactVerificationRequest(
-        onResult: (Result<Unit>) -> Unit,
-        request: suspend ApiStudentRepository.() -> StudentProfileResponse
-    ) {
-        val repository = apiRepository
-        if (repository == null || !isAuthenticated) {
-            onResult(Result.failure(IllegalStateException("Authentication session is unavailable")))
-            return
-        }
-        val generation = sessionGeneration
-        val wasPending = requiresContactBinding
-        val job = launchAuthenticatedRequest {
-            try {
-                val profile = repository.request()
-                if (!isCurrentSession(generation)) return@launchAuthenticatedRequest
-                if (wasPending && AccountStatus.from(profile.accountStatus) == AccountStatus.ACTIVE) {
-                    contactStatus = profile.contacts
-                    isPreparingActivatedWorkspace = true
-                    contactActivationLoadError = null
-                    try {
-                        if (!hydrateActivatedWorkspace(repository, profile, generation)) {
-                            return@launchAuthenticatedRequest
-                        }
-                        onResult(Result.success(Unit))
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Exception) {
-                        if (!isCurrentSession(generation)) return@launchAuthenticatedRequest
-                        isPreparingActivatedWorkspace = false
-                        if (isUnauthorized(error)) {
-                            expireSession("Your sign-in has expired. Sign in again.")
-                            onResult(Result.failure(error))
-                            return@launchAuthenticatedRequest
-                        }
-                        if (isContactBindingRequired(error)) forceContactActivation()
-                        contactActivationLoadError = errorMessage(error)
-                        // The code was accepted even though the workspace refresh failed.
-                        // Keep the verified state visible and offer a safe hydration retry.
-                        onResult(Result.success(Unit))
-                    }
-                    return@launchAuthenticatedRequest
-                } else if (wasPending) {
-                    applyContactProfile(profile)
-                    onResult(
-                        Result.failure(
-                            IllegalStateException(
-                                interfaceText(
-                                    "验证状态尚未更新，请稍后再试。",
-                                    "Verification status has not updated yet. Try again shortly."
-                                )
-                            )
-                        )
-                    )
-                    return@launchAuthenticatedRequest
-                } else {
-                    applyContactProfile(profile)
-                    withLocalStoreOnIo(
-                        event = "save verified contact profile",
-                        expectedGeneration = generation
-                    ) {
-                        saveUserProfile(gson.toJson(profile.toUserDto()))
-                    }
-                }
-                onResult(Result.success(Unit))
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                if (!isCurrentSession(generation)) return@launchAuthenticatedRequest
-                if (isUnauthorized(error)) {
-                    expireSession("Your sign-in has expired. Sign in again.")
-                } else if (isContactBindingRequired(error)) {
-                    forceContactActivation()
-                }
-                onResult(Result.failure(error))
-            }
-        }
-        if (job == null) {
-            onResult(Result.failure(IllegalStateException("Authentication session is unavailable")))
-        }
-    }
 
     /**
      * Installs a fully loaded workspace only after the server says the pending

@@ -65,9 +65,7 @@ data class StudentApiClient(
             }
             if (
                 endpoint.method != HttpMethod.GET &&
-                endpoint != StudentEndpoint.Login &&
-                endpoint != StudentEndpoint.EmailLogin &&
-                endpoint != StudentEndpoint.PhoneLogin
+                endpoint != StudentEndpoint.Login
             ) {
                 val idempotencyKey = idempotencyKeyProvider().trim()
                 require(idempotencyKey.isNotEmpty()) { "Idempotency-Key must not be blank" }

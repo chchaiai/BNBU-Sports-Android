@@ -1,9 +1,9 @@
 package edu.bnbu.student.mvp
 
 import androidx.activity.ComponentActivity
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.hasClickAction
@@ -11,19 +11,23 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import edu.bnbu.student.mvp.core.designsystem.BNBUStudentTheme
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.mock.MockStudentWorkspace
+import edu.bnbu.student.mvp.core.network.CourseJoinRequestBody
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionState
 import edu.bnbu.student.mvp.feature.shell.AppRootScreen
-import edu.bnbu.student.mvp.feature.login.ContactBindingActions
 import edu.bnbu.student.mvp.feature.login.ContactBindingMode
 import edu.bnbu.student.mvp.feature.login.ContactBindingScreen
-import edu.bnbu.student.mvp.feature.login.LocalContactBindingActions
+import edu.bnbu.student.mvp.feature.courses.DemoStudentScanCourse
+import edu.bnbu.student.mvp.feature.courses.DemoStudentScanInviteCode
+import edu.bnbu.student.mvp.feature.courses.CourseJoinConfirmScreen
+import edu.bnbu.student.mvp.feature.courses.buildDemoCourseJoinResponse
 import java.io.File
 import java.time.Instant
 import org.junit.After
@@ -32,6 +36,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.Assert.assertTrue
+import kotlinx.coroutines.runBlocking
 
 /**
  * Device/emulator regression coverage for the critical student journey.
@@ -153,57 +158,96 @@ class CoreJourneyUiTest {
     fun requiredActivation_isFocusedAndDoesNotOfferWorkspaceNavigation() {
         composeRule.setContent {
             BNBUStudentTheme {
-                CompositionLocalProvider(
-                    LocalContactBindingActions provides ContactBindingActions(
-                        sendEmailCode = { _, callback -> callback(Result.success(Unit)) },
-                        verifyEmailCode = { _, _, callback -> callback(Result.failure(IllegalStateException())) },
-                        sendPhoneCode = { _, callback -> callback(Result.success(Unit)) },
-                        verifyPhoneCode = { _, _, callback -> callback(Result.failure(IllegalStateException())) }
-                    )
-                ) {
-                    ContactBindingScreen(
-                        mode = ContactBindingMode.RequiredActivation,
-                        onBindingComplete = {},
-                        onLogout = {},
-                        onOpenPrivacy = {},
-                        onOpenHelp = {}
-                    )
-                }
+                ContactBindingScreen(
+                    mode = ContactBindingMode.RequiredActivation,
+                    localStore = localStore,
+                    currentEmailMasked = null,
+                    currentEmailVerified = false,
+                    expectedUserVersion = 1,
+                    onCurrentUserUpdated = {},
+                    onBindingComplete = {},
+                    onLogout = {},
+                    onOpenPrivacy = {},
+                    onOpenHelp = {}
+                )
             }
         }
 
-        composeRule.onNodeWithTag("screen.contactActivation").assertIsDisplayed()
-        composeRule.onNodeWithTag("contactActivation.logout").assertIsDisplayed()
-        composeRule.onNodeWithTag("contactActivation.privacy").assertIsDisplayed()
-        composeRule.onNodeWithTag("contactActivation.help").assertIsDisplayed()
-        assertTrue(composeRule.onAllNodesWithTag("contactBinding.back").fetchSemanticsNodes().isEmpty())
+        composeRule.onNodeWithTag("screen.emailSecurity").assertIsDisplayed()
+        composeRule.onNodeWithTag("emailSecurity.logout").assertIsDisplayed()
+        composeRule.onNodeWithTag("emailSecurity.privacy").assertIsDisplayed()
+        composeRule.onNodeWithTag("emailSecurity.help").assertIsDisplayed()
+        assertTrue(composeRule.onAllNodesWithTag("emailSecurity.back").fetchSemanticsNodes().isEmpty())
         assertTrue(composeRule.onAllNodesWithTag("screen.checkIn").fetchSemanticsNodes().isEmpty())
+
+        composeRule.activityRule.scenario.onActivity {
+            it.onBackPressedDispatcher.onBackPressed()
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("screen.emailSecurity").assertIsDisplayed()
+    }
+
+    @Test
+    fun demoCourseJoin_entersMandatoryEmailGateWithoutWorkspaceNavigation() = runBlocking {
+        val response = buildDemoCourseJoinResponse(
+            DemoStudentScanCourse,
+            CourseJoinRequestBody(
+                studentName = "Student",
+                studentNumber = "20260001",
+                gender = "female",
+                grade = "2026",
+                inviteCode = DemoStudentScanInviteCode
+            )
+        )
+        appState.acceptDirectCourseJoin(
+            response = response,
+            expectedCourseId = DemoStudentScanCourse.id,
+            allowLocalSession = true
+        )
+
+        setAppRootContent()
+        composeRule.onNodeWithTag("screen.emailSecurity").assertIsDisplayed()
+        assertTrue(composeRule.onAllNodesWithTag("screen.checkIn").fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
+    fun courseJoinForm_hasOnlyMaleAndFemaleAndStartsDisabled() {
+        composeRule.setContent {
+            BNBUStudentTheme {
+                CourseJoinConfirmScreen(
+                    inviteCode = DemoStudentScanInviteCode,
+                    course = DemoStudentScanCourse,
+                    submitCourseJoin = { error("Submit must remain disabled for an empty form") }
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("screen.courseJoinConfirm").assertIsDisplayed()
+        composeRule.onNodeWithTag("courseJoinConfirm.gender.male").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("courseJoinConfirm.gender.female").assertIsDisplayed()
+        assertTrue(composeRule.onAllNodesWithTag("courseJoinConfirm.gender.other").fetchSemanticsNodes().isEmpty())
+        composeRule.onNodeWithTag("courseJoinConfirm.submit").assertIsNotEnabled()
     }
 
     @Test
     fun managedContacts_canReplaceAnAlreadyVerifiedMethod() {
         composeRule.setContent {
             BNBUStudentTheme {
-                CompositionLocalProvider(
-                    LocalContactBindingActions provides ContactBindingActions(
-                        sendEmailCode = { _, callback -> callback(Result.success(Unit)) },
-                        verifyEmailCode = { _, _, callback -> callback(Result.success(Unit)) },
-                        sendPhoneCode = { _, callback -> callback(Result.success(Unit)) },
-                        verifyPhoneCode = { _, _, callback -> callback(Result.success(Unit)) }
-                    )
-                ) {
-                    ContactBindingScreen(
-                        mode = ContactBindingMode.ManageContacts,
-                        onBindingComplete = {},
-                        onBack = {},
-                        initialEmail = "s***@example.edu.cn",
-                        initialEmailVerified = true
-                    )
-                }
+                ContactBindingScreen(
+                    mode = ContactBindingMode.ManageContacts,
+                    localStore = localStore,
+                    currentEmailMasked = "s***@example.edu.cn",
+                    currentEmailVerified = true,
+                    expectedUserVersion = 2,
+                    onCurrentUserUpdated = {},
+                    onBindingComplete = {},
+                    onBack = {}
+                )
             }
         }
 
-        composeRule.onNodeWithTag("contactBinding.email.change").assertIsDisplayed().performClick()
-        composeRule.onNodeWithTag("contactBinding.email.value").assertIsDisplayed()
+        composeRule.onNodeWithTag("screen.emailSecurity").assertIsDisplayed()
+        composeRule.onNodeWithTag("emailSecurity.back").assertIsDisplayed()
+        composeRule.onNodeWithTag("emailSecurity.newEmail").assertIsDisplayed()
     }
 }

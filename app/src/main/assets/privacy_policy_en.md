@@ -1,10 +1,10 @@
 # BNBU Sports Privacy Policy
 
-Version: 2.1
+Version: 2.2
 
-Updated: 28 July 2026
+Updated: 11 August 2026
 
-Effective: 28 July 2026
+Effective: 11 August 2026
 
 BNBU Sports is operated for sports teaching administration at Beijing Normal University at Zhuhai. This policy applies to the student app, teacher services, and related course, attendance, activity-hour and grade services. It explains how we handle personal information and how you can exercise your rights.
 
@@ -14,7 +14,7 @@ We process information only for clear, necessary and transparent purposes, with 
 
 ## 2. Information we process
 
-To provide account and teaching services, we may process your student ID, name, school affiliation, class, contact details, account credentials, course relationship, attendance, activity records, grades, application materials and review results. We process photos, videos and files only when you choose a feature that needs them, such as an activity check-in, exemption application, appeal or feedback.
+To provide account and teaching services, we may process your student ID, name, school affiliation, class, email address, account credentials, course relationship, attendance, activity records, grades, application materials and review results. Students sign in with a one-time email code. Teachers and administrators use an email address and password. If a student cannot access email, a school administrator must verify the student's identity before adding or correcting the email address. We process photos, videos and files only when you choose a feature that needs them, such as an activity check-in, exemption application, appeal or feedback.
 
 ## 3. Android permissions
 

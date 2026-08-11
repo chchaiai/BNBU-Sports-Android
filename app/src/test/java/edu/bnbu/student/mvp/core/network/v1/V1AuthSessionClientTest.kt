@@ -261,9 +261,7 @@ class V1AuthSessionClientTest {
                     "role":"STUDENT",
                     "status":"ACTIVE",
                     "primaryEmailMasked":null,
-                    "primaryPhoneMasked":null,
                     "emailVerified":false,
-                    "phoneVerified":false,
                     "version":1
                 }
             }""".trimIndent()

@@ -6,8 +6,6 @@
     <string name="login_choose_method">Choose a sign-in method</string>
     <string name="login_email_button">Email Verification Code</string>
     <string name="login_email_hint">Use your university email</string>
-    <string name="login_phone_button">SMS Verification Code</string>
-    <string name="login_phone_hint">Use your linked mobile number</string>
     <string name="login_scan_button">Scan QR to Join Course</string>
     <string name="login_scan_hint">Open a course invitation directly</string>
     <string name="login_mock_button">Use Mock user (demo/debug)</string>
@@ -15,7 +13,7 @@
     <string name="login_privacy_policy">Privacy Policy</string>
     <string name="login_privacy_required">Read and agree to the Privacy Policy to continue.</string>
     <string name="login_other_methods">Other methods</string>
-    <string name="login_recovery">Can’t use your linked phone or email?</string>
+    <string name="login_recovery">Can’t use your linked email?</string>
     <string name="privacy_consent_eyebrow">BNBU SPORTS</string>
     <string name="privacy_consent_title">Before you begin</string>
     <string name="privacy_consent_intro">Please read and accept the Privacy Policy. We use information only as needed to provide your sports education service.</string>
@@ -115,7 +113,7 @@
     <string name="profile_offset">Offset: %1$s</string>
     <string name="profile_account_details">Account details</string>
     <string name="profile_account_security">Account and security</string>
-    <string name="profile_login_contacts">Link or change email and phone</string>
+    <string name="profile_login_contacts">Link or change sign-in email</string>
     <string name="profile_preferences">Preferences</string>
     <string name="profile_help_support">Help and support</string>
     <string name="profile_help_center">Help center</string>
@@ -168,13 +166,8 @@
     <string name="play_update_ready_title">Update ready</string>
     <string name="play_update_ready_message">The new version has downloaded. Restart the app to install it.</string>
     <string name="play_update_restart">Restart and install</string>
-    <string name="login_verification_phone_title">Sign in with mobile number</string>
-    <string name="login_verification_phone_subtitle">Enter your mobile number to receive an SMS verification code.</string>
     <string name="login_verification_email_title">Sign in with email</string>
     <string name="login_verification_email_subtitle">Enter your university email to receive a sign-in code.</string>
-    <string name="login_verification_phone_label">Mobile number</string>
-    <string name="login_verification_phone_placeholder">Enter an 11-digit mobile number</string>
-    <string name="login_verification_phone_prefix">+86</string>
     <string name="login_verification_email_label">University email</string>
     <string name="login_verification_email_placeholder">name@bnbu.edu.cn</string>
     <string name="login_verification_code_label">Verification code</string>
@@ -185,16 +178,12 @@
     <string name="login_verification_code_expiry">The code is valid for 10 minutes and can be used once.</string>
     <string name="login_verification_privacy_notice">By continuing, you acknowledge the Privacy Policy.</string>
     <string name="login_verification_switch_to_email">Use email verification instead</string>
-    <string name="login_verification_switch_to_phone">Use mobile verification instead</string>
-    <string name="login_verification_phone_invalid">Enter a valid 11-digit mainland China mobile number.</string>
     <string name="login_verification_email_invalid">Enter a valid email address.</string>
     <string name="login_verification_code_invalid">Enter the complete 6-digit verification code.</string>
-    <string name="login_verification_phone_code_sent">Verification code sent. Check your messages.</string>
     <string name="login_verification_email_code_sent">Verification code sent. Check your email.</string>
     <string name="login_verification_error_rate_limited">Too many requests. Try again in 60 seconds.</string>
     <string name="login_verification_error_expired">The code has expired. Request a new one.</string>
     <string name="login_verification_error_invalid">Incorrect code. Enter it again.</string>
     <string name="login_verification_error_request_failed">Request failed. Check your connection and try again.</string>
-    <string name="login_verification_phone_unavailable">SMS-code sign-in is not available yet. Try again later.</string>
     <string name="login_verification_email_unavailable">Email-code sign-in is not available yet. Try again later.</string>
 </resources>

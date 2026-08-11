@@ -9,7 +9,6 @@ class StudentEndpointTest {
         val contracts = listOf(
             Triple(StudentEndpoint.Health, HttpMethod.GET, "/health"),
             Triple(StudentEndpoint.Login, HttpMethod.POST, "/auth/login"),
-            Triple(StudentEndpoint.EmailLogin, HttpMethod.POST, "/auth/login/email"),
             Triple(StudentEndpoint.SportSummary, HttpMethod.GET, "/sport/summary"),
             Triple(StudentEndpoint.SportRecords, HttpMethod.POST, "/sport/records"),
             Triple(StudentEndpoint.SportRecordsList, HttpMethod.GET, "/sport/records"),
@@ -55,23 +54,9 @@ class StudentEndpointTest {
             Triple(StudentEndpoint.UpdateStudentProfile, HttpMethod.PUT, "/student/profile"),
             Triple(StudentEndpoint.UploadProof, HttpMethod.POST, "/upload/proof"),
             Triple(StudentEndpoint.StudentGrades, HttpMethod.GET, "/student/grades"),
-            Triple(StudentEndpoint.SendEmailContactCode, HttpMethod.POST, "/student/contacts/email/send-code"),
-            Triple(StudentEndpoint.VerifyEmailContactCode, HttpMethod.POST, "/student/contacts/email/verify"),
-            Triple(StudentEndpoint.SendPhoneContactCode, HttpMethod.POST, "/student/contacts/phone/send-code"),
-            Triple(StudentEndpoint.VerifyPhoneContactCode, HttpMethod.POST, "/student/contacts/phone/verify"),
             Triple(StudentEndpoint.SubmitFeedback, HttpMethod.POST, "/student/feedback"),
             Triple(StudentEndpoint.FeedbackTickets, HttpMethod.GET, "/student/feedback"),
-            Triple(StudentEndpoint.UpdateLanguagePreference, HttpMethod.PUT, "/student/preferences/language"),
-            Triple(
-                StudentEndpoint.CourseInviteLookup("BNBU-7K3P9Q"),
-                HttpMethod.GET,
-                "/course-invites/BNBU-7K3P9Q"
-            ),
-            Triple(
-                StudentEndpoint.CourseJoin("course-1"),
-                HttpMethod.POST,
-                "/courses/course-1/join"
-            )
+            Triple(StudentEndpoint.UpdateLanguagePreference, HttpMethod.PUT, "/student/preferences/language")
         )
 
         contracts.forEach { (endpoint, method, path) ->
@@ -92,10 +77,6 @@ class StudentEndpointTest {
                 scope = "current term",
                 semesterId = "2026/fall"
             ).path
-        )
-        assertEquals(
-            "/courses/course%2F1/join",
-            StudentEndpoint.CourseJoin("course/1").path
         )
     }
 }

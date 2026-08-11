@@ -25,7 +25,6 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCodeScanner
-import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -57,7 +56,6 @@ import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 @Composable
 fun LoginScreen(
     onEmailLogin: () -> Unit,
-    onPhoneLogin: () -> Unit,
     onScanJoin: () -> Unit,
     onRecoveryRequest: () -> Unit,
     onMockUserLogin: () -> Unit,
@@ -127,17 +125,6 @@ fun LoginScreen(
                     modifier = Modifier.testTag("login.email"),
                     onClick = onEmailLogin
                 )
-                Spacer(Modifier.height(12.dp))
-                LoginMethodButton(
-                    title = stringResource(R.string.login_phone_button),
-                    subtitle = stringResource(R.string.login_phone_hint),
-                    icon = Icons.Filled.Smartphone,
-                    primary = false,
-                    enabled = privacyAccepted,
-                    modifier = Modifier.testTag("login.phone"),
-                    onClick = onPhoneLogin
-                )
-
                 HorizontalDivider(
                     modifier = Modifier.padding(top = 24.dp),
                     color = colors.outlineVariant.copy(alpha = 0.6f)

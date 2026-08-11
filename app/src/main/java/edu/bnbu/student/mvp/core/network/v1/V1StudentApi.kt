@@ -11,6 +11,10 @@ import edu.bnbu.student.mvp.core.network.v1.generated.ClassSection
 import edu.bnbu.student.mvp.core.network.v1.generated.Course
 import edu.bnbu.student.mvp.core.network.v1.generated.CourseInvitePreview
 import edu.bnbu.student.mvp.core.network.v1.generated.CourseStatus
+import edu.bnbu.student.mvp.core.network.v1.generated.CourseJoinGender
+import edu.bnbu.student.mvp.core.network.v1.generated.CurrentUserData
+import edu.bnbu.student.mvp.core.network.v1.generated.EmailVerificationChallengeAccepted
+import edu.bnbu.student.mvp.core.network.v1.generated.EmailVerificationChallengeRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.Enrollment
 import edu.bnbu.student.mvp.core.network.v1.generated.EnrollmentStatus
 import edu.bnbu.student.mvp.core.network.v1.generated.Gender
@@ -21,6 +25,9 @@ import edu.bnbu.student.mvp.core.network.v1.generated.StudentSignInCodeRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.StudentSignInCodeAccepted
 import edu.bnbu.student.mvp.core.network.v1.generated.StudentSignInCodeVerificationRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.User
+import edu.bnbu.student.mvp.core.network.v1.generated.UserRole
+import edu.bnbu.student.mvp.core.network.v1.generated.UserStatus
+import edu.bnbu.student.mvp.core.network.v1.generated.VerifyEmailChallengeRequest
 import java.time.Instant
 import okhttp3.OkHttpClient
 
@@ -35,11 +42,19 @@ data class V1StudentAuthenticated(
     val requestId: String
 )
 
+data class V1EmailVerificationChallenge(
+    val challengeId: String,
+    val mode: EmailVerificationChallengeAccepted.Mode,
+    val expiresAt: Instant,
+    val requestId: String
+)
+
 data class V1StudentJoinCompleted(
     val studentProfile: edu.bnbu.student.mvp.core.network.v1.generated.StudentProfile,
     val enrollment: Enrollment,
     val course: Course,
     val classSection: ClassSection,
+    val currentUser: CurrentUserData,
     val requestId: String
 )
 
@@ -137,7 +152,6 @@ class V1StudentApi private constructor(
     suspend fun requestSignInCode(
         organizationCode: String,
         account: String,
-        channel: StudentSignInCodeRequest.Channel,
         locale: StudentSignInCodeRequest.Locale,
         intent: MutationIntent
     ): V1StudentSignInChallenge {
@@ -150,7 +164,12 @@ class V1StudentApi private constructor(
                 operationId = "requestStudentSignInCode",
                 method = V1HttpMethod.POST,
                 relativePath = "auth/student-sign-in-codes",
-                body = StudentSignInCodeRequest(organizationCode, account, channel, locale)
+                body = StudentSignInCodeRequest(
+                    organizationCode,
+                    account,
+                    StudentSignInCodeRequest.Channel.EMAIL,
+                    locale
+                )
             ).withMutationIntent(intent),
             StudentSignInCodeAccepted::class.java
         )
@@ -196,6 +215,86 @@ class V1StudentApi private constructor(
         return V1StudentAuthenticated(session.user, response.meta.requestId)
     }
 
+    suspend fun getCurrentUser(): V1ApiSuccess<CurrentUserData> {
+        val response = authorizedClient.executeCancellable<CurrentUserData>(
+            V1ApiRequest(
+                operationId = "getCurrentUser",
+                method = V1HttpMethod.GET,
+                relativePath = "me"
+            ),
+            CurrentUserData::class.java
+        )
+        requireStatus("getCurrentUser", response, setOf(200))
+        if (response.data == null) {
+            throw protocolError("getCurrentUser", response, "current user data is null")
+        }
+        return response
+    }
+
+    suspend fun requestEmailVerificationChallenge(
+        email: String,
+        locale: EmailVerificationChallengeRequest.Locale,
+        expectedVersion: Long,
+        intent: MutationIntent
+    ): V1EmailVerificationChallenge {
+        require(email.length in 3..254 && '@' in email) { "email is invalid" }
+        require(expectedVersion > 0) { "expectedVersion must be positive" }
+        val response = authorizedClient.executeCancellable<EmailVerificationChallengeAccepted>(
+            V1ApiRequest(
+                operationId = "requestCurrentUserEmailChallenge",
+                method = V1HttpMethod.POST,
+                relativePath = "me/email-verification-challenges",
+                body = EmailVerificationChallengeRequest(email, locale, expectedVersion)
+            ).withMutationIntent(intent),
+            EmailVerificationChallengeAccepted::class.java
+        )
+        requireStatus("requestCurrentUserEmailChallenge", response, setOf(202))
+        val challenge = response.data ?: throw protocolError(
+            "requestCurrentUserEmailChallenge",
+            response,
+            "email verification challenge data is null"
+        )
+        return V1EmailVerificationChallenge(
+            challengeId = requiredId("challengeId", challenge.challengeId),
+            mode = challenge.mode,
+            expiresAt = challenge.expiresAt.toInstant(),
+            requestId = response.meta.requestId
+        )
+    }
+
+    suspend fun verifyEmailChallenge(
+        challengeId: String,
+        newEmailCode: String,
+        currentEmailCode: String?,
+        intent: MutationIntent
+    ): V1ApiSuccess<CurrentUserData> {
+        requiredId("challengeId", challengeId)
+        require(newEmailCode.matches(Regex("^\\d{4,10}$"))) { "newEmailCode is invalid" }
+        require(
+            currentEmailCode == null || currentEmailCode.matches(Regex("^\\d{4,10}$"))
+        ) { "currentEmailCode is invalid" }
+        val response = authorizedClient.executeCancellable<CurrentUserData>(
+            V1ApiRequest(
+                operationId = "verifyCurrentUserEmailChallenge",
+                method = V1HttpMethod.POST,
+                relativePath = "me/email-verification-challenges/{challengeId}/verify",
+                pathSegments = listOf(
+                    "me",
+                    "email-verification-challenges",
+                    challengeId,
+                    "verify"
+                ),
+                body = VerifyEmailChallengeRequest(newEmailCode, currentEmailCode)
+            ).withMutationIntent(intent),
+            CurrentUserData::class.java
+        )
+        requireStatus("verifyCurrentUserEmailChallenge", response, setOf(200))
+        if (response.data == null) {
+            throw protocolError("verifyCurrentUserEmailChallenge", response, "current user data is null")
+        }
+        return response
+    }
+
     suspend fun previewCourseInvite(inviteToken: String): V1ApiSuccess<CourseInvitePreview> {
         validateInviteToken(inviteToken)
         val response = publicTransport.executeCancellable<CourseInvitePreview>(
@@ -225,14 +324,19 @@ class V1StudentApi private constructor(
         validateInviteToken(inviteToken)
         require(fullName.length in 1..100) { "fullName must contain 1..100 characters" }
         require(studentNumber.length in 1..32) { "studentNumber must contain 1..32 characters" }
-        require(gradeYear in 2000..2027) { "gradeYear must be in 2000..2027 for this contract" }
+        require(gradeYear in 1000..9999) { "gradeYear must be a four-digit cohort year" }
+        val courseJoinGender = when (gender) {
+            Gender.MALE -> CourseJoinGender.MALE
+            Gender.FEMALE -> CourseJoinGender.FEMALE
+            else -> throw IllegalArgumentException("gender must be MALE or FEMALE for course joining")
+        }
         val response = publicTransport.executeCancellable<JoinCapabilityTransport>(
             V1ApiRequest(
                 operationId = "issueJoinCapability",
                 method = V1HttpMethod.POST,
                 relativePath = "course-invites/{inviteToken}/join-capabilities",
                 pathSegments = listOf("course-invites", inviteToken, "join-capabilities"),
-                body = IssueJoinCapabilityRequest(fullName, studentNumber, gender, gradeYear)
+                body = IssueJoinCapabilityRequest(fullName, studentNumber, courseJoinGender, gradeYear)
             ).withMutationIntent(intent),
             JoinCapabilityTransport::class.java
         )
@@ -270,6 +374,18 @@ class V1StudentApi private constructor(
         require(result.classSection.id == capability.classSectionId) {
             "Join result does not match the capability ClassSection"
         }
+        require(result.authSession.user.role == UserRole.STUDENT) {
+            "Join result authenticated a non-student user"
+        }
+        require(
+            result.authSession.user.status == UserStatus.PENDING_CONTACT_BINDING ||
+                result.authSession.user.status == UserStatus.ACTIVE
+        ) {
+            "Join result contains an unsupported student account status"
+        }
+        require(result.studentProfile.userId == result.authSession.user.id) {
+            "Join result student profile does not match the authenticated user"
+        }
         installSessionOrThrow(
             "joinClassSectionWithInvite",
             response.meta.requestId,
@@ -280,6 +396,12 @@ class V1StudentApi private constructor(
             enrollment = result.enrollment,
             course = result.course,
             classSection = result.classSection,
+            currentUser = CurrentUserData(
+                user = result.authSession.user,
+                studentProfile = result.studentProfile,
+                teacherProfile = null,
+                adminProfile = null
+            ),
             requestId = response.meta.requestId
         )
     }

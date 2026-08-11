@@ -29,6 +29,7 @@ val configuredLocalApiBaseUrl = configuredValue("BNBU_LOCAL_API_BASE_URL")
 val configuredStagingApiBaseUrl = configuredValue("BNBU_STAGING_API_BASE_URL")
 val configuredProductionApiBaseUrl =
     configuredValue("BNBU_PRODUCTION_API_BASE_URL") ?: configuredValue("BNBU_API_BASE_URL")
+val configuredOrganizationCode = configuredValue("BNBU_ORGANIZATION_CODE")
 
 // Release signing material is deliberately external to source control.  CI must
 // supply these values as environment variables; a locally ignored
@@ -69,7 +70,7 @@ android {
         versionCode = 1
         versionName = "0.1.0-mvp"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "PRIVACY_POLICY_VERSION", "\"2.1\"")
+        buildConfigField("String", "PRIVACY_POLICY_VERSION", "\"2.2\"")
 
     }
 
@@ -96,6 +97,11 @@ android {
             buildConfigField("boolean", "BNBU_ALLOW_CLEARTEXT_API", "true")
             buildConfigField(
                 "String",
+                "BNBU_ORGANIZATION_CODE",
+                (configuredOrganizationCode ?: "BNBU").asBuildConfigString()
+            )
+            buildConfigField(
+                "String",
                 "BNBU_API_BASE_URL",
                 (configuredLocalApiBaseUrl ?: "http://10.0.2.2:3000/api/v1")
                     .asBuildConfigString()
@@ -110,6 +116,11 @@ android {
             buildConfigField("boolean", "BNBU_ALLOW_CLEARTEXT_API", "false")
             buildConfigField(
                 "String",
+                "BNBU_ORGANIZATION_CODE",
+                (configuredOrganizationCode ?: "configuration-required").asBuildConfigString()
+            )
+            buildConfigField(
+                "String",
                 "BNBU_API_BASE_URL",
                 (configuredStagingApiBaseUrl
                     ?: "https://staging-configuration-required.invalid/api/v1")
@@ -121,6 +132,11 @@ android {
             signingConfig = signingConfigs.getByName("release")
             buildConfigField("String", "BNBU_ENVIRONMENT", "production".asBuildConfigString())
             buildConfigField("boolean", "BNBU_ALLOW_CLEARTEXT_API", "false")
+            buildConfigField(
+                "String",
+                "BNBU_ORGANIZATION_CODE",
+                (configuredOrganizationCode ?: "configuration-required").asBuildConfigString()
+            )
             buildConfigField(
                 "String",
                 "BNBU_API_BASE_URL",
@@ -352,24 +368,6 @@ val normalizeGeneratedOpenApiModels by tasks.registering {
             "_100Period0(\"100.0\");",
             "_100Period0(java.math.BigDecimal(\"100.0\"));"
         )
-        rewriteModel(
-            "UpdateCurrentProfileRequest.kt",
-            """data class UpdateCurrentProfileRequest (
-
-)""",
-            """data class UpdateCurrentProfileRequest (
-
-    @SerializedName("expectedVersion")
-    val expectedVersion: kotlin.Int,
-
-    @SerializedName("primaryEmail")
-    val primaryEmail: kotlin.String? = null,
-
-    @SerializedName("primaryPhone")
-    val primaryPhone: kotlin.String? = null
-
-)"""
-        )
     }
 }
 
@@ -491,6 +489,30 @@ val validateReleaseApiBaseUrl by tasks.registering {
     }
 }
 
+fun validateOrganizationCode(environment: String) {
+    val value = configuredOrganizationCode
+    if (value == null || !value.matches(Regex("^[A-Z0-9][A-Z0-9_-]{1,31}$"))) {
+        throw GradleException(
+            "$environment builds require explicit BNBU_ORGANIZATION_CODE matching " +
+                "^[A-Z0-9][A-Z0-9_-]{1,31}$"
+        )
+    }
+}
+
+val validateStagingOrganizationCode by tasks.registering {
+    group = "verification"
+    description = "Requires an explicit organization code for staging builds."
+    inputs.property("BNBU_ORGANIZATION_CODE", configuredOrganizationCode ?: "")
+    doLast { validateOrganizationCode("Staging") }
+}
+
+val validateReleaseOrganizationCode by tasks.registering {
+    group = "verification"
+    description = "Requires an explicit organization code for release builds."
+    inputs.property("BNBU_ORGANIZATION_CODE", configuredOrganizationCode ?: "")
+    doLast { validateOrganizationCode("Release") }
+}
+
 val validateReleaseFirebaseConfiguration by tasks.registering {
     group = "verification"
     description = "Requires app/google-services.json for release builds with FCM enabled."
@@ -521,9 +543,11 @@ val validateReleaseSigningConfiguration by tasks.registering {
 tasks.configureEach {
     if (name == "preStagingBuild") {
         dependsOn(validateStagingApiBaseUrl)
+        dependsOn(validateStagingOrganizationCode)
     }
     if (name == "preReleaseBuild") {
         dependsOn(validateReleaseApiBaseUrl)
+        dependsOn(validateReleaseOrganizationCode)
         dependsOn(validateReleaseFirebaseConfiguration)
         dependsOn(validateReleaseSigningConfiguration)
     }

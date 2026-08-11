@@ -58,7 +58,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import edu.bnbu.student.mvp.core.designsystem.AppleTextButton as TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -84,16 +83,21 @@ import edu.bnbu.student.mvp.core.designsystem.BnbuSportsBrandLockup
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.model.SystemMode
-import edu.bnbu.student.mvp.core.network.StudentApiClient
+import edu.bnbu.student.mvp.core.network.CourseJoinRequestBody
+import edu.bnbu.student.mvp.core.network.v1.V1CourseJoinCoordinator
+import edu.bnbu.student.mvp.core.network.v1.V1CourseJoinIdentity
+import edu.bnbu.student.mvp.core.network.v1.generated.Gender
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.checkin.CheckInScreen
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
 import edu.bnbu.student.mvp.feature.courses.CourseJoinConfirmScreen
+import edu.bnbu.student.mvp.feature.courses.CourseJoinCompletion
 import edu.bnbu.student.mvp.feature.courses.CourseJoinInfo
 import edu.bnbu.student.mvp.feature.courses.CoursesScreen
 import edu.bnbu.student.mvp.feature.courses.EnterInviteCodeScreen
 import edu.bnbu.student.mvp.feature.courses.ScanJoinScreen
 import edu.bnbu.student.mvp.feature.courses.buildDemoCourseJoinResponse
+import edu.bnbu.student.mvp.feature.courses.toCourseJoinInfo
 import edu.bnbu.student.mvp.feature.dashboard.DashboardScreen
 import edu.bnbu.student.mvp.feature.grades.GradesScreen
 import edu.bnbu.student.mvp.feature.guide.PostEnrollmentGuideScreen
@@ -101,13 +105,10 @@ import edu.bnbu.student.mvp.feature.guide.PreLoginCourseGuideScreen
 import edu.bnbu.student.mvp.feature.help.HelpCenterScreen
 import edu.bnbu.student.mvp.feature.login.EmailLoginScreen
 import edu.bnbu.student.mvp.feature.login.LoginScreen
-import edu.bnbu.student.mvp.feature.login.PhoneLoginScreen
 import edu.bnbu.student.mvp.feature.login.RecoveryRequestScreen
-import edu.bnbu.student.mvp.feature.login.ContactBindingActions
 import edu.bnbu.student.mvp.feature.login.ContactBindingMode
 import edu.bnbu.student.mvp.feature.login.ContactBindingScreen
 import edu.bnbu.student.mvp.feature.login.ContactActivationHelpScreen
-import edu.bnbu.student.mvp.feature.login.LocalContactBindingActions
 import edu.bnbu.student.mvp.feature.notifications.NotificationSheet
 import edu.bnbu.student.mvp.feature.profile.AccountDetailsScreen
 import edu.bnbu.student.mvp.feature.profile.ProfileSettingsScreen
@@ -159,6 +160,40 @@ private enum class AuthUiState {
 private enum class ActivationSupportScreen {
     Privacy,
     Help
+}
+
+private suspend fun V1CourseJoinCoordinator.resolveCourseInvite(
+    inviteCode: String
+): CourseJoinInfo {
+    val preview = preview(inviteCode)
+    check(preview.enrollmentOpen) { "ENROLLMENT_CLOSED" }
+    return preview.toCourseJoinInfo()
+}
+
+private suspend fun V1CourseJoinCoordinator.submitCourseJoin(
+    inviteCode: String,
+    expectedClassSectionId: String,
+    body: CourseJoinRequestBody
+): CourseJoinCompletion.Authoritative {
+    val gender = when (body.gender.trim().lowercase()) {
+        "male" -> Gender.MALE
+        "female" -> Gender.FEMALE
+        else -> throw IllegalArgumentException("GENDER_UNSUPPORTED")
+    }
+    val gradeYear = body.grade.trim().toIntOrNull()
+        ?: throw IllegalArgumentException("GRADE_YEAR_INVALID")
+    return CourseJoinCompletion.Authoritative(
+        currentUser = join(
+            inviteToken = inviteCode,
+            expectedClassSectionId = expectedClassSectionId,
+            identity = V1CourseJoinIdentity(
+                fullName = body.studentName,
+                studentNumber = body.studentNumber,
+                gender = gender,
+                gradeYear = gradeYear
+            )
+        )
+    )
 }
 
 @Composable
@@ -225,6 +260,9 @@ private fun AppRootContent(
     isRestoringSession: Boolean = false,
     onRequestNotificationPermission: () -> Unit
 ) {
+    val courseJoinCoordinator = remember(localStore) {
+        V1CourseJoinCoordinator.create(localStore)
+    }
     LaunchedEffect(appState.isAuthenticated, appState.workspace.student.id, appState.requiresContactBinding) {
         exerciseSessionController.bindAccount(
             accountId = if (appState.isAuthenticated && !appState.requiresContactBinding) {
@@ -240,7 +278,6 @@ private fun AppRootContent(
     var showLoginPrivacy by rememberSaveable { mutableStateOf(false) }
     var loginPrivacyAccepted by rememberSaveable { mutableStateOf(false) }
     var showEmailLogin by rememberSaveable { mutableStateOf(false) }
-    var showPhoneLogin by rememberSaveable { mutableStateOf(false) }
     var showRecoveryRequest by rememberSaveable { mutableStateOf(false) }
     var showScanJoin by rememberSaveable { mutableStateOf(false) }
     var needsPrivacyConsent by remember { mutableStateOf(false) }
@@ -328,26 +365,20 @@ private fun AppRootContent(
                         ActivationSupportScreen.Help -> ContactActivationHelpScreen(
                             onBack = { activationSupportScreen = null }
                         )
-                        null -> CompositionLocalProvider(
-                            LocalContactBindingActions provides ContactBindingActions(
-                                sendEmailCode = appState::sendEmailContactBindingCode,
-                                verifyEmailCode = appState::verifyEmailContactBindingCode,
-                                sendPhoneCode = appState::sendPhoneContactBindingCode,
-                                verifyPhoneCode = appState::verifyPhoneContactBindingCode
-                            )
-                        ) {
+                        null -> {
                             ContactBindingScreen(
                                 mode = ContactBindingMode.RequiredActivation,
+                                localStore = localStore,
+                                currentEmailMasked = appState.contactStatus.email.masked
+                                    ?.takeIf { appState.contactStatus.email.verified && it.isNotBlank() }
+                                    ?: appState.workspace.student.email,
+                                currentEmailVerified = appState.contactStatus.email.verified,
+                                expectedUserVersion = appState.currentUserVersion,
+                                onCurrentUserUpdated = appState::acceptV1ContactActivation,
                                 onBindingComplete = {},
                                 onLogout = appState::logout,
                                 onOpenPrivacy = { activationSupportScreen = ActivationSupportScreen.Privacy },
                                 onOpenHelp = { activationSupportScreen = ActivationSupportScreen.Help },
-                                initialEmail = appState.contactStatus.email.masked
-                                    ?.takeIf { appState.contactStatus.email.verified && it.isNotBlank() }
-                                    ?: appState.workspace.student.email,
-                                initialPhone = appState.contactStatus.phone.masked.orEmpty(),
-                                initialEmailVerified = appState.contactStatus.email.verified,
-                                initialPhoneVerified = appState.contactStatus.phone.verified,
                                 activationLoading = appState.isPreparingActivatedWorkspace,
                                 activationError = appState.contactActivationLoadError,
                                 onRetryActivation = appState::retryContactActivationWorkspace
@@ -361,7 +392,8 @@ private fun AppRootContent(
                 } else {
                     AuthenticatedAppContent(
                         appState = appState,
-                        exerciseSessionController = exerciseSessionController
+                        exerciseSessionController = exerciseSessionController,
+                        localStore = localStore
                     )
                 }
             }
@@ -376,7 +408,6 @@ private fun AppRootContent(
                         initialStudentNumber = appState.workspace.student.studentNumber,
                         initialGender = appState.workspace.student.gender,
                         initialGrade = appState.workspace.student.gradeLevel,
-                        initialEmail = appState.workspace.student.email,
                         writeEnabled = appState.isWriteAllowed,
                         activeCourseId = appState.workspace.courses.firstOrNull {
                             it.isCurrent && it.hasActiveMembership
@@ -386,20 +417,34 @@ private fun AppRootContent(
                             pendingInviteCourse = null
                             showScanJoin = true
                         },
-                        onJoined = { response ->
-                            appState.acceptDirectCourseJoin(
-                                response = response,
-                                expectedCourseId = inviteCourse.id,
-                                allowLocalSession = inviteCourse.isDemoScanResult
-                            )
+                        onJoined = { completion ->
+                            when (completion) {
+                                is CourseJoinCompletion.Authoritative ->
+                                    appState.acceptV1Authentication(completion.currentUser)
+                                is CourseJoinCompletion.Demo -> appState.acceptDirectCourseJoin(
+                                    response = completion.response,
+                                    expectedCourseId = inviteCourse.id,
+                                    allowLocalSession = true
+                                )
+                            }
                             pendingInviteCode = null
                             pendingInviteCourse = null
                             showScanJoin = false
                         },
                         submitCourseJoin = if (inviteCourse.isDemoScanResult) {
-                            { body -> buildDemoCourseJoinResponse(inviteCourse, body) }
+                            { body ->
+                                CourseJoinCompletion.Demo(
+                                    buildDemoCourseJoinResponse(inviteCourse, body)
+                                )
+                            }
                         } else {
-                            null
+                            { body ->
+                                courseJoinCoordinator.submitCourseJoin(
+                                    inviteCode = inviteCode,
+                                    expectedClassSectionId = inviteCourse.id,
+                                    body = body
+                                )
+                            }
                         }
                     )
                 } else if (showScanJoin) {
@@ -409,23 +454,19 @@ private fun AppRootContent(
                             pendingInviteCourse = course
                             showScanJoin = false
                         },
-                        onBack = { showScanJoin = false }
+                        onBack = { showScanJoin = false },
+                        resolveInvite = courseJoinCoordinator::resolveCourseInvite
                     )
                 } else if (showRecoveryRequest) {
                     RecoveryRequestScreen(onBack = { showRecoveryRequest = false })
                 } else if (showEmailLogin) {
                     EmailLoginScreen(
-                        // The email-login endpoint will provide session integration when it is
-                        // available. Until then, returning to the method chooser is the only
-                        // safe success destination.
-                        onLoginSuccess = { showEmailLogin = false },
+                        localStore = localStore,
+                        onLoginSuccess = { current ->
+                            appState.acceptV1Authentication(current)
+                            showEmailLogin = false
+                        },
                         onBack = { showEmailLogin = false }
-                    )
-                } else if (showPhoneLogin) {
-                    PhoneLoginScreen(
-                        // Session integration will be supplied by the phone-login backend.
-                        onLoginSuccess = { showPhoneLogin = false },
-                        onBack = { showPhoneLogin = false }
                     )
                 } else if (!preLoginCourseGuideCompleted) {
                     PreLoginCourseGuideScreen(
@@ -441,9 +482,6 @@ private fun AppRootContent(
                     LoginScreen(
                         onEmailLogin = {
                             showEmailLogin = true
-                        },
-                        onPhoneLogin = {
-                            showPhoneLogin = true
                         },
                         onScanJoin = {
                             showScanJoin = true
@@ -605,7 +643,8 @@ private fun PreLoginPrivacyScreen(onBack: () -> Unit) {
 @Composable
 private fun AuthenticatedAppContent(
     appState: StudentAppState,
-    exerciseSessionController: ExerciseSessionController
+    exerciseSessionController: ExerciseSessionController,
+    localStore: AndroidAppLocalStore
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.Dashboard) }
     var subScreen by rememberSaveable { mutableStateOf(SubScreen.None) }
@@ -736,6 +775,7 @@ private fun AuthenticatedAppContent(
             SubScreenOverlay(
                 subScreen = renderedSubScreen,
                 appState = appState,
+                localStore = localStore,
                 exemptionTargetId = exemptionTargetId,
                 scannedInviteCode = scannedInviteCode,
                 scannedInviteCourse = scannedInviteCourse,
@@ -924,6 +964,7 @@ private fun PrivacyConsentScreen(
 private fun SubScreenOverlay(
     subScreen: SubScreen,
     appState: StudentAppState,
+    localStore: AndroidAppLocalStore,
     exemptionTargetId: String?,
     scannedInviteCode: String?,
     scannedInviteCourse: CourseJoinInfo?,
@@ -937,8 +978,8 @@ private fun SubScreenOverlay(
     onReturnToScan: () -> Unit
 ) {
     val repo = appState.apiRepository
-    val joinApiClient = remember(repo?.bearerToken) {
-        StudentApiClient().withToken(repo?.bearerToken)
+    val courseJoinCoordinator = remember(localStore) {
+        V1CourseJoinCoordinator.create(localStore)
     }
     Box(
         modifier = Modifier
@@ -979,24 +1020,18 @@ private fun SubScreenOverlay(
                 onOpenFeedback = { onNavigateFromSettings(SubScreen.Feedback) },
                 onOpenAbout = { onNavigateFromSettings(SubScreen.About) }
             )
-            SubScreen.ContactBinding -> CompositionLocalProvider(
-                LocalContactBindingActions provides ContactBindingActions(
-                    sendEmailCode = appState::sendEmailContactBindingCode,
-                    verifyEmailCode = appState::verifyEmailContactBindingCode,
-                    sendPhoneCode = appState::sendPhoneContactBindingCode,
-                    verifyPhoneCode = appState::verifyPhoneContactBindingCode
-                )
-            ) {
+            SubScreen.ContactBinding -> {
                 ContactBindingScreen(
                     mode = ContactBindingMode.ManageContacts,
-                    onBindingComplete = onReturnFromContactBinding,
-                    onBack = onReturnFromContactBinding,
-                    initialEmail = appState.contactStatus.email.masked
+                    localStore = localStore,
+                    currentEmailMasked = appState.contactStatus.email.masked
                         ?.takeIf { appState.contactStatus.email.verified && it.isNotBlank() }
                         ?: appState.workspace.student.email,
-                    initialPhone = appState.contactStatus.phone.masked.orEmpty(),
-                    initialEmailVerified = appState.contactStatus.email.verified,
-                    initialPhoneVerified = appState.contactStatus.phone.verified
+                    currentEmailVerified = appState.contactStatus.email.verified,
+                    expectedUserVersion = appState.currentUserVersion,
+                    onCurrentUserUpdated = appState::acceptV1Authentication,
+                    onBindingComplete = onReturnFromContactBinding,
+                    onBack = onReturnFromContactBinding
                 )
             }
             SubScreen.PrivacyPolicy -> PrivacyPolicyScreen(onBack = onReturnToSettings)
@@ -1027,45 +1062,57 @@ private fun SubScreenOverlay(
                         initialStudentNumber = appState.workspace.student.studentNumber,
                         initialGender = appState.workspace.student.gender,
                         initialGrade = appState.workspace.student.gradeLevel,
-                        initialEmail = appState.workspace.student.email,
                         writeEnabled = appState.isWriteAllowed,
                         activeCourseId = appState.workspace.courses.firstOrNull {
                             it.isCurrent && it.hasActiveMembership
                         }?.id,
                         onBack = onReturnToScan,
                         onEnterExistingCourse = onClose,
-                        onJoined = { response ->
-                            appState.acceptDirectCourseJoin(
-                                response = response,
-                                expectedCourseId = inviteCourse.id,
-                                allowLocalSession = inviteCourse.isDemoScanResult
-                            )
+                        onJoined = { completion ->
+                            when (completion) {
+                                is CourseJoinCompletion.Authoritative ->
+                                    appState.acceptV1Authentication(completion.currentUser)
+                                is CourseJoinCompletion.Demo -> appState.acceptDirectCourseJoin(
+                                    response = completion.response,
+                                    expectedCourseId = inviteCourse.id,
+                                    allowLocalSession = true
+                                )
+                            }
                             onClose()
                         },
-                        apiClient = joinApiClient,
                         submitCourseJoin = if (inviteCourse.isDemoScanResult) {
-                            { body -> buildDemoCourseJoinResponse(inviteCourse, body) }
+                            { body ->
+                                CourseJoinCompletion.Demo(
+                                    buildDemoCourseJoinResponse(inviteCourse, body)
+                                )
+                            }
                         } else {
-                            null
+                            { body ->
+                                courseJoinCoordinator.submitCourseJoin(
+                                    inviteCode = inviteCode,
+                                    expectedClassSectionId = inviteCourse.id,
+                                    body = body
+                                )
+                            }
                         }
                     )
                 } else {
                     ScanJoinScreen(
                         onInviteResolved = onInviteResolved,
                         onBack = onClose,
-                        apiClient = joinApiClient
+                        resolveInvite = courseJoinCoordinator::resolveCourseInvite
                     )
                 }
             }
             SubScreen.ScanJoin -> ScanJoinScreen(
                 onInviteResolved = onInviteResolved,
                 onBack = onClose,
-                apiClient = joinApiClient
+                resolveInvite = courseJoinCoordinator::resolveCourseInvite
             )
             SubScreen.EnterCode -> EnterInviteCodeScreen(
                 onInviteResolved = onInviteResolved,
                 onBack = onClose,
-                apiClient = joinApiClient
+                resolveInvite = courseJoinCoordinator::resolveCourseInvite
             )
             SubScreen.None -> Unit
         }

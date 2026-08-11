@@ -1,11 +1,12 @@
 package edu.bnbu.student.mvp.feature.courses
 
 import edu.bnbu.student.mvp.core.network.ApiHttpException
+import edu.bnbu.student.mvp.core.network.v1.generated.CourseInvitePreview
+import java.time.OffsetDateTime
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ScanJoinScreenTest {
@@ -34,48 +35,27 @@ class ScanJoinScreenTest {
     fun recognizesExpiredAndRevokedInvitations() {
         assertTrue(isInviteUnavailableError(ApiHttpException(410, "INVITE_EXPIRED")))
         assertTrue(isInviteUnavailableError(ApiHttpException(404, "invite revoked")))
-        assertTrue(isInviteUnavailableError(ApiHttpException(404, "not found")))
+        assertFalse(isInviteUnavailableError(ApiHttpException(404, "not found")))
         assertFalse(isInviteUnavailableError(ApiHttpException(500, "server error")))
     }
 
     @Test
-    fun directJoinRequiresCourseIdNameAndCode() {
-        assertFalse(CourseInviteLookupResponse().hasCourseDetails())
-        assertFalse(CourseInviteLookupResponse(courseName = "Physical Education").hasCourseDetails())
-        assertTrue(
-            CourseInviteLookupResponse(
-                data = CourseInviteCourseResponse(
-                    id = "course-1",
-                    name = "Physical Education",
-                    code = "PE-101"
-                )
-            ).hasCourseDetails()
-        )
-    }
-
-    @Test
-    fun mapsDirectJoinCourseIdAndRejectsUnavailableInvites() {
-        val available = CourseInviteLookupResponse(
-            courseId = "course-1",
-            courseName = "Physical Education",
+    fun mapsTheGeneratedV1PreviewWithoutLegacyCourseDtos() {
+        val course = CourseInvitePreview(
+            classSectionId = "section-1",
+            displayName = "Section One",
             courseCode = "PE-101",
-            joinEnabled = true
-        )
-        available.validateForDirectJoin()
-        assertEquals("course-1", available.toCourseJoinInfo().id)
+            courseName = "Physical Education",
+            semesterDisplayName = "2026 Fall",
+            teacherDisplayName = "Teacher",
+            enrollmentOpen = true,
+            expiresAt = OffsetDateTime.parse("2026-12-01T00:00:00Z")
+        ).toCourseJoinInfo()
 
-        assertThrows(InviteLookupException.Expired::class.java) {
-            available.copy(inviteStatus = "expired").validateForDirectJoin()
-        }
-        assertThrows(InviteLookupException.Revoked::class.java) {
-            available.copy(inviteStatus = "revoked").validateForDirectJoin()
-        }
-        assertThrows(InviteLookupException.Closed::class.java) {
-            available.copy(joinEnabled = false).validateForDirectJoin()
-        }
-        assertThrows(InviteLookupException.Expired::class.java) {
-            available.copy(expiresAt = "2000-01-01T00:00:00Z").validateForDirectJoin()
-        }
+        assertEquals("section-1", course.id)
+        assertEquals("Physical Education", course.name)
+        assertEquals("PE-101", course.courseNumber)
+        assertEquals("Section One", course.section)
     }
 
     @Test

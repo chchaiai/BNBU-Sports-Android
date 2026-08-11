@@ -60,7 +60,11 @@ enum class AccountStatus {
     companion object {
         fun from(value: String?): AccountStatus = entries.firstOrNull {
             it.name.equals(value?.trim(), ignoreCase = true)
-        } ?: ACTIVE
+        } ?: PENDING_CONTACT_BINDING
+
+        fun requireKnown(value: String?): AccountStatus = entries.firstOrNull {
+            it.name.equals(value?.trim(), ignoreCase = true)
+        } ?: throw IllegalArgumentException("ACCOUNT_STATUS_UNSUPPORTED")
     }
 }
 

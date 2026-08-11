@@ -5,7 +5,6 @@
     <string name="i18n_0188a023fffd57e5ff89889e2b6a680a5acb5fab0db5b5773305901a3014c674" formatted="false"><![CDATA[No courses this semester]]></string>
     <string name="i18n_03135a49fe6a960cc6452ef5ea260832dd1dfd52e8ed4b7dd4d4e06f48b54dd6" formatted="false"><![CDATA[Rejected]]></string>
     <string name="i18n_03c02857b5700735f9cb3460c9b3c13706b7d8e1b2662cb7474441b41d78fbb5" formatted="false"><![CDATA[Review the following information]]></string>
-    <string name="i18n_079b221e44fbb99949fe0072434a260528e178466a9f0c125549a6cef8f8aa5f" formatted="false"><![CDATA[Link an email and mobile number for secure sign-in and account recovery.]]></string>
     <string name="i18n_07ccbf9da43dc95ffb72c3a01617283b299078958213184c8a6531dd9e7b33b5" formatted="false"><![CDATA[e.g. +1 555 0100]]></string>
     <string name="i18n_082665971e24e4852d32e42d7f09924d3682832f8f9174aaaee2bbe151846863" formatted="false"><![CDATA[Proof check]]></string>
     <string name="i18n_09df6ec25b81dd61e67a7bf6a729df3548cb052fe711b39958a7c020e76784e9" formatted="false"><![CDATA[Some local proof is missing. Capture it again before submitting.]]></string>
@@ -101,7 +100,6 @@
     <string name="i18n_550fb8b88982cd85ff061c70b4f8cb2ba3f527bb7fd100024af1eacf0d9bc0f1" formatted="false"><![CDATA[There are no course-related check-in records for this class yet.]]></string>
     <string name="i18n_577b9ce7499b5eec60ea168c489ee45281ebeea7093eb4b76983a84d5e270a32" formatted="false"><![CDATA[The check-in time configuration is invalid. Contact an administrator.]]></string>
     <string name="i18n_57e9839c1edc058171ed6f44d9217a2cae75596fff25d7e43babab1f91b2a5a2" formatted="false"><![CDATA[Discard this exercise?]]></string>
-    <string name="i18n_580e8fbde58f298be35f72a14a7e0cb905d4cef36a66581ad0d8c891afb7738b" formatted="false"><![CDATA[SMS verification code]]></string>
     <string name="i18n_5862bcf661ecf65087354617009444b4f99ff27317b92577c34038a1506d54d4" formatted="false"><![CDATA[Not published]]></string>
     <string name="i18n_58d637f2e3a93872bcf2a018755770cc5e4c8744626861279442102163af4ade" formatted="false"><![CDATA[Ready to start]]></string>
     <string name="i18n_59e622594e4803e206dc1a084d0cf2e349f84de91bd365968bf1cc5d2cadd9f3" formatted="false"><![CDATA[The system is currently read-only; feedback submission is unavailable.]]></string>
@@ -112,11 +110,9 @@
     <string name="i18n_5f921164dbb184c5bce14b476feb25ae12ca69f706eeae2470603d4708805dc0" formatted="false"><![CDATA[Check-in hours]]></string>
     <string name="i18n_62983a5a9fdc0d249358e4512fb4ca891149705eff5c2b861aa2bca6e0b52f27" formatted="false"><![CDATA[No check-in photos or videos]]></string>
     <string name="i18n_62cffbffffeefd7a51dd624b9a633fec1fd3aaca08b5b4023fddac387e28e3bd" formatted="false"><![CDATA[Discard this record]]></string>
-    <string name="i18n_652fdd601794fce06295b95781b5a04fa442e9a91ded77eb47784cc3447805da" formatted="false"><![CDATA[Enter a valid mobile number.]]></string>
     <string name="i18n_65bff7ad17623ea376fbd4cacc2539ca44a06144b03a9cd98727d6aed5bcd8c3" formatted="false"><![CDATA[Back to check-in records]]></string>
     <string name="i18n_65fb5ae5e2dac100d0df10db7b539d78b49154daf5ec7e121b94a8bed911eb6a" formatted="false"><![CDATA[Start time]]></string>
     <string name="i18n_6668469a394449629de0ea6c78e4c9dbe42376b6cd7df7a27331563b6546bac7" formatted="false"><![CDATA[End exercise]]></string>
-    <string name="i18n_66d0f1e30466a2b7bbfa42e774b7508b84a8b7a1cabf25fa98e083d36ab5e53e" formatted="false"><![CDATA[Add or change your email and mobile number to keep your sign-in methods available.]]></string>
     <string name="i18n_67beb605e98bd8edc92db0965c6ef602a913623f9182a8a71a6172d6ee0e23f5" formatted="false"><![CDATA[Feedback history is unavailable in demo or offline mode.]]></string>
     <string name="i18n_67c5822fe169f3ab7660de48495fa38ae69b0e1e7d6a834ba7a04c22c776ae38" formatted="false"><![CDATA[Exercise within your limits. Stop immediately if you feel unwell and seek medical help when necessary.]]></string>
     <string name="i18n_68f563da140e772e7fdce0e3260f6d267df442548ce07f9dc37660ed6eacc2f7" formatted="false"><![CDATA[Cancel]]></string>
@@ -143,7 +139,6 @@
     <string name="i18n_75ce8f9f71e774cad55db15d4ea8cbe935258eba1985d9805d76981d109736cd" formatted="false"><![CDATA[No reports yet]]></string>
     <string name="i18n_768626cf289c2545bbcbd2fb5e1fefc2654d169a2e9c2206fa6504af63d93b28" formatted="false"><![CDATA[Exercise under 1 hour]]></string>
     <string name="i18n_77e378e6a3d3fbd354bc91984c6b11c7236a94f8e273c5e373ba94dda47b3049" formatted="false"><![CDATA[Describe this exercise]]></string>
-    <string name="i18n_7aa5a04a3db89a8fd9f74d8323602c2856bd148346891dfcc5e13d7f4e7b2f16" formatted="false"><![CDATA[Link mobile number]]></string>
     <string name="i18n_7ab1579985c71d668e9a43e84983bd2aec972d7930b6df1cf65f7b9bde466bec" formatted="false"><![CDATA[No on-site proof]]></string>
     <string name="i18n_7b7a69179b3709dbbf0bfeed4b2a1e09f059e548a0874284da3f6d141f39b4a4" formatted="false"><![CDATA[Submit check-in]]></string>
     <string name="i18n_7bb7b49f7a64210e7d7602ea8341eae83ee88ebd29ba32e1fec513ce62f8240e" formatted="false"><![CDATA[You can view the feedback form in demo or offline mode, but submission requires a server connection and a signed-in account.]]></string>
@@ -225,7 +220,6 @@
     <string name="i18n_bf6bb54e056c92329075203fe6f8cc035cc9b1f7ee00c13362694d60f93eb44a" formatted="false"><![CDATA[View status]]></string>
     <string name="i18n_bfa4bcd7ad51ded72fd7373c660599f334c54377df038ad42c7b052444331422" formatted="false"><![CDATA[Email]]></string>
     <string name="i18n_c139a521b943cf7ba4e8e5f1ebaf74940b81263f3d83d7cc41bed624226cc155" formatted="false"><![CDATA[Not recorded]]></string>
-    <string name="i18n_c32d1745c99df3a41d0e11e501bcf7f77357011eea6bfa43f2200b27adece6cd" formatted="false"><![CDATA[Mobile number]]></string>
     <string name="i18n_c6afb5a6ae7fbb1d702c7e9d049edb52095d124a27e99ca688b13fd275a19d11" formatted="false"><![CDATA[Unable to open the system video recorder.]]></string>
     <string name="i18n_c6f6733e2b58faf69f6b13e2fb538bc9eef43d3d11029cc8bc8a97b039005a47" formatted="false"><![CDATA[Recorded hours]]></string>
     <string name="i18n_c6fb4181a47e65f491ea7937f583bd6375fb2dcbdca9fec4586f2d1a3b2c0c19" formatted="false"><![CDATA[MMM d, yyyy HH:mm]]></string>
@@ -294,6 +288,5 @@
     <string name="i18n_4890f77c5e124ae8ae6fdbd924d69adfe014d71f6a9bb1b835b2e222ef64f64a" formatted="false"><![CDATA[Cached data is shown and may not be up to date.]]></string>
     <string name="i18n_8537aa2d58c5298dbaaaba28288342f0ea2fc194030c2211a05b31d1dcddf85b" formatted="false"><![CDATA[Link now]]></string>
     <string name="i18n_acd18037fb2167861a3ad6005478139feadc326979c3a4e6618d20ed8d44a2b6" formatted="false"><![CDATA[Link contact details]]></string>
-    <string name="i18n_cae62e1b5de72f99ada3dd9e8de3935bb61c9b9aca748126732a7f15ef63b0ad" formatted="false"><![CDATA[Link a phone number or email address to keep your account secure and make future sign-ins easier.]]></string>
     <string name="i18n_d29b5c3e2e8b213f681871eb6c3f6db9ddb1a897e61a1131b0cb0eea837bb10d" formatted="false"><![CDATA[Verify either contact method to continue.]]></string>
 </resources>

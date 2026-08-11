@@ -97,17 +97,12 @@ class StudentApiClientTest {
             StudentEndpoint.Login,
             StudentLoginRequest(account = "student", password = "secret")
         )
-        val emailLogin = client.request(
-            StudentEndpoint.EmailLogin,
-            EmailLoginRequest(email = "student@example.edu", code = "123456")
-        )
 
         assertEquals("request-key-1", submit.headers["Idempotency-Key"])
         assertEquals("request-key-1", submit.headers["Idempotency-Key"])
         assertEquals("request-key-2", markRead.headers["Idempotency-Key"])
         assertFalse(get.headers.containsKey("Idempotency-Key"))
         assertFalse(login.headers.containsKey("Idempotency-Key"))
-        assertFalse(emailLogin.headers.containsKey("Idempotency-Key"))
         assertEquals(2, generatedKeys)
     }
 

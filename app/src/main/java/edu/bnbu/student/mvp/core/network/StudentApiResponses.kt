@@ -29,22 +29,7 @@ data class ContactMethodResponse(
 )
 
 data class ContactStatusResponse(
-    val email: ContactMethodResponse = ContactMethodResponse(),
-    val phone: ContactMethodResponse = ContactMethodResponse()
-)
-
-data class SendEmailContactCodeRequest(val email: String)
-
-data class VerifyEmailContactCodeRequest(
-    val email: String,
-    val code: String
-)
-
-data class SendPhoneContactCodeRequest(val phone: String)
-
-data class VerifyPhoneContactCodeRequest(
-    val phone: String,
-    val code: String
+    val email: ContactMethodResponse = ContactMethodResponse()
 )
 
 /** Response from GET /api/v1/config/minimum-app-version. */
@@ -125,7 +110,7 @@ data class CourseJoinStudentResponse(
     val grade: String = "",
     val status: String = "正常",
     @SerializedName(value = "accountStatus", alternate = ["account_status"])
-    val accountStatus: String = "ACTIVE",
+    val accountStatus: String = "",
     val contacts: ContactStatusResponse = ContactStatusResponse()
 )
 

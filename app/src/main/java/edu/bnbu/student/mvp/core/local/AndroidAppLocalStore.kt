@@ -13,6 +13,7 @@ import edu.bnbu.student.mvp.core.model.SportHourRule
 import edu.bnbu.student.mvp.core.model.StudentWorkspace
 import java.security.KeyStore
 import java.security.MessageDigest
+import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -158,6 +159,17 @@ class AndroidAppLocalStore(
 
     fun hasAgreedPrivacyPolicy(expectedVersion: String): Boolean =
         getPrivacyConsentInfo()?.first == expectedVersion
+
+    fun getOrCreateInstallationId(): String {
+        val existing = preferences.getString(InstallationIdKey, null)
+            ?.takeIf { it.length in 1..128 }
+        if (existing != null) return existing
+        val created = "android-${UUID.randomUUID()}"
+        check(preferences.edit().putString(InstallationIdKey, created).commit()) {
+            "Could not persist installation identifier"
+        }
+        return created
+    }
 
     /** Returns the accepted policy version and ISO-8601 acceptance time, if available. */
     fun getPrivacyConsentInfo(): Pair<String, String>? {
@@ -577,6 +589,7 @@ class AndroidAppLocalStore(
         private const val AuthTokenEncryptedKey = "bnbu.student.auth.token.encrypted"
         private const val AuthTokenIvKey = "bnbu.student.auth.token.iv"
         private const val AuthSessionSchemaVersion = 2
+        private const val InstallationIdKey = "bnbu.student.installation.id.v1"
 
         private const val KEY_ALIAS = "bnbu_student_auth_key"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
