@@ -465,20 +465,6 @@ internal class ExerciseSessionController(
         }
     }
 
-    fun setDraftSelected(draftId: String, selected: Boolean) {
-        val key = boundAccountId?.let { currentDraftKey(it, state) } ?: return
-        scope.launch {
-            val updated = withContext(ioDispatcher) {
-                runCatching { mediaStore.setSelected(key, draftId, selected) }.getOrDefault(false)
-            }
-            if (updated) {
-                refreshDrafts()
-            } else {
-                message = interfaceText("更新凭证选择失败，请稍后重试。", "Could not update the proof selection. Try again later.")
-            }
-        }
-    }
-
     fun removeDraft(draftId: String) {
         val key = boundAccountId?.let { currentDraftKey(it, state) } ?: return
         if (isMediaBusy) {
@@ -764,15 +750,7 @@ internal class ExerciseSessionController(
         persistCurrentState()
     }
 
-    fun updateRemark(value: String) {
-        val current = state as? ExerciseSessionState.Finished ?: return
-        val truncatedValue = truncateExerciseRemark(value)
-        if (current.details.remark == truncatedValue) return
-        state = current.copy(details = current.details.copy(remark = truncatedValue))
-        persistCurrentState()
-    }
-
-    fun validateSelectedProofs(): Result<List<SessionMediaDraft>> {
+    fun validateReadyProofs(): Result<List<SessionMediaDraft>> {
         if (isMediaBusy) {
             return Result.failure(IllegalStateException(interfaceText("媒体仍在处理中，请稍后再提交。", "Media is still being processed. Try submitting again shortly.")))
         }
@@ -796,18 +774,13 @@ internal class ExerciseSessionController(
                 IllegalArgumentException(interfaceText("运动说明不能超过 $MaxExerciseDescriptionLength 个字符", "Exercise details cannot exceed $MaxExerciseDescriptionLength characters."))
             )
         }
-        if (finished.details.remark.length > MaxExerciseRemarkLength) {
-            return Result.failure(
-                IllegalArgumentException(interfaceText("备注不能超过 $MaxExerciseRemarkLength 个字符", "Notes cannot exceed $MaxExerciseRemarkLength characters."))
-            )
-        }
         val key = boundAccountId?.let { currentDraftKey(it, state) }
             ?: return Result.failure(IllegalStateException(interfaceText("当前没有待提交的运动会话", "There is no exercise session ready to submit.")))
-        return mediaStore.selectedForSubmission(key)
+        return mediaStore.readyForSubmission(key)
     }
 
     /** Uses only the private v1 media lifecycle; legacy multipart is intentionally unreachable. */
-    fun submitSelectedProofs(
+    fun submitReadyProofs(
         onProgress: (UploadProgress) -> Unit = {},
         onResult: (Result<Int>) -> Unit
     ) {
@@ -815,7 +788,7 @@ internal class ExerciseSessionController(
             onResult(Result.failure(IllegalStateException(interfaceText("正在处理上一项请求。", "Another request is in progress."))))
             return
         }
-        val selected = validateSelectedProofs().getOrElse {
+        val readyDrafts = validateReadyProofs().getOrElse {
             onResult(Result.failure(it))
             return
         }
@@ -851,11 +824,11 @@ internal class ExerciseSessionController(
         isSessionBusy = true
         scope.launch {
             val result = runCatching {
-                val totalBytes = selected.sumOf(SessionMediaDraft::byteCount)
-                check(totalBytes > 0L) { "Selected media is empty." }
+                val totalBytes = readyDrafts.sumOf(SessionMediaDraft::byteCount)
+                check(totalBytes > 0L) { "Captured media is empty." }
                 var completedBytes = 0L
                 val availableMedia = mutableListOf<ExerciseMediaEvidence>()
-                for (draft in selected) {
+                for (draft in readyDrafts) {
                     val file = withContext(ioDispatcher) { mediaStore.resolveFile(key, draft) }
                     val checkpoint = draft.serverMediaId?.let { mediaId ->
                         val status = draft.serverMediaStatus
@@ -922,7 +895,6 @@ internal class ExerciseSessionController(
                 record.edit(
                     ExerciseRecordForm(
                         description = finished.details.description,
-                        remark = finished.details.remark,
                         sportType = finished.details.sportType,
                         otherSportName = finished.details.customSportName
                     )

@@ -34,7 +34,6 @@ internal class SessionMediaUploadCoordinator(
         require(draft.status == SessionMediaDraftStatus.Ready) {
             "Only a ready local camera draft can be uploaded."
         }
-        require(draft.selected) { "Only a selected local camera draft can be uploaded." }
         require(draft.type != ProofMediaType.Video || draft.compressedForUpload) {
             "Uncompressed exercise video cannot be uploaded."
         }

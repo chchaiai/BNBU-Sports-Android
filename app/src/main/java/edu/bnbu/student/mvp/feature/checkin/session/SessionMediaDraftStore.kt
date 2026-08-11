@@ -40,7 +40,6 @@ internal data class SessionMediaDraft(
     val serverMediaId: String? = null,
     val serverMediaStatus: ExerciseMediaServerStatus? = null,
     val serverMediaVersion: Long? = null,
-    val selected: Boolean = false,
     val status: SessionMediaDraftStatus = SessionMediaDraftStatus.Ready
 )
 
@@ -156,24 +155,6 @@ internal class SessionMediaDraftStore(
         }
     }
 
-    @Synchronized
-    fun setSelected(
-        key: SessionDraftKey,
-        draftId: String,
-        selected: Boolean
-    ): Boolean {
-        validateKey(key)
-        val index = readAndRecoverIndex(key)
-        val draft = index.drafts.firstOrNull {
-            it.id == draftId && it.status == SessionMediaDraftStatus.Ready
-        } ?: return false
-        if (!selected && draft.serverMediaId != null) return false
-        val updated = index.copy(drafts = index.drafts.map {
-            if (it.id == draft.id) it.copy(selected = selected) else it
-        })
-        return writeIndex(key, updated)
-    }
-
     /** Records the latest server identity immediately after bind/poll succeeds. */
     @Synchronized
     fun setServerEvidence(
@@ -250,16 +231,16 @@ internal class SessionMediaDraftStore(
     }
 
     @Synchronized
-    fun selectedForSubmission(key: SessionDraftKey): Result<List<SessionMediaDraft>> = runCatching {
-        val selected = list(key).filter { it.selected }
-        selected.forEach { draft ->
+    fun readyForSubmission(key: SessionDraftKey): Result<List<SessionMediaDraft>> = runCatching {
+        val ready = list(key)
+        ready.forEach { draft ->
             val file = resolveFile(key, draft)
             check(file.isFile && file.length() == draft.byteCount) { "凭证文件不存在或已发生变化" }
             check(draft.type != ProofMediaType.Video || draft.compressedForUpload) {
                 "视频压缩尚未完成，不能上传"
             }
         }
-        ExerciseMediaPolicy.validateSelection(selected.map { draft ->
+        ExerciseMediaPolicy.validateSelection(ready.map { draft ->
             ExerciseMediaCandidate(
                 type = draft.type,
                 byteCount = draft.byteCount,
@@ -267,7 +248,7 @@ internal class SessionMediaDraftStore(
                 source = ExerciseMediaSource.CAMERA
             )
         }).getOrThrow()
-        selected
+        ready
     }
 
     @Synchronized
@@ -342,10 +323,6 @@ internal class SessionMediaDraftStore(
             compressedForUpload = compressedForUpload
                 ?: if (target.replacesCapture && target.type == ProofMediaType.Video) false
                 else original.compressedForUpload,
-            selected = if (
-                target.replacesCapture && target.type == ProofMediaType.Video &&
-                compressedForUpload != true
-            ) false else original.selected,
             coverTimestampMillis = null,
             serverMediaId = null,
             serverMediaStatus = null,

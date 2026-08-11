@@ -86,7 +86,7 @@ class V1ExerciseRecordGatewayTest {
         assertEquals("OTHER", body["sportType"].asString)
         assertEquals("Climbing", body["sportName"].asString)
         assertEquals("Morning climbing", body["description"].asString)
-        assertEquals("Felt good", body["studentRemark"].asString)
+        assertFalse(body.has("studentRemark"))
         assertEquals("android-record-1", body["clientRequestId"].asString)
         assertFalse(body.has("media"))
         assertFalse(body.has("mediaIds"))
@@ -102,7 +102,6 @@ class V1ExerciseRecordGatewayTest {
                 expectedVersion = 1L,
                 form = form().copy(
                     description = "Updated running",
-                    remark = " ",
                     sportType = "running",
                     otherSportName = null
                 )
@@ -118,7 +117,7 @@ class V1ExerciseRecordGatewayTest {
         assertEquals("RUNNING", body["sportType"].asString)
         assertEquals("Updated running", body["description"].asString)
         assertTrue(body["sportName"].isJsonNull)
-        assertTrue(body["studentRemark"].isJsonNull)
+        assertFalse(body.has("studentRemark"))
         assertFalse(body.has("media"))
         assertFalse(body.has("mediaIds"))
         assertFalse(body.has("creditType"))
@@ -169,7 +168,6 @@ class V1ExerciseRecordGatewayTest {
 
     private fun form(): ExerciseRecordForm = ExerciseRecordForm(
         description = " Morning climbing ",
-        remark = " Felt good ",
         sportType = "other",
         otherSportName = "Climbing",
         media = listOf(
@@ -224,7 +222,6 @@ class V1ExerciseRecordGatewayTest {
             "sportType":"OTHER",
             "sportName":"Climbing",
             "description":"Morning climbing",
-            "studentRemark":"Felt good",
             "actualDurationSeconds":3600,
             "pausedDurationSeconds":0,
             "creditedDurationSeconds":3600,

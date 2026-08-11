@@ -1079,7 +1079,6 @@ class StudentAppState(
         endedAtEpochMillis: Long,
         actualDurationSeconds: Long,
         note: String,
-        remark: String,
         sportType: String?,
         proofAttachments: List<ProofAttachment>,
         onResult: (Result<Unit>) -> Unit = {}
@@ -1094,26 +1093,14 @@ class StudentAppState(
             return
         }
         val normalizedDescription = note.trim()
-        val normalizedRemark = remark.trim()
-        if (creditType == CreditType.General && normalizedDescription.isBlank()) {
+        if (normalizedDescription.isBlank()) {
             failSubmission("submitExerciseCheckIn", interfaceText("请填写运动说明", "Enter exercise details."), onResult)
             return
         }
-        if (
-            creditType == CreditType.General &&
-            normalizedDescription.length > MaxOtherExerciseDescriptionLength
-        ) {
+        if (normalizedDescription.length > MaxOtherExerciseDescriptionLength) {
             failSubmission(
                 "submitExerciseCheckIn",
                 interfaceText("运动说明不能超过 $MaxOtherExerciseDescriptionLength 个字符", "Exercise details cannot exceed $MaxOtherExerciseDescriptionLength characters."),
-                onResult
-            )
-            return
-        }
-        if (normalizedRemark.length > MaxOtherExerciseDescriptionLength) {
-            failSubmission(
-                "submitExerciseCheckIn",
-                interfaceText("备注不能超过 $MaxOtherExerciseDescriptionLength 个字符", "Notes cannot exceed $MaxOtherExerciseDescriptionLength characters."),
                 onResult
             )
             return
@@ -1152,8 +1139,7 @@ class StudentAppState(
         }
 
         val submittedHours = normalizedCheckInHours(hours)
-        // Course-related check-ins do not collect or submit an exercise description.
-        val submittedDescription = if (creditType == CreditType.General) normalizedDescription else ""
+        val submittedDescription = normalizedDescription
         if (isUsingMockUser) {
             val submittedAt = Instant.ofEpochMilli(endedAtEpochMillis).toString()
             val record = CheckInRecord(
@@ -1170,7 +1156,6 @@ class StudentAppState(
                 teacherPublicFeedback = null,
                 teacherInternalNote = null,
                 note = submittedDescription,
-                remark = normalizedRemark,
                 sportType = sportType,
                 startTime = Instant.ofEpochMilli(startedAtEpochMillis).toString(),
                 endTime = submittedAt,
@@ -1236,7 +1221,6 @@ class StudentAppState(
                     courseId = associatedCourseId,
                     hours = submittedHours,
                     description = submittedDescription,
-                    remark = normalizedRemark,
                     proofFiles = proofFiles,
                     sportType = sportType,
                     startTime = Instant.ofEpochMilli(startedAtEpochMillis).toString(),
@@ -1268,7 +1252,6 @@ class StudentAppState(
                     teacherPublicFeedback = null,
                     teacherInternalNote = null,
                     note = submittedDescription,
-                    remark = normalizedRemark,
                     sportType = sportType,
                     startTime = payload.startTime,
                     endTime = payload.endTime,

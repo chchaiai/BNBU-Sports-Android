@@ -47,8 +47,6 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import edu.bnbu.student.mvp.core.designsystem.AppleButton as Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -57,6 +55,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import edu.bnbu.student.mvp.core.designsystem.AppleOutlinedButton as OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import edu.bnbu.student.mvp.core.designsystem.AppleTextButton as TextButton
@@ -86,6 +85,7 @@ import coil3.video.VideoFrameDecoder
 import edu.bnbu.student.mvp.BuildConfig
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
+import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.designsystem.ValidationPanel
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
@@ -106,7 +106,6 @@ import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionDetails
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionState
 import edu.bnbu.student.mvp.feature.checkin.session.LocationStatus
 import edu.bnbu.student.mvp.feature.checkin.session.MaxExerciseDescriptionLength
-import edu.bnbu.student.mvp.feature.checkin.session.MaxExerciseRemarkLength
 import edu.bnbu.student.mvp.feature.checkin.session.MaximumExerciseMillis
 import edu.bnbu.student.mvp.feature.checkin.session.MinimumValidExerciseMillis
 import edu.bnbu.student.mvp.feature.checkin.session.SessionCaptureTarget
@@ -1211,8 +1210,8 @@ private fun ExerciseRunningContent(
                 {
                     Text(
                         interfaceText(
-                            "计时已自动暂停，运动时长不再累计。请进入下一步补充运动说明，并至少选择 1 项现场凭证后提交打卡。",
-                            "The timer has paused and no more time will be counted. Next, add exercise notes and select at least one on-site proof item before submitting."
+                            "计时已自动暂停，运动时长不再累计。请进入下一步填写运动说明；当前保留的现场凭证会全部提交。",
+                            "The timer has paused and no more time will be counted. Next, describe the exercise; all retained on-site proof will be submitted."
                         )
                     )
                 }
@@ -1354,7 +1353,7 @@ private fun ExerciseRunningContent(
                     Spacer(Modifier.height(14.dp))
                     SessionMediaManager(
                         controller = controller,
-                        selectableForSubmission = false,
+                        submissionRequired = false,
                         onRetakeRequested = { replacementDraft = it }
                     )
                 }
@@ -1451,16 +1450,12 @@ private fun ExerciseFinishedContent(
 ) {
     var localMessage by remember { mutableStateOf<String?>(null) }
     var showAbandonConfirm by remember { mutableStateOf(false) }
-    var confirmed by remember { mutableStateOf(false) }
+    var descriptionValidationRequested by remember { mutableStateOf(false) }
     var isSubmitting by remember { mutableStateOf(false) }
     var uploadProgress by remember { mutableStateOf<UploadProgress?>(null) }
     var replacementDraft by remember { mutableStateOf<SessionMediaDraft?>(null) }
-    val selectedImageCount = controller.drafts.count {
-        it.selected && it.type == ProofMediaType.Image
-    }
-    val selectedVideoCount = controller.drafts.count {
-        it.selected && it.type == ProofMediaType.Video
-    }
+    val capturedImageCount = controller.drafts.count { it.type == ProofMediaType.Image }
+    val capturedVideoCount = controller.drafts.count { it.type == ProofMediaType.Video }
     val locationStatus by controller.locationStatus.collectAsState()
     localMessage?.let { text ->
         AlertDialog(
@@ -1495,7 +1490,7 @@ private fun ExerciseFinishedContent(
         item {
             CheckInStageHeader(
                 title = interfaceText("完成记录", "Complete record"),
-                supportingText = interfaceText("补充说明、确认现场凭证并提交", "Add notes, confirm on-site proof, and submit")
+                supportingText = interfaceText("填写运动说明并提交全部现场凭证", "Describe the exercise and submit all on-site proof")
             )
         }
         item {
@@ -1520,32 +1515,70 @@ private fun ExerciseFinishedContent(
                 }
             }
         }
-        if (state.details.creditType == CreditType.General) {
-            item {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surface,
-                shape = MaterialTheme.shapes.large
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                Text(interfaceText("运动说明", "Exercise notes"), style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(8.dp))
+        item {
+            val descriptionError = descriptionValidationRequested && state.details.description.isBlank()
+            SwissPanel {
+                Text(
+                    text = interfaceText("运动说明", "Exercise description"),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = interfaceText(
+                        "简单说明本次完成的运动内容，课程相关运动和自主运动均需填写。",
+                        "Briefly describe the exercise. This is required for both course-related and independent exercise."
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     value = state.details.description,
-                    onValueChange = { controller.updateDescription(it.take(MaxExerciseDescriptionLength)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(interfaceText("请填写本次运动内容", "Describe this exercise")) },
+                    onValueChange = {
+                        controller.updateDescription(it.take(MaxExerciseDescriptionLength))
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("checkIn.exerciseDescription"),
+                    placeholder = {
+                        Text(
+                            text = interfaceText(
+                                "例如：完成 5 公里跑步和拉伸",
+                                "For example: completed a 5 km run and stretching"
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    },
                     supportingText = {
-                        Column {
-                            Text(interfaceText("已输入 ${state.details.description.length}/$MaxExerciseDescriptionLength", "${state.details.description.length}/$MaxExerciseDescriptionLength entered"))
-                            Text(interfaceText("所有运动必填，1～$MaxExerciseDescriptionLength 字", "Required for every exercise; 1 to $MaxExerciseDescriptionLength characters."))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = if (descriptionError) {
+                                    interfaceText("请填写运动说明", "Exercise description is required")
+                                } else {
+                                    interfaceText("必填 · 1～$MaxExerciseDescriptionLength 字", "Required · 1–$MaxExerciseDescriptionLength characters")
+                                }
+                            )
+                            Text("${state.details.description.length}/$MaxExerciseDescriptionLength")
                         }
                     },
-                    minLines = 3,
-                    shape = MaterialTheme.shapes.medium
+                    isError = descriptionError,
+                    textStyle = MaterialTheme.typography.bodyLarge,
+                    minLines = 4,
+                    maxLines = 6,
+                    shape = MaterialTheme.shapes.medium,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+                        errorContainerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.16f),
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+                    )
                 )
-                }
-            }
             }
         }
         item {
@@ -1555,50 +1588,17 @@ private fun ExerciseFinishedContent(
                 shape = MaterialTheme.shapes.large
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        interfaceText("补充备注（选填）", "Additional note (optional)"),
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        interfaceText("如需补充说明，可在这里写下简短备注。", "Add a short note if there is anything else to mention."),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = state.details.remark,
-                        onValueChange = { controller.updateRemark(it.take(MaxExerciseRemarkLength)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text(interfaceText("例如：与同学一起完成训练", "For example: completed training with classmates")) },
-                        supportingText = {
-                            Text(interfaceText("${state.details.remark.length}/$MaxExerciseRemarkLength", "${state.details.remark.length}/$MaxExerciseRemarkLength"))
-                        },
-                        minLines = 2,
-                        maxLines = 4,
-                        shape = MaterialTheme.shapes.medium
-                    )
-                }
-            }
-        }
-        item {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surface,
-                shape = MaterialTheme.shapes.large
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                Text(interfaceText("现场补拍", "Take another photo"), style = MaterialTheme.typography.titleMedium)
+                Text(interfaceText("现场补拍", "Capture more proof"), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    interfaceText("运动结束后仍可现场拍照；根据当前确认规则，此处不再新增录像，也不提供相册入口。", "You may still take a photo after exercise. Under the current rules, no new videos or gallery selection are available here."),
+                    interfaceText("运动结束后仍可现场补拍照片或最长 15 秒的有声视频；不提供相册入口。", "After exercise, you can capture another photo or an audio-enabled video up to 15 seconds. Gallery selection is unavailable."),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall
                 )
                 Spacer(Modifier.height(12.dp))
                 MediaCaptureActions(
                     controller = controller,
-                    allowVideo = false,
+                    allowVideo = true,
                     lightContent = false,
                     replacementDraft = replacementDraft,
                     onReplacementRequestConsumed = { replacementDraft = null }
@@ -1607,19 +1607,19 @@ private fun ExerciseFinishedContent(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    text = interfaceText("选择打卡凭证", "Select check-in proof"),
+                    text = interfaceText("本次打卡凭证", "Check-in proof"),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    text = interfaceText("至少选择 1 项", "Select at least 1 item"),
+                    text = interfaceText("至少拍摄 1 项，当前保留素材会全部提交", "Capture at least one item; all retained media will be submitted"),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall
                 )
                 Spacer(Modifier.height(10.dp))
                 SessionMediaManager(
                     controller = controller,
-                    selectableForSubmission = true,
+                    submissionRequired = true,
                     onRetakeRequested = { replacementDraft = it }
                 )
                 }
@@ -1660,32 +1660,12 @@ private fun ExerciseFinishedContent(
                     SummaryRow(
                         interfaceText("凭证数量", "Proof count"),
                         interfaceText(
-                            interfaceText("${selectedImageCount} 张照片", "${selectedImageCount} photos") +
-                                if (selectedVideoCount > 0) interfaceText(" + ${selectedVideoCount} 个视频", " + ${selectedVideoCount} videos") else "",
-                            "${selectedImageCount} photos" + if (selectedVideoCount > 0) " + ${selectedVideoCount} videos" else ""
+                            interfaceText("${capturedImageCount} 张照片", "${capturedImageCount} photos") +
+                                if (capturedVideoCount > 0) interfaceText(" + ${capturedVideoCount} 个视频", " + ${capturedVideoCount} videos") else "",
+                            "${capturedImageCount} photos" + if (capturedVideoCount > 0) " + ${capturedVideoCount} videos" else ""
                         )
                     )
                 }
-                }
-            }
-        }
-        item {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surface,
-                shape = MaterialTheme.shapes.large
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
-                        checked = confirmed,
-                        onCheckedChange = { confirmed = it },
-                        colors = CheckboxDefaults.colors(checkedColor = CheckInBlue)
-                    )
-                    Text(
-                        interfaceText("我确认以上信息和提交的凭证内容真实有效。", "I confirm that the information and proof submitted above are truthful and valid."),
-                        modifier = Modifier.padding(end = 16.dp),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
                 }
             }
         }
@@ -1742,9 +1722,14 @@ private fun ExerciseFinishedContent(
             Button(
                 onClick = {
                     if (isSubmitting) return@Button
+                    descriptionValidationRequested = true
+                    if (state.details.description.isBlank()) {
+                        localMessage = interfaceText("请填写运动说明", "Enter an exercise description.")
+                        return@Button
+                    }
                     isSubmitting = true
                     uploadProgress = null
-                    controller.submitSelectedProofs(
+                    controller.submitReadyProofs(
                         onProgress = { uploadProgress = it }
                     ) { result ->
                         isSubmitting = false
@@ -1770,7 +1755,7 @@ private fun ExerciseFinishedContent(
                         )
                     }
                 },
-                enabled = confirmed && !isSubmitting && appState.isWriteAllowed,
+                enabled = !isSubmitting && appState.isWriteAllowed,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 54.dp),

@@ -249,7 +249,6 @@ data class SportRecordResponse(
     val creditType: String = "",
     val hours: Double = 0.0,
     val description: String? = null,
-    val remark: String? = null,
     val proofFiles: List<ProofFileResponse> = emptyList(),
     val sportType: String? = null,
     val teacherPublicFeedback: String? = null,

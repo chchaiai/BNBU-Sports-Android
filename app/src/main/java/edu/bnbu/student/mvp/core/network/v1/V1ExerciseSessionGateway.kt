@@ -158,8 +158,7 @@ internal class V1ExerciseSessionGateway(
             sportType = normalized.sportType.toContractSportType(),
             description = normalized.description,
             clientRequestId = command.clientRequestId,
-            sportName = normalized.otherSportName,
-            studentRemark = normalized.remark.ifEmpty { null }
+            sportName = normalized.otherSportName
         )
         val scope = mutationScope(operationId, "session:${command.sessionId}")
         val intent = mutationRegistry.acquire(
@@ -195,20 +194,14 @@ internal class V1ExerciseSessionGateway(
             sportType = normalized.sportType.toContractSportType(),
             sportName = normalized.otherSportName,
             description = normalized.description,
-            studentRemark = normalized.remark.ifEmpty { null }
         )
         // The contract distinguishes an omitted PATCH property from an explicit null.
-        // Gson omits nullable Kotlin properties by default, so add both nullable fields
-        // explicitly to support clearing an earlier OTHER name or student remark.
+        // Gson omits nullable Kotlin properties by default, so add sportName explicitly
+        // to support clearing an earlier OTHER name.
         val body = V1Json.gson.toJsonTree(generatedBody).asJsonObject.apply {
             add(
                 "sportName",
                 normalized.otherSportName?.let(::JsonPrimitive) ?: JsonNull.INSTANCE
-            )
-            add(
-                "studentRemark",
-                normalized.remark.takeIf(String::isNotEmpty)?.let(::JsonPrimitive)
-                    ?: JsonNull.INSTANCE
             )
         }
         val scope = mutationScope(
@@ -482,7 +475,6 @@ internal class V1ExerciseSessionGateway(
         append("\nsportType=").append(form.sportType.toContractSportType())
         append("\nsportName=").append(form.otherSportName.orEmpty())
         append("\ndescription=").append(form.description)
-        append("\nstudentRemark=").append(form.remark)
     }
 
     private fun ExerciseSessionRecord?.requireMatchingContext(

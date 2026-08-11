@@ -324,7 +324,6 @@ class ExerciseRecordCoordinatorTest {
         description: String = "morning run"
     ) = ExerciseRecordForm(
         description = description,
-        remark = "felt good",
         sportType = "running",
         media = listOf(
             ExerciseMediaReference(

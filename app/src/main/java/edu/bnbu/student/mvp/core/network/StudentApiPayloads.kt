@@ -67,7 +67,6 @@ data class SubmitSportRecordRequest(
     val courseId: String?,
     val hours: Double,
     val description: String,
-    val remark: String = "",
     val proofFiles: List<ProofFileReference>,
     val sportType: String? = null,
     val startTime: String? = null,

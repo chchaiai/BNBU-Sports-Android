@@ -30,7 +30,6 @@ class SessionMediaDraftStoreTest {
 
         assertEquals(completed, restored.single())
         assertTrue(target.file.isFile)
-        assertFalse(completed.selected)
     }
 
     @Test
@@ -118,14 +117,12 @@ class SessionMediaDraftStoreTest {
     }
 
     @Test
-    fun selectedSubmissionAcceptsOnePhotoOrOneVideo() {
+    fun readySubmissionAutomaticallyIncludesEveryRetainedDraft() {
         val store = SessionMediaDraftStore(temporaryFolder.newFolder("drafts"), clock)
         val key = SessionDraftKey("student-1", "session-1")
         val photo = capture(store, key, ProofMediaType.Image)
         val rawVideo = capture(store, key, ProofMediaType.Video)
-        assertTrue(store.setSelected(key, rawVideo.id, true))
-        assertTrue(store.selectedForSubmission(key).isFailure)
-        assertTrue(store.setSelected(key, rawVideo.id, false))
+        assertTrue(store.readyForSubmission(key).isFailure)
         val compression = store.prepareEdit(key, rawVideo.id).getOrThrow()
         compression.file.writeBytes(byteArrayOf(7, 8, 9))
         val video = store.commitFileUpdate(
@@ -134,13 +131,10 @@ class SessionMediaDraftStoreTest {
             compressedForUpload = true
         ).getOrThrow()
 
-        assertTrue(store.selectedForSubmission(key).isFailure)
-        assertTrue(store.setSelected(key, video.id, true))
-        assertEquals(listOf(video.copy(selected = true)), store.selectedForSubmission(key).getOrThrow())
-
-        assertTrue(store.setSelected(key, video.id, false))
-        assertTrue(store.setSelected(key, photo.id, true))
-        assertEquals(ProofMediaType.Image, store.selectedForSubmission(key).getOrThrow().single().type)
+        assertEquals(
+            listOf(photo.id, video.id),
+            store.readyForSubmission(key).getOrThrow().map { it.id }
+        )
     }
 
     @Test
@@ -156,10 +150,9 @@ class SessionMediaDraftStoreTest {
 
         val restored = SessionMediaDraftStore(root, clock).list(key)
         assertEquals(listOf(third.id, first.id, second.id), restored.map { it.id })
-        restored.forEach { assertTrue(store.setSelected(key, it.id, true)) }
         assertEquals(
             listOf(third.id, first.id, second.id),
-            store.selectedForSubmission(key).getOrThrow().map { it.id }
+            store.readyForSubmission(key).getOrThrow().map { it.id }
         )
     }
 
@@ -170,14 +163,12 @@ class SessionMediaDraftStoreTest {
         val key = SessionDraftKey("student-1", "session-1")
         val original = capture(store, key, ProofMediaType.Image)
         val originalFile = store.resolveFile(key, original)
-        assertTrue(store.setSelected(key, original.id, true))
 
         val target = store.prepareEdit(key, original.id).getOrThrow()
         target.file.writeBytes(byteArrayOf(9, 8, 7, 6))
         val updated = store.commitFileUpdate(target).getOrThrow()
 
         assertEquals(original.id, updated.id)
-        assertTrue(updated.selected)
         assertNotEquals(original.fileName, updated.fileName)
         assertTrue(store.resolveFile(key, updated).isFile)
         assertFalse(originalFile.exists())

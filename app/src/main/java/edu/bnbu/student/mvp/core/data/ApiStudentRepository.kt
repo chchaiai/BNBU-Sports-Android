@@ -551,7 +551,6 @@ class ApiStudentRepository(
             teacherPublicFeedback = r.teacherPublicFeedback,
             teacherInternalNote = r.teacherInternalNote,
             note = r.description ?: "",
-            remark = r.remark ?: "",
             sportType = r.sportType,
             startTime = r.startTime,
             endTime = r.endTime,

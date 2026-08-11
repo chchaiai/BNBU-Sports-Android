@@ -2004,7 +2004,6 @@ paths:
                     sportType: RUNNING
                     sportName: null
                     description: 晨跑 5 公里
-                    studentRemark: 操场内圈
                     actualDurationSeconds: 5400
                     pausedDurationSeconds: 600
                     creditedDurationSeconds: 3600
@@ -5765,7 +5764,6 @@ components:
         sportType: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
         sportName: { type: [string, 'null'], maxLength: 100 }
         description: { type: string, minLength: 1, maxLength: 200 }
-        studentRemark: { type: [string, 'null'], maxLength: 200 }
         actualDurationSeconds: { $ref: '#/components/schemas/NonNegativeSeconds' }
         pausedDurationSeconds: { $ref: '#/components/schemas/NonNegativeSeconds' }
         creditedDurationSeconds: { $ref: '#/components/schemas/NonNegativeSeconds' }
@@ -5778,7 +5776,7 @@ components:
             - { $ref: '#/components/schemas/StudentCurrentReview' }
             - { type: 'null' }
         version: { $ref: '#/components/schemas/PositiveVersion' }
-      required: [id, organizationId, semesterId, studentId, enrollmentId, classSectionId, courseId, teacherId, sessionId, businessDate, creditType, sportType, sportName, description, studentRemark, actualDurationSeconds, pausedDurationSeconds, creditedDurationSeconds, status, submittedAt, cancelledAt, clientRequestId, currentReview, version]
+      required: [id, organizationId, semesterId, studentId, enrollmentId, classSectionId, courseId, teacherId, sessionId, businessDate, creditType, sportType, sportName, description, actualDurationSeconds, pausedDurationSeconds, creditedDurationSeconds, status, submittedAt, cancelledAt, clientRequestId, currentReview, version]
     MediaEvidence:
       type: object
       additionalProperties: false
@@ -6316,7 +6314,6 @@ components:
         sportType: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
         sportName: { type: [string, 'null'], maxLength: 100 }
         description: { type: string, minLength: 1, maxLength: 200 }
-        studentRemark: { type: [string, 'null'], maxLength: 200 }
         clientRequestId: { type: string, minLength: 1, maxLength: 64 }
     UpdateExerciseRecordRequest:
       type: object
@@ -6327,14 +6324,13 @@ components:
         sportType: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
         sportName: { type: [string, 'null'], maxLength: 100 }
         description: { type: string, minLength: 1, maxLength: 200 }
-        studentRemark: { type: [string, 'null'], maxLength: 200 }
         expectedVersion: { $ref: '#/components/schemas/PositiveVersion' }
     SubmitExerciseRecordRequest:
       type: object
       additionalProperties: false
       required: [mediaIds, expectedVersion]
       properties:
-        mediaIds: { type: array, minItems: 1, uniqueItems: true, items: { $ref: '#/components/schemas/OpaqueId' } }
+        mediaIds: { type: array, minItems: 1, uniqueItems: true, items: { $ref: '#/components/schemas/OpaqueId' }, description: Complete set of AVAILABLE EXERCISE_RECORD media captured in-app for this session. Omitting any eligible item is rejected. }
         expectedVersion: { $ref: '#/components/schemas/PositiveVersion' }
     InitiateMediaUploadRequest:
       type: object

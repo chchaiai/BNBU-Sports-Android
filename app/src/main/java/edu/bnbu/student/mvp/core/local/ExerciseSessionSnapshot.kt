@@ -8,7 +8,6 @@ data class ExerciseSessionSnapshot(
     val sportType: String = "",
     val customSportName: String? = null,
     val description: String? = null,
-    val remark: String? = null,
     val startedAtEpochMillis: Long,
     val activeSegmentStartedAtEpochMillis: Long? = null,
     val pausedAtEpochMillis: Long? = null,

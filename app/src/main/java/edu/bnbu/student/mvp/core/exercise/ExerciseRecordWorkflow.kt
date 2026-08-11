@@ -26,21 +26,16 @@ internal data class ExerciseMediaReference(
 
 internal data class ExerciseRecordForm(
     val description: String = "",
-    val remark: String = "",
     val sportType: String = "",
     val otherSportName: String? = null,
     val media: List<ExerciseMediaReference> = emptyList()
 ) {
     fun normalizedForDraft(): ExerciseRecordForm {
         val normalizedDescription = description.trim()
-        val normalizedRemark = remark.trim()
         val normalizedSportType = sportType.trim()
         val normalizedOtherSportName = otherSportName?.trim()?.takeIf { it.isNotEmpty() }
         require(normalizedDescription.length in 1..MaxExerciseRecordDescriptionLength) {
             "Exercise description must contain 1 to $MaxExerciseRecordDescriptionLength characters."
-        }
-        require(normalizedRemark.length <= MaxExerciseRecordRemarkLength) {
-            "Exercise remark cannot exceed $MaxExerciseRecordRemarkLength characters."
         }
         require(normalizedSportType.isNotEmpty()) { "Sport type cannot be empty." }
         if (normalizedSportType.equals(OtherSportType, ignoreCase = true)) {
@@ -57,7 +52,6 @@ internal data class ExerciseRecordForm(
         }
         return copy(
             description = normalizedDescription,
-            remark = normalizedRemark,
             sportType = normalizedSportType,
             otherSportName = normalizedOtherSportName
         )
@@ -421,6 +415,5 @@ internal class ExerciseRecordCoordinator(
 }
 
 internal const val MaxExerciseRecordDescriptionLength = 200
-internal const val MaxExerciseRecordRemarkLength = 200
 internal const val MaxOtherSportNameLength = 100
 internal const val MaxClientRequestIdLength = 64

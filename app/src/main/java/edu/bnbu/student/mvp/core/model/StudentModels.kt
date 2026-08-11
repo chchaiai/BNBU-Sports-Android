@@ -237,8 +237,6 @@ data class CheckInRecord(
     val teacherPublicFeedback: String?,
     val teacherInternalNote: String?,
     val note: String,
-    /** Optional student-authored note, separate from the required exercise description. */
-    val remark: String = "",
     val sportType: String? = null,
     /** ISO-8601 timestamps and active duration captured by the exercise session. */
     val startTime: String? = null,

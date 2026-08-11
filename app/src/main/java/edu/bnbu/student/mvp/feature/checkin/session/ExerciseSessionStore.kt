@@ -70,7 +70,6 @@ internal fun ExerciseSessionState.toSnapshot(): ExerciseSessionSnapshot {
             sportType = details.sportType,
             customSportName = details.customSportName,
             description = details.description,
-            remark = details.remark,
             startedAtEpochMillis = startedAtEpochMillis,
             activeSegmentStartedAtEpochMillis = activeSegmentStartedAtEpochMillis,
             accumulatedActiveMillis = accumulatedActiveMillis
@@ -84,7 +83,6 @@ internal fun ExerciseSessionState.toSnapshot(): ExerciseSessionSnapshot {
             sportType = details.sportType,
             customSportName = details.customSportName,
             description = details.description,
-            remark = details.remark,
             startedAtEpochMillis = startedAtEpochMillis,
             pausedAtEpochMillis = pausedAtEpochMillis,
             accumulatedActiveMillis = accumulatedActiveMillis
@@ -98,7 +96,6 @@ internal fun ExerciseSessionState.toSnapshot(): ExerciseSessionSnapshot {
             sportType = details.sportType,
             customSportName = details.customSportName,
             description = details.description,
-            remark = details.remark,
             startedAtEpochMillis = startedAtEpochMillis,
             endedAtEpochMillis = endedAtEpochMillis,
             activeDurationMillis = activeDurationMillis,
@@ -116,8 +113,7 @@ internal fun ExerciseSessionSnapshot.toExerciseSessionStateOrNull(): ExerciseSes
         creditType = CreditType.entries.firstOrNull { it.name == creditType } ?: return null,
         sportType = sportType,
         customSportName = customSportName,
-        description = description.orEmpty(),
-        remark = remark.orEmpty()
+        description = description.orEmpty()
     )
     if (!details.isValid) return null
     return when (phase) {

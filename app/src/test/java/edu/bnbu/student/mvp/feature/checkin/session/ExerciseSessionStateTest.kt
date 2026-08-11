@@ -32,13 +32,6 @@ class ExerciseSessionStateTest {
     }
 
     @Test
-    fun exerciseRemarkIsTruncatedAtTwoHundredCharacters() {
-        val remark = "a".repeat(MaxExerciseRemarkLength + 1)
-
-        assertEquals(MaxExerciseRemarkLength, truncateExerciseRemark(remark).length)
-    }
-
-    @Test
     fun tableTennisIsAValidExerciseSport() {
         val tableTennis = ExerciseSessionDetails(CreditType.General, "table_tennis")
 

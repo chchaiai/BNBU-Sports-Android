@@ -44,8 +44,6 @@ import edu.bnbu.student.mvp.core.designsystem.AppleOutlinedButton as OutlinedBut
 import edu.bnbu.student.mvp.core.designsystem.AppleTextButton as TextButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -108,7 +106,7 @@ private val MediaManagerDanger = Color(0xFFFF3B30)
 @Composable
 internal fun SessionMediaManager(
     controller: ExerciseSessionController,
-    selectableForSubmission: Boolean,
+    submissionRequired: Boolean,
     modifier: Modifier = Modifier,
     onRetakeRequested: (SessionMediaDraft) -> Unit
 ) {
@@ -222,7 +220,7 @@ internal fun SessionMediaManager(
         }
         Spacer(Modifier.height(10.dp))
         if (displayDrafts.isEmpty()) {
-            MediaEmptyState(selectableForSubmission = selectableForSubmission)
+            MediaEmptyState(submissionRequired = submissionRequired)
         } else {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 items(displayDrafts, key = { it.id }) { draft ->
@@ -231,11 +229,9 @@ internal fun SessionMediaManager(
                         draft = draft,
                         file = file,
                         imageLoader = imageLoader,
-                        selectableForSubmission = selectableForSubmission,
                         isDragging = draggingPhotoId == draft.id,
                         allowPhotoReorder = photos.size > 1 && !controller.isMediaBusy,
                         onOpen = { previewDraftId = draft.id },
-                        onSelectedChange = { controller.setDraftSelected(draft.id, it) },
                         onPhotoMove = { direction -> movePhoto(draft.id, direction) },
                         onPhotoDragStateChange = { dragging ->
                             draggingPhotoId = if (dragging) draft.id else null
@@ -253,10 +249,10 @@ internal fun SessionMediaManager(
                 )
             }
         }
-        if (selectableForSubmission) {
+        if (submissionRequired) {
             Spacer(Modifier.height(8.dp))
             Text(
-                text = interfaceText("勾选要随本次打卡提交的素材，至少选择 1 项。", "Select the media to submit with this check-in; choose at least one item."),
+                text = interfaceText("当前保留的照片和视频会全部作为本次打卡凭证提交。", "All retained photos and videos will be submitted as proof for this check-in."),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall
             )
@@ -280,7 +276,7 @@ private fun MediaCountPill(text: String) {
 }
 
 @Composable
-private fun MediaEmptyState(selectableForSubmission: Boolean) {
+private fun MediaEmptyState(submissionRequired: Boolean) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f),
@@ -298,7 +294,7 @@ private fun MediaEmptyState(selectableForSubmission: Boolean) {
             )
             Spacer(Modifier.width(10.dp))
             Text(
-                text = if (selectableForSubmission) {
+                text = if (submissionRequired) {
                     interfaceText("请先现场拍摄至少 1 张照片或 1 个视频。", "Capture at least one on-site photo or video first.")
                 } else {
                     interfaceText("拍摄完成后，照片和视频会立即显示在这里。", "Captured photos and videos will appear here immediately.")
@@ -315,11 +311,9 @@ private fun MediaDraftThumbnail(
     draft: SessionMediaDraft,
     file: File?,
     imageLoader: ImageLoader,
-    selectableForSubmission: Boolean,
     isDragging: Boolean,
     allowPhotoReorder: Boolean,
     onOpen: () -> Unit,
-    onSelectedChange: (Boolean) -> Unit,
     onPhotoMove: (Int) -> Unit,
     onPhotoDragStateChange: (Boolean) -> Unit,
     onPhotoDragFinished: () -> Unit
@@ -361,7 +355,7 @@ private fun MediaDraftThumbnail(
     Surface(
         modifier = dragModifier
             .width(112.dp)
-            .height(if (selectableForSubmission) 144.dp else 122.dp)
+            .height(122.dp)
             .graphicsLayer {
                 scaleX = if (isDragging) 1.04f else 1f
                 scaleY = if (isDragging) 1.04f else 1f
@@ -408,22 +402,6 @@ private fun MediaDraftThumbnail(
                             .padding(horizontal = 4.dp, vertical = 2.dp),
                         color = Color.White,
                         style = MaterialTheme.typography.labelSmall
-                    )
-                }
-                if (selectableForSubmission) {
-                    Checkbox(
-                        checked = draft.selected,
-                        onCheckedChange = onSelectedChange,
-                        enabled = draft.type != ProofMediaType.Video || draft.compressedForUpload,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(1.dp)
-                            .size(30.dp),
-                        colors = CheckboxDefaults.colors(
-                            checkedColor = MediaManagerBlue,
-                            uncheckedColor = Color.White,
-                            checkmarkColor = Color.White
-                        )
                     )
                 }
             }

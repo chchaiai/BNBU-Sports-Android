@@ -8,8 +8,6 @@ import edu.bnbu.student.mvp.core.designsystem.interfaceText
 internal const val MinimumValidExerciseMillis = 60L * 60L * 1_000L
 internal const val MaximumExerciseMillis = 2L * 60L * 60L * 1_000L
 internal const val MaxExerciseDescriptionLength = 200
-/** A short optional note that accompanies, but never replaces, exercise details. */
-internal const val MaxExerciseRemarkLength = 200
 internal val ExerciseTooShortMessage: String
     get() = interfaceText(
         "运动时长未满 1 小时，本次不会计入打卡时长，计时已清零，本地草稿已清除。",
@@ -18,9 +16,6 @@ internal val ExerciseTooShortMessage: String
 
 internal fun truncateExerciseDescription(value: String): String =
     value.take(MaxExerciseDescriptionLength)
-
-internal fun truncateExerciseRemark(value: String): String =
-    value.take(MaxExerciseRemarkLength)
 
 internal data class CourseSportSelection(
     val sportType: String,
@@ -77,8 +72,7 @@ internal data class ExerciseSessionDetails(
     val creditType: CreditType,
     val sportType: String,
     val customSportName: String? = null,
-    val description: String = "",
-    val remark: String = ""
+    val description: String = ""
 ) {
     val isValid: Boolean
         get() = creditType in setOf(CreditType.CourseRelated, CreditType.General) &&

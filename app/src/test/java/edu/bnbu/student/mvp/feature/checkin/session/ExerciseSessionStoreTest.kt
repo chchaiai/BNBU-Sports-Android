@@ -50,7 +50,6 @@ class ExerciseSessionStoreTest {
             sessionId = "session-1",
             details = details.copy(
                 description = "完成一小时跑步训练",
-                remark = "和同学一起完成"
             ),
             startedAtEpochMillis = 1_000L,
             endedAtEpochMillis = 61.minutes,

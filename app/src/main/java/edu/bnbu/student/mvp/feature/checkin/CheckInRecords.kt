@@ -654,25 +654,6 @@ internal fun CheckInRecordDetail(
                 }
             }
         }
-        if (record.remark.isNotBlank()) {
-            item {
-                DetailSectionHeader(title = interfaceText("补充备注", "Additional note"))
-            }
-            item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = cs.surface,
-                    shape = MaterialTheme.shapes.large
-                ) {
-                    Text(
-                        text = record.remark,
-                        modifier = Modifier.padding(18.dp),
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            }
-        }
         openError?.let { message ->
             item { ValidationPanel(message = message) }
         }
