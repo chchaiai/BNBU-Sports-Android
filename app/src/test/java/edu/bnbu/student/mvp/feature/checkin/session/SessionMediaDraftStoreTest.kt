@@ -1,5 +1,7 @@
 package edu.bnbu.student.mvp.feature.checkin.session
 
+import edu.bnbu.student.mvp.core.exercise.ExerciseMediaEvidence
+import edu.bnbu.student.mvp.core.exercise.ExerciseMediaServerStatus
 import edu.bnbu.student.mvp.core.model.ProofMediaType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -88,6 +90,31 @@ class SessionMediaDraftStoreTest {
         assertTrue(target.file.exists())
         assertEquals(1, store.list(originalKey).size)
         assertTrue(store.list(otherKey).isEmpty())
+    }
+
+    @Test
+    fun serverCheckpointSurvivesRestartAndLocksTheUploadedDraft() {
+        val root = temporaryFolder.newFolder("drafts")
+        val key = SessionDraftKey("student-1", "session-1")
+        val store = SessionMediaDraftStore(root, clock)
+        val photo = capture(store, key, ProofMediaType.Image)
+        val evidence = ExerciseMediaEvidence(
+            mediaId = "media-1",
+            sessionId = key.sessionId,
+            mediaType = ProofMediaType.Image,
+            status = ExerciseMediaServerStatus.PROCESSING,
+            version = 4L
+        )
+
+        val checkpointed = store.setServerEvidence(key, photo.id, evidence)
+        val restored = SessionMediaDraftStore(root, clock).list(key).single()
+
+        assertEquals("media-1", checkpointed?.serverMediaId)
+        assertEquals(ExerciseMediaServerStatus.PROCESSING, restored.serverMediaStatus)
+        assertEquals(4L, restored.serverMediaVersion)
+
+        assertTrue(store.prepareEdit(key, photo.id).isFailure)
+        assertFalse(store.remove(key, photo.id))
     }
 
     @Test

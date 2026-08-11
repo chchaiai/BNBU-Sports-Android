@@ -3,7 +3,9 @@ package edu.bnbu.student.mvp.feature.checkin.session
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import edu.bnbu.student.mvp.core.exercise.ExerciseMediaCandidate
+import edu.bnbu.student.mvp.core.exercise.ExerciseMediaEvidence
 import edu.bnbu.student.mvp.core.exercise.ExerciseMediaPolicy
+import edu.bnbu.student.mvp.core.exercise.ExerciseMediaServerStatus
 import edu.bnbu.student.mvp.core.exercise.ExerciseMediaSource
 import edu.bnbu.student.mvp.core.model.ProofMediaType
 import java.io.File
@@ -34,6 +36,10 @@ internal data class SessionMediaDraft(
     val compressedForUpload: Boolean = false,
     /** A persisted video-frame position used by the thumbnail renderer. */
     val coverTimestampMillis: Long? = null,
+    /** Durable server checkpoint used to resume a partially completed batch upload. */
+    val serverMediaId: String? = null,
+    val serverMediaStatus: ExerciseMediaServerStatus? = null,
+    val serverMediaVersion: Long? = null,
     val selected: Boolean = false,
     val status: SessionMediaDraftStatus = SessionMediaDraftStatus.Ready
 )
@@ -161,10 +167,36 @@ internal class SessionMediaDraftStore(
         val draft = index.drafts.firstOrNull {
             it.id == draftId && it.status == SessionMediaDraftStatus.Ready
         } ?: return false
+        if (!selected && draft.serverMediaId != null) return false
         val updated = index.copy(drafts = index.drafts.map {
             if (it.id == draft.id) it.copy(selected = selected) else it
         })
         return writeIndex(key, updated)
+    }
+
+    /** Records the latest server identity immediately after bind/poll succeeds. */
+    @Synchronized
+    fun setServerEvidence(
+        key: SessionDraftKey,
+        draftId: String,
+        evidence: ExerciseMediaEvidence
+    ): SessionMediaDraft? {
+        validateKey(key)
+        require(evidence.sessionId == key.sessionId) { "Server media belongs to another session" }
+        val index = readAndRecoverIndex(key)
+        val draft = index.drafts.firstOrNull {
+            it.id == draftId && it.status == SessionMediaDraftStatus.Ready
+        } ?: return null
+        require(evidence.mediaType == draft.type) { "Server media type does not match the draft" }
+        val updated = draft.copy(
+            serverMediaId = evidence.mediaId,
+            serverMediaStatus = evidence.status,
+            serverMediaVersion = evidence.version
+        )
+        check(writeIndex(key, index.copy(drafts = index.drafts.map {
+            if (it.id == draft.id) updated else it
+        }))) { "Unable to persist the media upload checkpoint" }
+        return updated
     }
 
     /** Persists a user-selected video cover frame without changing the media file. */
@@ -243,6 +275,7 @@ internal class SessionMediaDraftStore(
         validateKey(key)
         val index = readIndex(key)
         val draft = index.drafts.firstOrNull { it.id == draftId } ?: return false
+        if (draft.serverMediaId != null) return false
         return removeDraftInternal(key, index, draft)
     }
 
@@ -313,7 +346,10 @@ internal class SessionMediaDraftStore(
                 target.replacesCapture && target.type == ProofMediaType.Video &&
                 compressedForUpload != true
             ) false else original.selected,
-            coverTimestampMillis = null
+            coverTimestampMillis = null,
+            serverMediaId = null,
+            serverMediaStatus = null,
+            serverMediaVersion = null
         )
         val updatedIndex = index.copy(drafts = index.drafts.map {
             if (it.id == original.id) updated else it
@@ -524,6 +560,9 @@ internal class SessionMediaDraftStore(
         val draft = index.drafts.firstOrNull {
             it.id == draftId && it.status == SessionMediaDraftStatus.Ready
         } ?: error("找不到可更新的媒体草稿")
+        check(draft.serverMediaId == null) {
+            "A media draft that has reached the server cannot be edited or replaced"
+        }
         val source = resolveFile(key, draft)
         check(source.isFile && source.length() > 0L) { "原始媒体文件不存在或已损坏" }
         val directory = sessionDirectory(key).also { directory ->

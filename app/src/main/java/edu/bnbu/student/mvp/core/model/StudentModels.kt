@@ -283,11 +283,11 @@ object ProofUploadRule {
     const val maxImageCount = 6
     const val maxVideoCount = 1
     const val maxAttachmentCount = maxImageCount + maxVideoCount
-    const val maxImageBytes = 8_000_000
+    const val maxImageBytes = 10 * 1_024 * 1_024
     const val maxVideoDurationSeconds = 15.0
 
     val summaryText: String
-        get() = "最多 $maxImageCount 张照片（每张不超过 8MB），最多 $maxVideoCount 个现场视频（累计录制不超过 15 秒）。"
+        get() = "最多 $maxImageCount 张照片（每张不超过 10 MiB），最多 $maxVideoCount 个现场视频（累计录制不超过 15 秒）。"
 
     fun limitMessage(proofs: List<ProofAttachment>): String? {
         val imageCount = proofs.count { it.type == ProofMediaType.Image }
@@ -334,7 +334,7 @@ data class ProofAttachment(
             val bytes = byteCount
             if (bytes != null) {
                 if (type == ProofMediaType.Image && bytes > ProofUploadRule.maxImageBytes) {
-                    return "图片超过 8MB"
+                    return "图片超过 10 MiB"
                 }
             }
             if (

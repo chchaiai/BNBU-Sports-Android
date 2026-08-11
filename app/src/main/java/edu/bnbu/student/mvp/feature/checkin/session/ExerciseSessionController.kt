@@ -350,6 +350,9 @@ internal class ExerciseSessionController(
         isMediaBusy = true
         scope.launch {
             val result = withContext(ioDispatcher) {
+                if (success && target.type == ProofMediaType.Image) {
+                    SessionMediaEditor.normalizeCapturedPhoto(target.file).getOrThrow()
+                }
                 val resolvedDuration = durationSeconds ?: if (success && target.type == ProofMediaType.Video) {
                     SessionMediaEditor.readVideoDurationSeconds(target.file)
                 } else {
@@ -530,6 +533,9 @@ internal class ExerciseSessionController(
                     runCatching { mediaStore.cancelFileUpdate(target) }
                     Result.failure<SessionMediaDraft>(IllegalStateException("Capture cancelled"))
                 } else {
+                    if (target.type == ProofMediaType.Image) {
+                        SessionMediaEditor.normalizeCapturedPhoto(target.file).getOrThrow()
+                    }
                     val duration = if (target.type == ProofMediaType.Video) {
                         SessionMediaEditor.readVideoDurationSeconds(target.file)
                     } else {
@@ -851,24 +857,49 @@ internal class ExerciseSessionController(
                 val availableMedia = mutableListOf<ExerciseMediaEvidence>()
                 for (draft in selected) {
                     val file = withContext(ioDispatcher) { mediaStore.resolveFile(key, draft) }
-                    var evidence = mediaCoordinator.uploadAndBind(
-                        sessionId = finished.sessionId,
-                        draft = draft,
-                        sourceFile = file
-                    ) { itemProgress ->
-                        onProgress(
-                            UploadProgress(
-                                bytesSent = (completedBytes + itemProgress.bytesSent).coerceAtMost(totalBytes),
-                                totalBytes = totalBytes
-                            )
+                    val checkpoint = draft.serverMediaId?.let { mediaId ->
+                        val status = draft.serverMediaStatus
+                        val version = draft.serverMediaVersion
+                        if (status == null || version == null) null else ExerciseMediaEvidence(
+                            mediaId = mediaId,
+                            sessionId = finished.sessionId,
+                            mediaType = draft.type,
+                            status = status,
+                            version = version
                         )
+                    }
+                    var evidence = if (checkpoint != null) {
+                        mediaCoordinator.refresh(checkpoint)
+                    } else {
+                        mediaCoordinator.uploadAndBind(
+                            sessionId = finished.sessionId,
+                            draft = draft,
+                            sourceFile = file
+                        ) { itemProgress ->
+                            onProgress(
+                                UploadProgress(
+                                    bytesSent = (completedBytes + itemProgress.bytesSent).coerceAtMost(totalBytes),
+                                    totalBytes = totalBytes
+                                )
+                            )
+                        }
+                    }
+                    withContext(ioDispatcher) {
+                        checkNotNull(mediaStore.setServerEvidence(key, draft.id, evidence)) {
+                            "The local media draft disappeared after upload."
+                        }
                     }
                     completedBytes += draft.byteCount
                     onProgress(UploadProgress(completedBytes.coerceAtMost(totalBytes), totalBytes))
 
                     var pollAttempt = 0
                     while (evidence.status != ExerciseMediaServerStatus.AVAILABLE) {
-                        check(evidence.status != ExerciseMediaServerStatus.FAILED) {
+                        check(
+                            evidence.status !in setOf(
+                                ExerciseMediaServerStatus.FAILED,
+                                ExerciseMediaServerStatus.DELETED
+                            )
+                        ) {
                             "Server rejected the uploaded media."
                         }
                         check(pollAttempt < MaximumMediaPollAttempts) {
@@ -877,6 +908,11 @@ internal class ExerciseSessionController(
                         pollAttempt += 1
                         delay(mediaPollDelayMillis)
                         evidence = mediaCoordinator.refresh(evidence)
+                        withContext(ioDispatcher) {
+                            checkNotNull(mediaStore.setServerEvidence(key, draft.id, evidence)) {
+                                "The local media draft disappeared while processing."
+                            }
+                        }
                     }
                     availableMedia += evidence
                 }

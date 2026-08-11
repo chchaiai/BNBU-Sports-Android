@@ -9,6 +9,7 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
+import edu.bnbu.student.mvp.core.exercise.ExerciseMediaPolicy
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -23,6 +24,35 @@ internal object SessionMediaEditor {
     // Keep the default generous while capping it well below the draft size limit.
     private const val MinimumBufferSize = 4 * 1_024 * 1_024
     private const val MaximumBufferSize = 16 * 1_024 * 1_024
+
+    /**
+     * Re-encodes a camera JPEG before it enters the draft store. This applies the
+     * EXIF orientation while deliberately omitting all EXIF fields (including GPS).
+     * The original is replaced only after the normalized staging file is complete.
+     */
+    fun normalizeCapturedPhoto(source: File): Result<Unit> {
+        val staging = File(source.parentFile, ".${source.name}.normalized.jpg")
+        val backup = File(source.parentFile, ".${source.name}.original.jpg")
+        return saveEditedPhoto(
+            source = source,
+            destination = staging,
+            cropAspectRatio = null,
+            rotationDegrees = 0
+        ).mapCatching {
+            check(staging.isFile && staging.length() > 0L) { "Normalized photo is empty" }
+            backup.delete()
+            check(source.renameTo(backup)) { "Could not stage the original camera photo" }
+            if (!staging.renameTo(source)) {
+                backup.renameTo(source)
+                error("Could not commit the normalized camera photo")
+            }
+            backup.delete()
+            Unit
+        }.onFailure {
+            staging.delete()
+            if (!source.exists() && backup.exists()) backup.renameTo(source)
+        }
+    }
 
     /**
      * Applies the selected center crop and quarter-turn rotation into [destination].
@@ -58,9 +88,7 @@ internal object SessionMediaEditor {
                 ?.let { aspect -> centerCrop(transformed!!, aspect) }
                 ?: transformed!!
             if (output !== transformed) cropped = output
-            check(FileOutputStream(destination, false).use { stream ->
-                output.compress(Bitmap.CompressFormat.JPEG, 92, stream)
-            }) { "无法写入编辑后的照片" }
+            writeJpegWithinLimit(output, destination)
             check(destination.length() > 0L) { "编辑后的照片为空" }
         } finally {
             bitmap.recycleSafely()
@@ -197,6 +225,16 @@ internal object SessionMediaEditor {
             sample *= 2
         }
         return sample
+    }
+
+    private fun writeJpegWithinLimit(bitmap: Bitmap, destination: File) {
+        for (quality in intArrayOf(92, 85, 78, 70, 62, 54)) {
+            check(FileOutputStream(destination, false).use { stream ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)
+            }) { "无法写入编辑后的照片" }
+            if (destination.length() in 1L..ExerciseMediaPolicy.MaxImageBytes) return
+        }
+        error("处理后的照片超过 10 MiB")
     }
 
     private fun orientationMatrix(file: File): Matrix {

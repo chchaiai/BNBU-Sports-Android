@@ -94,9 +94,12 @@ internal fun ExerciseVideoRecorderDialog(
         val providerFuture = ProcessCameraProvider.getInstance(context)
         var provider: ProcessCameraProvider? = null
         var preview: Preview? = null
+        var disposed = false
         providerFuture.addListener({
+            if (disposed) return@addListener
             runCatching {
                 provider = providerFuture.get()
+                if (disposed) return@runCatching
                 preview = Preview.Builder().build().also {
                     it.surfaceProvider = previewView.surfaceProvider
                 }
@@ -104,9 +107,17 @@ internal fun ExerciseVideoRecorderDialog(
                     .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
                     .build()
                 val capture = VideoCapture.withOutput(recorder)
+                val cameraProvider = checkNotNull(provider)
+                val selector = when {
+                    cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) ->
+                        CameraSelector.DEFAULT_BACK_CAMERA
+                    cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) ->
+                        CameraSelector.DEFAULT_FRONT_CAMERA
+                    else -> error("No camera is available for exercise video recording.")
+                }
                 provider?.bindToLifecycle(
                     lifecycleOwner,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    selector,
                     preview,
                     capture
                 )
@@ -118,12 +129,14 @@ internal fun ExerciseVideoRecorderDialog(
         }, mainExecutor)
 
         onDispose {
+            disposed = true
             recording?.stop()
             preview?.let { boundPreview ->
                 videoCapture?.let { boundCapture ->
                     provider?.unbind(boundPreview, boundCapture)
                 }
             }
+            videoCapture = null
         }
     }
 
