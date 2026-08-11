@@ -12,6 +12,10 @@ internal enum class ExerciseMediaAvailability {
     FAILED
 }
 
+/** Course-related exercise descriptions are optional; independent exercise descriptions are required. */
+internal val CreditType.requiresExerciseDescription: Boolean
+    get() = this == CreditType.General
+
 internal data class ExerciseMediaReference(
     val mediaId: String,
     val sessionId: String,

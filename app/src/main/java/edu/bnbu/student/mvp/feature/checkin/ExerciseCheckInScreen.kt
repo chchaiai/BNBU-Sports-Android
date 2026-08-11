@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -76,6 +77,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -91,6 +93,7 @@ import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.exercise.MaxOtherSportNameLength
+import edu.bnbu.student.mvp.core.exercise.requiresExerciseDescription
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.CheckInTimeWindow
 import edu.bnbu.student.mvp.core.model.ProofAttachment
@@ -714,9 +717,9 @@ private fun StatusPill(label: String, color: Color) {
 
 @Composable
 private fun CheckInSectionHeader(title: String, supportingText: String) {
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Bottom
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Text(
             text = title,
@@ -724,9 +727,9 @@ private fun CheckInSectionHeader(title: String, supportingText: String) {
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold
         )
-        Spacer(Modifier.weight(1f))
         Text(
             text = supportingText,
+            modifier = Modifier.fillMaxWidth(),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall
         )
@@ -786,22 +789,29 @@ private fun ExerciseSetupCard(
                 style = MaterialTheme.typography.titleSmall
             )
             Spacer(Modifier.height(10.dp))
-            sportOptions.chunked(4).forEachIndexed { index, rowOptions ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    rowOptions.forEach { option ->
-                        SportOptionButton(
-                            option = option,
-                            selected = sportType == option.value,
-                            modifier = Modifier.weight(1f),
-                            onClick = { onSportTypeSelected(option) }
-                        )
-                    }
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val columnCount = when {
+                    maxWidth >= 720.dp -> 4
+                    maxWidth >= 420.dp -> 3
+                    else -> 2
                 }
-                if (index != sportOptions.chunked(4).lastIndex) {
-                    Spacer(Modifier.height(8.dp))
+                val optionRows = sportOptions.chunked(columnCount)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    optionRows.forEach { rowOptions ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            rowOptions.forEach { option ->
+                                SportOptionButton(
+                                    option = option,
+                                    selected = sportType == option.value,
+                                    modifier = Modifier.weight(1f),
+                                    onClick = { onSportTypeSelected(option) }
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -866,7 +876,9 @@ private fun SportOptionButton(
                 text = interfaceText(option.label, option.englishLabel),
                 color = contentColor,
                 style = MaterialTheme.typography.labelMedium,
-                maxLines = 1
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
             )
         }
     }
@@ -1112,17 +1124,23 @@ private fun CategoryButton(
     val colors = MaterialTheme.colorScheme
     Surface(
         modifier = modifier
-            .heightIn(min = 44.dp)
+            .heightIn(min = 52.dp)
             .bnbuClickable(onClick = onClick),
         color = if (selected) CheckInBlue.copy(alpha = 0.10f) else colors.surfaceVariant.copy(alpha = 0.6f),
         shape = MaterialTheme.shapes.small
     ) {
-        Box(contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
             Text(
                 text = label,
                 color = if (selected) CheckInBlue else colors.onSurfaceVariant,
                 style = MaterialTheme.typography.labelLarge,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
             )
         }
     }
@@ -1181,7 +1199,7 @@ private fun ExerciseRunningContent(
                 }) {
                     Text(
                         if (limitReached) {
-                            interfaceText("去补充说明和凭证", "Add notes and proof")
+                            interfaceText("去核对说明和凭证", "Review description and proof")
                         } else {
                             interfaceText("确认结束", "End exercise")
                         }
@@ -1210,8 +1228,8 @@ private fun ExerciseRunningContent(
                 {
                     Text(
                         interfaceText(
-                            "计时已自动暂停，运动时长不再累计。请进入下一步填写运动说明；当前保留的现场凭证会全部提交。",
-                            "The timer has paused and no more time will be counted. Next, describe the exercise; all retained on-site proof will be submitted."
+                            "计时已自动暂停，运动时长不再累计。请进入下一步核对运动说明和现场凭证；当前保留的现场凭证会全部提交。",
+                            "The timer has paused and no more time will be counted. Next, review the exercise description and on-site proof; all retained proof will be submitted."
                         )
                     )
                 }
@@ -1456,6 +1474,7 @@ private fun ExerciseFinishedContent(
     var replacementDraft by remember { mutableStateOf<SessionMediaDraft?>(null) }
     val capturedImageCount = controller.drafts.count { it.type == ProofMediaType.Image }
     val capturedVideoCount = controller.drafts.count { it.type == ProofMediaType.Video }
+    val descriptionRequired = state.details.creditType.requiresExerciseDescription
     val locationStatus by controller.locationStatus.collectAsState()
     localMessage?.let { text ->
         AlertDialog(
@@ -1490,7 +1509,17 @@ private fun ExerciseFinishedContent(
         item {
             CheckInStageHeader(
                 title = interfaceText("完成记录", "Complete record"),
-                supportingText = interfaceText("填写运动说明并提交全部现场凭证", "Describe the exercise and submit all on-site proof")
+                supportingText = if (descriptionRequired) {
+                    interfaceText(
+                        "填写运动说明并提交全部现场凭证",
+                        "Describe the exercise and submit all on-site proof"
+                    )
+                } else {
+                    interfaceText(
+                        "可填写运动说明，并提交全部现场凭证",
+                        "Optionally describe the exercise, then submit all on-site proof"
+                    )
+                }
             )
         }
         item {
@@ -1516,19 +1545,33 @@ private fun ExerciseFinishedContent(
             }
         }
         item {
-            val descriptionError = descriptionValidationRequested && state.details.description.isBlank()
+            val descriptionError =
+                descriptionRequired &&
+                    descriptionValidationRequested &&
+                    state.details.description.isBlank()
             SwissPanel {
                 Text(
-                    text = interfaceText("运动说明", "Exercise description"),
+                    text = if (descriptionRequired) {
+                        interfaceText("运动说明（必填）", "Exercise description (required)")
+                    } else {
+                        interfaceText("运动说明（选填）", "Exercise description (optional)")
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = interfaceText(
-                        "简单说明本次完成的运动内容，课程相关运动和自主运动均需填写。",
-                        "Briefly describe the exercise. This is required for both course-related and independent exercise."
-                    ),
+                    text = if (descriptionRequired) {
+                        interfaceText(
+                            "请简要说明本次完成的自主运动内容，提交前必须填写。",
+                            "Briefly describe this independent exercise. It is required before submission."
+                        )
+                    } else {
+                        interfaceText(
+                            "可补充本次课程运动内容；不填写也可以提交。",
+                            "You may describe this course exercise, but it can be submitted without a description."
+                        )
+                    },
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall
                 )
@@ -1552,18 +1595,21 @@ private fun ExerciseFinishedContent(
                         )
                     },
                     supportingText = {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
                             Text(
                                 text = if (descriptionError) {
                                     interfaceText("请填写运动说明", "Exercise description is required")
-                                } else {
+                                } else if (descriptionRequired) {
                                     interfaceText("必填 · 1～$MaxExerciseDescriptionLength 字", "Required · 1–$MaxExerciseDescriptionLength characters")
+                                } else {
+                                    interfaceText("选填 · 最多 $MaxExerciseDescriptionLength 字", "Optional · up to $MaxExerciseDescriptionLength characters")
                                 }
                             )
-                            Text("${state.details.description.length}/$MaxExerciseDescriptionLength")
+                            Text(
+                                text = "${state.details.description.length}/$MaxExerciseDescriptionLength",
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.End
+                            )
                         }
                     },
                     isError = descriptionError,
@@ -1723,7 +1769,7 @@ private fun ExerciseFinishedContent(
                 onClick = {
                     if (isSubmitting) return@Button
                     descriptionValidationRequested = true
-                    if (state.details.description.isBlank()) {
+                    if (descriptionRequired && state.details.description.isBlank()) {
                         localMessage = interfaceText("请填写运动说明", "Enter an exercise description.")
                         return@Button
                     }

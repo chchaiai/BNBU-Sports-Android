@@ -2,6 +2,7 @@ package edu.bnbu.student.mvp.feature.checkin.session
 
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase
 import edu.bnbu.student.mvp.core.exercise.MaxOtherSportNameLength
+import edu.bnbu.student.mvp.core.exercise.requiresExerciseDescription
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 
@@ -16,6 +17,16 @@ internal val ExerciseTooShortMessage: String
 
 internal fun truncateExerciseDescription(value: String): String =
     value.take(MaxExerciseDescriptionLength)
+
+/** Keeps course descriptions optional in the UI while satisfying the current API contract. */
+internal fun ExerciseSessionDetails.descriptionForSubmission(): String {
+    val normalized = description.trim()
+    if (normalized.isNotEmpty()) return normalized
+    check(creditType == CreditType.CourseRelated) {
+        "Independent exercise description cannot be empty."
+    }
+    return interfaceText("课程相关运动", "Course-related exercise")
+}
 
 internal data class CourseSportSelection(
     val sportType: String,
