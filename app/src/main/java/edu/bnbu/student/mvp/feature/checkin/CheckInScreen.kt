@@ -1,7 +1,9 @@
 package edu.bnbu.student.mvp.feature.checkin
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Environment
@@ -31,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
@@ -152,6 +155,18 @@ internal fun ProofAttachmentPanel(
             onFailure = { notice = interfaceText("无法打开系统相机，请检查相机是否可用。", "Could not open the system camera. Check that it is available.") }
         )
     }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            launchCamera(ProofMediaType.Image)
+        } else {
+            notice = interfaceText(
+                "现场拍照需要相机权限。",
+                "On-site photos require camera permission."
+            )
+        }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         val isCaptureInProgress = pendingPhoto != null
@@ -162,7 +177,15 @@ internal fun ProofAttachmentPanel(
                 enabled = enabled && !isCaptureInProgress && totalProofCount < ProofUploadRule.maxAttachmentCount &&
                     (existingProofs + proofAttachments).count { it.type == ProofMediaType.Image } <
                     ProofUploadRule.maxImageCount,
-                onClick = { launchCamera(ProofMediaType.Image) },
+                onClick = {
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                        PackageManager.PERMISSION_GRANTED
+                    ) {
+                        launchCamera(ProofMediaType.Image)
+                    } else {
+                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                    }
+                },
                 modifier = Modifier.weight(1f)
             ) { Text(interfaceText("现场拍照", "Take photo")) }
         }

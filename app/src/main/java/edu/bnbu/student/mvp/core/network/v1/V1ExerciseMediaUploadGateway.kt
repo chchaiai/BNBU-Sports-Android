@@ -57,7 +57,18 @@ internal class V1ExerciseMediaUploadGateway(
         // Keep this intent active after initiation. If object transfer fails, retrying the
         // same local draft must replay the same server upload session instead of allocating
         // a second mediaId and consuming another media quota slot.
-        return response.requireCreatedUploadSession(operationId).toDomain(clock())
+        return try {
+            response.requireCreatedUploadSession(operationId).toDomain(clock())
+        } catch (error: IllegalArgumentException) {
+            // A successfully cached initiation can outlive its signed URL. Do not
+            // pin this process to that expired idempotency result forever; the next
+            // retry must obtain a new intent so the backend can fail/release the old
+            // PENDING_UPLOAD row and create a fresh session.
+            if (error.message == ExpiredUploadSessionMessage) {
+                mutationRegistry.abandon(intent)
+            }
+            throw error
+        }
     }
 
     override suspend fun confirmUpload(
@@ -221,7 +232,7 @@ internal class V1ExerciseMediaUploadGateway(
 
     private fun ContractMediaUploadSession.toDomain(now: Instant): ExerciseMediaUploadSession {
         val expiration = expiresAt.toInstant()
-        require(expiration.isAfter(now)) { "Media upload session is already expired." }
+        require(expiration.isAfter(now)) { ExpiredUploadSessionMessage }
         return ExerciseMediaUploadSession(
             uploadSessionId = uploadSessionId,
             mediaId = mediaId,
@@ -272,5 +283,9 @@ internal class V1ExerciseMediaUploadGateway(
             },
             version = version
         )
+    }
+
+    private companion object {
+        const val ExpiredUploadSessionMessage = "Media upload session is already expired."
     }
 }

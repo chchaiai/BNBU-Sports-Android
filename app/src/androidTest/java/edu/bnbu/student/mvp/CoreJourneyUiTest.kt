@@ -47,6 +47,7 @@ class CoreJourneyUiTest {
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     private lateinit var localStore: AndroidAppLocalStore
+    private lateinit var appState: StudentAppState
     private lateinit var exerciseController: ExerciseSessionController
 
     @Before
@@ -59,12 +60,14 @@ class CoreJourneyUiTest {
         localStore.markOnboardingCompleted(MockStudentWorkspace.studentId)
         localStore.markHealthReminderShown(MockStudentWorkspace.studentId)
 
-        val appState = StudentAppState(localStore = localStore, cacheDir = context.cacheDir)
+        appState = StudentAppState(localStore = localStore, cacheDir = context.cacheDir)
         exerciseController = ExerciseSessionController(
             localStore = localStore,
             mediaRootDirectory = File(context.cacheDir, "core-journey-ui-test")
         )
+    }
 
+    private fun setAppRootContent() {
         composeRule.setContent {
             BNBUStudentTheme {
                 AppRootScreen(
@@ -84,6 +87,7 @@ class CoreJourneyUiTest {
 
     @Test
     fun mockLogin_canStartCheckIn_andOpenGrades() {
+        setAppRootContent()
         composeRule.waitUntil(timeoutMillis = 5_000) {
             runCatching {
                 composeRule.onNodeWithTag("login.mockUser").assertIsEnabled()
@@ -114,6 +118,7 @@ class CoreJourneyUiTest {
 
     @Test
     fun bottomNavigation_switchesRepeatedlyAcrossAllTabs() {
+        setAppRootContent()
         composeRule.waitUntil(timeoutMillis = 5_000) {
             runCatching {
                 composeRule.onNodeWithTag("login.mockUser").assertIsEnabled()

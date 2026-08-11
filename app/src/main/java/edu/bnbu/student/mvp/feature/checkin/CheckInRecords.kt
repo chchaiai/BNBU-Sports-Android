@@ -69,10 +69,8 @@ import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.state.StudentAppState
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
+import edu.bnbu.student.mvp.core.time.studentLocalRecordDateText
+import edu.bnbu.student.mvp.core.time.studentLocalRecordDateTimeText
 
 @Composable
 internal fun RecordListIntro(records: List<CheckInRecord>) {
@@ -292,7 +290,8 @@ private fun CompactMetadata(
 }
 
 private fun CheckInRecord.submittedDate(): String =
-    submittedAt.substringBefore(' ').ifBlank { interfaceText("未提供", "Not available") }
+    submittedAt.studentLocalRecordDateText(AppLanguagePreferences.currentLocale)
+        ?: interfaceText("未提供", "Not available")
 
 private fun CheckInRecord.courseDisplayName(appState: StudentAppState): String {
     val matchedCourse = courseId?.let { id ->
@@ -595,7 +594,7 @@ internal fun CheckInRecordDetail(
                     DetailInfoRow(
                         icon = Icons.Filled.Timer,
                         label = interfaceText("提交时间", "Submitted"),
-                        value = record.submittedAt
+                        value = record.submittedAt.recordDetailTimeText()
                     )
                     HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
                     DetailInfoRow(
@@ -819,16 +818,8 @@ private fun RecordResultCard(record: CheckInRecord) {
 }
 
 private fun String?.recordDetailTimeText(): String {
-    val value = this?.takeIf { it.isNotBlank() } ?: return interfaceText("未提供", "Not available")
-    return runCatching {
-        Instant.parse(value)
-            .atZone(ZoneId.systemDefault())
-            .format(
-                DateTimeFormatter
-                    .ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
-                    .withLocale(AppLanguagePreferences.currentLocale)
-            )
-    }.getOrDefault(value)
+    return studentLocalRecordDateTimeText(AppLanguagePreferences.currentLocale)
+        ?: interfaceText("未提供", "Not available")
 }
 
 private fun CheckInRecord.actualDurationDetailText(): String {

@@ -20,6 +20,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -27,6 +28,7 @@ import org.junit.Test
 
 class V1ExerciseMediaUploadGatewayTest {
     private lateinit var server: MockWebServer
+    private lateinit var client: V1AuthorizedApiClient
     private lateinit var gateway: V1ExerciseMediaUploadGateway
 
     @Before
@@ -34,7 +36,7 @@ class V1ExerciseMediaUploadGatewayTest {
         server = MockWebServer()
         server.start()
         val store = MediaCredentialStore(authSession())
-        val client = V1AuthorizedApiClient.create(
+        client = V1AuthorizedApiClient.create(
             credentialStore = store,
             baseUrl = server.url("/api/v1").toString().trimEnd('/'),
             httpClient = OkHttpClient.Builder()
@@ -160,6 +162,28 @@ class V1ExerciseMediaUploadGatewayTest {
     }
 
     @Test
+    fun expiredSuccessfulInitiationIsAbandonedBeforeTheNextRetry() = runBlocking {
+        var generated = 0
+        val expiringGateway = V1ExerciseMediaUploadGateway(
+            authorizedClient = client,
+            clock = { FixedNow },
+            mutationRegistry = MutationIntentRegistry { "media-expiry-${++generated}" }
+        )
+        server.enqueue(uploadSessionResponse(expiresAt = "2026-08-07T12:00:00Z"))
+        server.enqueue(uploadSessionResponse())
+
+        assertTrue(runCatching { expiringGateway.initiateUpload(imageCommand()) }.isFailure)
+        assertEquals("media-1", expiringGateway.initiateUpload(imageCommand()).mediaId)
+
+        val expired = server.takeRequest()
+        val refreshed = server.takeRequest()
+        assertNotEquals(
+            expired.getHeader("Idempotency-Key"),
+            refreshed.getHeader("Idempotency-Key")
+        )
+    }
+
+    @Test
     fun signedUploadValuesAreRedactedFromSessionStringRepresentation() = runBlocking {
         server.enqueue(uploadSessionResponse())
 
@@ -237,7 +261,9 @@ class V1ExerciseMediaUploadGatewayTest {
         fileSizeBytes = 1024L
     )
 
-    private fun uploadSessionResponse(): MockResponse = MockResponse()
+    private fun uploadSessionResponse(
+        expiresAt: String = "2026-08-07T12:05:00Z"
+    ): MockResponse = MockResponse()
         .setResponseCode(201)
         .setHeader("X-Request-ID", "req-upload")
         .setBody(
@@ -248,7 +274,7 @@ class V1ExerciseMediaUploadGatewayTest {
                     "uploadUrl":"https://storage.example.test/private?signature=signature-secret",
                     "uploadMethod":"PUT",
                     "requiredHeaders":{"Content-Type":"image/jpeg","x-upload-token":"header-secret"},
-                    "expiresAt":"2026-08-07T12:05:00Z"
+                    "expiresAt":"$expiresAt"
                 },
                 "meta":{"requestId":"req-upload"}
             }""".trimIndent()
