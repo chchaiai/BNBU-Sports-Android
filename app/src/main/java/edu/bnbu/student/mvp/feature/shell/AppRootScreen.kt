@@ -69,6 +69,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -79,7 +80,6 @@ import edu.bnbu.student.mvp.BuildConfig
 import edu.bnbu.student.mvp.R
 import edu.bnbu.student.mvp.core.designsystem.BNBULayout
 import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
-import edu.bnbu.student.mvp.core.designsystem.BnbuSportsBrandLockup
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.model.SystemMode
@@ -150,8 +150,6 @@ enum class SubScreen {
 }
 
 private enum class AuthUiState {
-    Restoring,
-    CheckingPrivacyConsent,
     PrivacyConsent,
     Authenticated,
     Login
@@ -201,52 +199,63 @@ internal fun AppRootScreen(
     appState: StudentAppState,
     exerciseSessionController: ExerciseSessionController,
     localStore: AndroidAppLocalStore,
-    isRestoringSession: Boolean = false,
+    initialPrivacyConsentRequired: Boolean = false,
+    onPrivacyConsentAccepted: () -> Unit = {},
+    onInitialTargetReady: () -> Unit = {},
     onRequestNotificationPermission: () -> Unit = {}
 ) {
-    when (appState.systemMode) {
-        SystemMode.MAINTENANCE -> MaintenancePage(
-            message = appState.systemModeStatus.message,
-            estimatedRecoveryTime = appState.systemModeStatus.estimatedRecoveryTime
-        )
-        SystemMode.NORMAL -> {
-            val plannedMaintenanceAt = appState.systemModeStatus.plannedMaintenanceAt
-            if (plannedMaintenanceAt == null) {
-                AppRootContent(
-                    appState = appState,
-                    exerciseSessionController = exerciseSessionController,
-                    localStore = localStore,
-                    isRestoringSession = isRestoringSession,
-                    onRequestNotificationPermission = onRequestNotificationPermission
-                )
-            } else {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    PlannedMaintenanceBanner(
-                        plannedMaintenanceAt = plannedMaintenanceAt,
-                        message = appState.systemModeStatus.message
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { onInitialTargetReady() }
+    ) {
+        when (appState.systemMode) {
+            SystemMode.MAINTENANCE -> MaintenancePage(
+                message = appState.systemModeStatus.message,
+                estimatedRecoveryTime = appState.systemModeStatus.estimatedRecoveryTime
+            )
+            SystemMode.NORMAL -> {
+                val plannedMaintenanceAt = appState.systemModeStatus.plannedMaintenanceAt
+                if (plannedMaintenanceAt == null) {
+                    AppRootContent(
+                        appState = appState,
+                        exerciseSessionController = exerciseSessionController,
+                        localStore = localStore,
+                        initialPrivacyConsentRequired = initialPrivacyConsentRequired,
+                        onPrivacyConsentAccepted = onPrivacyConsentAccepted,
+                        onRequestNotificationPermission = onRequestNotificationPermission
                     )
-                    Box(modifier = Modifier.weight(1f)) {
-                        AppRootContent(
-                            appState = appState,
-                            exerciseSessionController = exerciseSessionController,
-                            localStore = localStore,
-                            isRestoringSession = isRestoringSession,
-                            onRequestNotificationPermission = onRequestNotificationPermission
+                } else {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        PlannedMaintenanceBanner(
+                            plannedMaintenanceAt = plannedMaintenanceAt,
+                            message = appState.systemModeStatus.message
                         )
+                        Box(modifier = Modifier.weight(1f)) {
+                            AppRootContent(
+                                appState = appState,
+                                exerciseSessionController = exerciseSessionController,
+                                localStore = localStore,
+                                initialPrivacyConsentRequired = initialPrivacyConsentRequired,
+                                onPrivacyConsentAccepted = onPrivacyConsentAccepted,
+                                onRequestNotificationPermission = onRequestNotificationPermission
+                            )
+                        }
                     }
                 }
             }
-        }
-        SystemMode.READ_ONLY -> Column(modifier = Modifier.fillMaxSize()) {
-            ReadOnlyBanner(message = appState.systemModeStatus.message)
-            Box(modifier = Modifier.weight(1f)) {
-                AppRootContent(
-                    appState = appState,
-                    exerciseSessionController = exerciseSessionController,
-                    localStore = localStore,
-                    isRestoringSession = isRestoringSession,
-                    onRequestNotificationPermission = onRequestNotificationPermission
-                )
+            SystemMode.READ_ONLY -> Column(modifier = Modifier.fillMaxSize()) {
+                ReadOnlyBanner(message = appState.systemModeStatus.message)
+                Box(modifier = Modifier.weight(1f)) {
+                    AppRootContent(
+                        appState = appState,
+                        exerciseSessionController = exerciseSessionController,
+                        localStore = localStore,
+                        initialPrivacyConsentRequired = initialPrivacyConsentRequired,
+                        onPrivacyConsentAccepted = onPrivacyConsentAccepted,
+                        onRequestNotificationPermission = onRequestNotificationPermission
+                    )
+                }
             }
         }
     }
@@ -257,7 +266,8 @@ private fun AppRootContent(
     appState: StudentAppState,
     exerciseSessionController: ExerciseSessionController,
     localStore: AndroidAppLocalStore,
-    isRestoringSession: Boolean = false,
+    initialPrivacyConsentRequired: Boolean,
+    onPrivacyConsentAccepted: () -> Unit,
     onRequestNotificationPermission: () -> Unit
 ) {
     val courseJoinCoordinator = remember(localStore) {
@@ -276,12 +286,15 @@ private fun AppRootContent(
         )
     }
     var showLoginPrivacy by rememberSaveable { mutableStateOf(false) }
-    var loginPrivacyAccepted by rememberSaveable { mutableStateOf(false) }
+    var loginPrivacyAccepted by rememberSaveable(initialPrivacyConsentRequired) {
+        mutableStateOf(!initialPrivacyConsentRequired)
+    }
     var showEmailLogin by rememberSaveable { mutableStateOf(false) }
     var showRecoveryRequest by rememberSaveable { mutableStateOf(false) }
     var showScanJoin by rememberSaveable { mutableStateOf(false) }
-    var needsPrivacyConsent by remember { mutableStateOf(false) }
-    var privacyConsentChecked by remember { mutableStateOf(false) }
+    var needsPrivacyConsent by rememberSaveable(initialPrivacyConsentRequired) {
+        mutableStateOf(initialPrivacyConsentRequired)
+    }
     var pendingInviteCode by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingInviteCourse by remember { mutableStateOf<CourseJoinInfo?>(null) }
     var activationSupportScreen by rememberSaveable { mutableStateOf<ActivationSupportScreen?>(null) }
@@ -303,18 +316,7 @@ private fun AppRootContent(
         postEnrollmentGuideCompleted = true
     }
 
-    LaunchedEffect(Unit) {
-        val privacyAccepted =
-            localStore.hasAgreedPrivacyPolicy(BuildConfig.PRIVACY_POLICY_VERSION)
-        needsPrivacyConsent = !privacyAccepted
-        // This reflects a persisted, explicit acceptance; it never defaults
-        // the login checkbox before the user has agreed.
-        loginPrivacyAccepted = privacyAccepted
-        privacyConsentChecked = true
-    }
     val authUiState = when {
-        isRestoringSession -> AuthUiState.Restoring
-        !privacyConsentChecked -> AuthUiState.CheckingPrivacyConsent
         needsPrivacyConsent -> AuthUiState.PrivacyConsent
         appState.isAuthenticated -> AuthUiState.Authenticated
         else -> AuthUiState.Login
@@ -343,8 +345,6 @@ private fun AppRootContent(
         label = "authentication-transition"
     ) { state ->
         when (state) {
-            AuthUiState.Restoring -> StartupSplashScreen()
-            AuthUiState.CheckingPrivacyConsent -> StartupSplashScreen()
             AuthUiState.PrivacyConsent -> PrivacyConsentScreen(
                 onAgree = {
                     localStore.agreePrivacyPolicy(
@@ -353,6 +353,7 @@ private fun AppRootContent(
                     )
                     loginPrivacyAccepted = true
                     needsPrivacyConsent = false
+                    onPrivacyConsentAccepted()
                 },
                 onDecline = appState::logout
             )
@@ -593,37 +594,6 @@ private fun MaintenancePage(message: String, estimatedRecoveryTime: String?) {
                 style = MaterialTheme.typography.titleSmall,
                 color = colors.primary
             )
-        }
-    }
-}
-
-@Composable
-private fun StartupSplashScreen() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(28.dp)
-        ) {
-            BnbuSportsBrandLockup()
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(32.dp),
-                    strokeWidth = 3.dp
-                )
-                Text(
-                    text = interfaceText("正在恢复登录状态…", "Restoring your sign-in…"),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
         }
     }
 }

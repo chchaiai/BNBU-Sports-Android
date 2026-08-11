@@ -59,6 +59,7 @@ import kotlinx.coroutines.CancellationException
 class MainActivity : ComponentActivity() {
     private val appStateViewModel: StudentAppStateViewModel by viewModels()
     private val appUpdateManager: AppUpdateManager by lazy { AppUpdateManagerFactory.create(this) }
+    private var isInitialTargetReady = false
     private var isPlayUpdateReady by mutableStateOf(false)
     private val installStateUpdatedListener = InstallStateUpdatedListener { state ->
         if (state.installStatus() == InstallStatus.DOWNLOADED) {
@@ -77,7 +78,14 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        installSplashScreen()
+        val splashScreen = installSplashScreen()
+        splashScreen.setKeepOnScreenCondition {
+            shouldKeepSystemSplash(
+                sessionRestoreComplete = !appStateViewModel.isRestoringSession,
+                privacyConsentChecked = appStateViewModel.isPrivacyConsentChecked,
+                initialTargetReady = isInitialTargetReady
+            )
+        }
         super.onCreate(savedInstanceState)
         val appState = appStateViewModel.appState
         appUpdateManager.registerListener(installStateUpdatedListener)
@@ -93,24 +101,33 @@ class MainActivity : ComponentActivity() {
                 appState.updateSystemMode(checkSystemMode())
             }
 
-            BNBUStudentTheme(themeMode = appState.themeMode) {
-                AppRootScreen(
-                    appState = appState,
-                    exerciseSessionController = appStateViewModel.exerciseSessionController,
-                    localStore = appStateViewModel.localStore,
-                    isRestoringSession = appStateViewModel.isRestoringSession,
-                    onRequestNotificationPermission = ::requestNotificationPermissionIfNeeded
-                )
-
-                updateRequirement?.let { requirement ->
-                    UpdateRequiredDialog(
-                        requirement = requirement,
-                        onUpdate = { openUpdateUrl(requirement.downloadUrl) }
+            val startupInputsReady =
+                !appStateViewModel.isRestoringSession &&
+                    appStateViewModel.isPrivacyConsentChecked
+            if (startupInputsReady) {
+                BNBUStudentTheme(themeMode = appState.themeMode) {
+                    AppRootScreen(
+                        appState = appState,
+                        exerciseSessionController = appStateViewModel.exerciseSessionController,
+                        localStore = appStateViewModel.localStore,
+                        initialPrivacyConsentRequired =
+                            appStateViewModel.isPrivacyConsentRequired,
+                        onPrivacyConsentAccepted =
+                            appStateViewModel::markPrivacyConsentAccepted,
+                        onInitialTargetReady = { isInitialTargetReady = true },
+                        onRequestNotificationPermission = ::requestNotificationPermissionIfNeeded
                     )
-                }
 
-                if (updateRequirement == null && isPlayUpdateReady) {
-                    PlayUpdateReadyDialog(onRestart = ::completePlayUpdate)
+                    updateRequirement?.let { requirement ->
+                        UpdateRequiredDialog(
+                            requirement = requirement,
+                            onUpdate = { openUpdateUrl(requirement.downloadUrl) }
+                        )
+                    }
+
+                    if (updateRequirement == null && isPlayUpdateReady) {
+                        PlayUpdateReadyDialog(onRestart = ::completePlayUpdate)
+                    }
                 }
             }
         }
@@ -276,6 +293,12 @@ private fun PlayUpdateReadyDialog(onRestart: () -> Unit) {
     )
 }
 
+internal fun shouldKeepSystemSplash(
+    sessionRestoreComplete: Boolean,
+    privacyConsentChecked: Boolean,
+    initialTargetReady: Boolean
+): Boolean = !sessionRestoreComplete || !privacyConsentChecked || !initialTargetReady
+
 /** Compares numeric dot-separated version components, ignoring build suffixes such as -debug. */
 internal fun compareVersions(currentVersion: String, minimumVersion: String): Int {
     val current = versionComponents(currentVersion)
@@ -321,11 +344,24 @@ class StudentAppStateViewModel(application: Application) : AndroidViewModel(appl
     var isRestoringSession by mutableStateOf(true)
         private set
 
+    var isPrivacyConsentChecked by mutableStateOf(false)
+        private set
+
+    var isPrivacyConsentRequired by mutableStateOf(false)
+        private set
+
     init {
         ApiStudentRepository.initContext(application)
+        isPrivacyConsentRequired =
+            !localStore.hasAgreedPrivacyPolicy(BuildConfig.PRIVACY_POLICY_VERSION)
+        isPrivacyConsentChecked = true
         appState.tryRestoreSession {
             isRestoringSession = false
         }
+    }
+
+    internal fun markPrivacyConsentAccepted() {
+        isPrivacyConsentRequired = false
     }
 
     override fun onCleared() {
