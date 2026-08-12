@@ -650,31 +650,39 @@ private fun ProgressOverview(appState: StudentAppState) {
                 letterSpacing = (-1).sp
             )
             Spacer(Modifier.width(8.dp))
-            Text(
-                text = "/ ${appState.hourRule.total.hourText()}",
-                color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(bottom = 6.dp)
-            )
+            if (appState.hourRule.isAvailable) {
+                Text(
+                    text = "/ ${appState.hourRule.total.hourText()}",
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+            }
             Spacer(Modifier.weight(1f))
-            Text(
-                text = "$completionPercent%",
-                color = accent,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
+            if (appState.hourRule.isAvailable) {
+                Text(
+                    text = "$completionPercent%",
+                    color = accent,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+            }
         }
 
-        Spacer(Modifier.height(18.dp))
-        HomeProgressBar(
-            value = appState.totalCompleted,
-            total = appState.hourRule.total,
-            height = 8.dp
-        )
-        Spacer(Modifier.height(12.dp))
+        if (appState.hourRule.isAvailable) {
+            Spacer(Modifier.height(18.dp))
+            HomeProgressBar(
+                value = appState.totalCompleted,
+                total = appState.hourRule.total,
+                height = 8.dp
+            )
+            Spacer(Modifier.height(12.dp))
+        }
         Text(
-            text = if (appState.totalRemaining == 0.0) {
+            text = if (!appState.hourRule.isAvailable) {
+                interfaceText("目标学时暂未向学生端开放", "Required-hour targets are not available to students")
+            } else if (appState.totalRemaining == 0.0) {
                 stringResource(R.string.dashboard_goal_reached)
             } else {
                 stringResource(
@@ -703,7 +711,8 @@ private fun ProgressBreakdown(appState: StudentAppState) {
                 value = appState.workspace.progress.course,
                 total = appState.hourRule.courseRequired,
                 rawValue = appState.workspace.progress.rawCourse,
-                remainingHours = appState.courseRemaining
+                remainingHours = appState.courseRemaining,
+                targetAvailable = appState.hourRule.isAvailable
             )
 
             HorizontalDivider(
@@ -716,7 +725,8 @@ private fun ProgressBreakdown(appState: StudentAppState) {
                 value = appState.workspace.progress.general,
                 total = appState.hourRule.generalRequired,
                 rawValue = appState.workspace.progress.rawGeneral,
-                remainingHours = appState.generalRemaining
+                remainingHours = appState.generalRemaining,
+                targetAvailable = appState.hourRule.isAvailable
             )
         }
     }
@@ -728,11 +738,13 @@ private fun ProgressMetric(
     value: Double,
     total: Double,
     rawValue: Double,
-    remainingHours: Double
+    remainingHours: Double,
+    targetAvailable: Boolean
 ) {
     val cs = MaterialTheme.colorScheme
     val offsetHours = (value - rawValue).coerceAtLeast(0.0)
     val detail = when {
+        !targetAvailable -> interfaceText("仅显示已确认学时", "Confirmed hours only")
         remainingHours == 0.0 -> stringResource(R.string.dashboard_completed)
         offsetHours > 0.0 -> stringResource(
             R.string.dashboard_remaining_after_offset,
@@ -760,7 +772,7 @@ private fun ProgressMetric(
             )
         }
 
-        HomeProgressBar(value = value, total = total, height = 6.dp)
+        if (targetAvailable) HomeProgressBar(value = value, total = total, height = 6.dp)
         ProgressFactRow(
             label = stringResource(R.string.dashboard_checked_in),
             value = rawValue.hourText()
@@ -776,7 +788,7 @@ private fun ProgressMetric(
         }
         ProgressFactRow(
             label = stringResource(R.string.dashboard_total),
-            value = "${value.hourText()} / ${total.hourText()}",
+            value = if (targetAvailable) "${value.hourText()} / ${total.hourText()}" else value.hourText(),
             emphasized = true
         )
     }

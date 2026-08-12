@@ -110,7 +110,8 @@ private enum class ExemptionTab {
     }
 }
 
-private const val MaxExemptionReasonLength = 2_000
+private const val MaxExemptionReasonLength = 1_000
+private const val MaxExemptionMediaItems = 20
 
 @Composable
 fun ExemptionScreen(
@@ -571,18 +572,16 @@ private fun ExemptionDetail(
 @Composable
 private fun ExemptionTypeSelector(
     selected: ExemptionType,
-    gender: String,
     enabled: Boolean,
     pendingExemptionTypes: Set<String>,
     onSelected: (ExemptionType) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
-    val availableRunTypes = if (gender == "male") {
-        listOf(ExemptionType.Run1000)
-    } else {
-        listOf(ExemptionType.Run800)
-    }
-    val availableTypes = availableRunTypes + listOf(ExemptionType.Team, ExemptionType.Club)
+    val availableTypes = listOf(
+        ExemptionType.PhysicalTest,
+        ExemptionType.ExerciseCheckIn,
+        ExemptionType.SpecialCircumstance
+    )
     availableTypes.chunked(2).forEachIndexed { rowIndex, options ->
         if (rowIndex > 0) Spacer(Modifier.height(10.dp))
         Row(
@@ -640,9 +639,8 @@ private fun NewExemptionForm(
     onError: (String) -> Unit
 ) {
     val writeEnabled = appState.isWriteAllowed
-    val studentGender = appState.workspace.student.gender
-    var selectedType by remember(initialExemption?.id, studentGender) {
-        mutableStateOf(initialExemption?.type.toExemptionType(studentGender))
+    var selectedType by remember(initialExemption?.id) {
+        mutableStateOf(initialExemption?.type.toExemptionType())
     }
     var organization by remember(initialExemption?.id) { mutableStateOf(initialExemption?.organization.orEmpty()) }
     var reason by remember(initialExemption?.id) { mutableStateOf("") }
@@ -671,7 +669,7 @@ private fun NewExemptionForm(
         }
     }
 
-    val maxAttachments = 5
+    val maxAttachments = MaxExemptionMediaItems
 
     // Camera launcher
     val cameraLauncher = rememberLauncherForActivityResult(
@@ -766,7 +764,6 @@ private fun NewExemptionForm(
                 )
                 ExemptionTypeSelector(
                     selected = selectedType,
-                    gender = studentGender,
                     enabled = !isSubmitting,
                     pendingExemptionTypes = pendingExemptionTypes,
                     onSelected = {
@@ -796,7 +793,7 @@ private fun NewExemptionForm(
                         value = organization,
                         onValueChange = { organization = it.take(128) },
                         enabled = !isSubmitting,
-                        placeholder = { Text(interfaceText("填写校队或社团名称", "Enter the team or club name")) },
+                        placeholder = { Text(interfaceText("填写相关组织名称", "Enter the organization name")) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
@@ -920,9 +917,9 @@ private fun NewExemptionForm(
                     if (proofAttachments.isEmpty()) {
                         Text(
                             text = if (selectedType.isCheckInExemption) {
-                                interfaceText("请上传能够证明校队或社团身份的材料。", "Upload documents that prove your team or club membership.")
+                                interfaceText("可选：上传能够证明相关组织身份的材料。", "Optional: upload documents that prove your organization membership.")
                             } else {
-                                interfaceText("请至少上传 1 份医院证明或诊断材料。", "Upload at least one hospital certificate or diagnostic document.")
+                                interfaceText("可选：上传与申请有关的证明材料。", "Optional: upload supporting documents related to the application.")
                             },
                             color = cs.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall
@@ -963,16 +960,12 @@ private fun NewExemptionForm(
                         return@PrimaryActionButton
                     }
                     val normalizedReason = reason.trim()
-                    if (normalizedReason.length < 2) {
-                        onError(interfaceText("申请理由或补充说明至少需要 2 个字符", "The application reason or additional notes must contain at least 2 characters."))
+                    if (normalizedReason.isEmpty()) {
+                        onError(interfaceText("请填写申请理由或补充说明", "Enter an application reason or additional notes."))
                         return@PrimaryActionButton
                     }
                     if (selectedType.isCheckInExemption && organization.isBlank()) {
-                        onError(interfaceText("请填写校队或社团名称", "Enter the team or club name."))
-                        return@PrimaryActionButton
-                    }
-                    if (proofAttachments.isEmpty()) {
-                        onError(interfaceText("请至少上传 1 个申请证明", "Upload at least one supporting document."))
+                        onError(interfaceText("请填写相关组织名称", "Enter the organization name."))
                         return@PrimaryActionButton
                     }
                     val remoteRepository = repository
@@ -1001,7 +994,9 @@ private fun NewExemptionForm(
 
                             val application = ExemptionApplication(
                                 type = selectedTypeSnapshot.apiValue,
-                                reason = normalizedReason,
+                                reason = organizationSnapshot?.let {
+                                    "Organization: $it\n$normalizedReason"
+                                } ?: normalizedReason,
                                 proofFiles = uploadedCosKeys,
                                 organization = organizationSnapshot
                             )
@@ -1131,28 +1126,23 @@ private fun String.localizedExemptionStatus(): String = when (this) {
 
 /** Stable type codes use client-owned labels; an unknown server value stays unchanged. */
 private fun Exemption.localizedTypeLabel(): String = when (type) {
-    "800m" -> interfaceText("800m 免测", "800 m test exemption")
-    "1000m" -> interfaceText("1000m 免测", "1000 m test exemption")
-    "team" -> interfaceText("校队免打卡", "Team check-in exemption")
-    "club" -> interfaceText("社团免打卡", "Club check-in exemption")
+    "physical_test" -> interfaceText("体测免测", "Physical-test exemption")
+    "exercise_check_in" -> interfaceText("运动打卡豁免", "Exercise check-in exemption")
+    "special_circumstance" -> interfaceText("特殊情况申请", "Special-circumstance application")
     else -> type
 }
 
 private fun ExemptionType.localizedLabel(): String = when (this) {
-    ExemptionType.Run800 -> interfaceText("800m 免测", "800 m test exemption")
-    ExemptionType.Run1000 -> interfaceText("1000m 免测", "1000 m test exemption")
-    ExemptionType.Team -> interfaceText("校队免打卡", "Team check-in exemption")
-    ExemptionType.Club -> interfaceText("社团免打卡", "Club check-in exemption")
+    ExemptionType.PhysicalTest -> interfaceText("体测免测", "Physical-test exemption")
+    ExemptionType.ExerciseCheckIn -> interfaceText("运动打卡豁免", "Exercise check-in exemption")
+    ExemptionType.SpecialCircumstance -> interfaceText("特殊情况申请", "Special-circumstance application")
 }
 
-private fun String?.toExemptionType(gender: String): ExemptionType = when (this) {
-    "1000m" -> ExemptionType.Run1000
-    "team" -> ExemptionType.Team
-    "club" -> ExemptionType.Club
-    else -> when (gender) {
-        "male" -> ExemptionType.Run1000
-        else -> ExemptionType.Run800
-    }
+private fun String?.toExemptionType(): ExemptionType = when (this) {
+    "exercise_check_in", "team", "club" -> ExemptionType.ExerciseCheckIn
+    "special_circumstance", "special" -> ExemptionType.SpecialCircumstance
+    "physical_test", "800m", "1000m" -> ExemptionType.PhysicalTest
+    else -> ExemptionType.PhysicalTest
 }
 
 @Composable
@@ -1166,12 +1156,12 @@ private fun ExemptionRulesPanel(isPreview: Boolean) {
                 style = MaterialTheme.typography.labelMedium
             )
             Text(
-                text = interfaceText("耐力跑免测仅适用于 800m / 1000m；通过后由任课教师为该生单独评定耐力跑分数。", "Endurance-run exemptions apply only to 800 m / 1000 m. After approval, the instructor assigns the endurance-run score individually."),
+                text = interfaceText("体测免测、运动打卡豁免和特殊情况申请严格对应后端支持的三种申请类型。", "Physical-test, exercise check-in, and special-circumstance applications match the three application types supported by the server."),
                 color = cs.onSurface,
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
-                text = interfaceText("校队或社团免打卡须填写组织名称并上传证明，审核通过后由教师确认可抵扣的运动时长。", "Team or club check-in exemptions require an organization name and proof. The instructor confirms any eligible hour offset after approval."),
+                text = interfaceText("运动打卡豁免须填写组织名称并上传证明；组织名称会作为申请理由的一部分提交。", "Exercise check-in exemptions require an organization name and evidence; the organization name is submitted as part of the application reason."),
                 color = cs.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall
             )

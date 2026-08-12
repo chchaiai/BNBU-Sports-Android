@@ -207,8 +207,8 @@ private fun postEnrollmentGuideSteps(): List<GuideStep> = listOf(
         title = interfaceText("需要时提交申请", "Apply when you need to"),
         eyebrow = interfaceText("个人中心 · 服务", "Profile · Services"),
         description = interfaceText(
-            "可提交免测、校队或社团认证申请，并查看状态、补充材料或重新提交。",
-            "Submit test-exemption, team, or club verification requests when needed, then review their status, add documents, or resubmit."
+            "可提交体测免测、运动打卡豁免或特殊情况申请，并查看状态、补充材料或重新提交。",
+            "Submit physical-test, exercise check-in, or special-circumstance applications, then review status, add documents, or resubmit."
         ),
         artwork = GuideArtwork.Applications
     )
@@ -885,7 +885,7 @@ private fun ApplicationsArtwork() {
             ApplicationArtworkCard(
                 modifier = Modifier.weight(1f),
                 icon = Icons.AutoMirrored.Filled.Assignment,
-                title = interfaceText("校队或社团", "Team or club")
+                title = interfaceText("打卡或特殊情况", "Check-in or special case")
             )
         }
         StatusArtworkRow(

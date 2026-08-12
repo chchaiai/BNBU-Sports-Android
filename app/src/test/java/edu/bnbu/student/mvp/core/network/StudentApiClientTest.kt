@@ -1,14 +1,25 @@
 package edu.bnbu.student.mvp.core.network
 
 import edu.bnbu.student.mvp.BuildConfig
-import java.io.File
-import java.io.IOException
+import edu.bnbu.student.mvp.core.network.v1.IntentFingerprint
+import edu.bnbu.student.mvp.core.network.v1.MutationIntentRegistry
+import edu.bnbu.student.mvp.core.network.v1.MutationIntentScope
+import edu.bnbu.student.mvp.core.network.v1.V1ApiRequest
+import edu.bnbu.student.mvp.core.network.v1.V1ApiTransport
+import edu.bnbu.student.mvp.core.network.v1.V1HttpException
+import edu.bnbu.student.mvp.core.network.v1.V1HttpMethod
+import edu.bnbu.student.mvp.core.network.v1.V1NetworkException
+import edu.bnbu.student.mvp.core.network.v1.withMutationIntent
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
@@ -37,109 +48,116 @@ class StudentApiClientTest {
 
     @Test
     fun defaultBaseUrlComesFromBuildConfig() {
-        assertEquals(BuildConfig.BNBU_API_BASE_URL, StudentApiClient.DefaultBaseUrl)
+        val request = V1ApiTransport(requestIdProvider = { "req-default" }).buildRequest(
+            V1ApiRequest("getCurrentUser", V1HttpMethod.GET, "me")
+        )
+        assertEquals(
+            "${BuildConfig.BNBU_API_BASE_URL.trimEnd('/')}/me",
+            request.url.toString()
+        )
     }
 
     @Test
     fun rejectsAmbiguousOrCredentialedBaseUrls() {
         assertThrows(IllegalArgumentException::class.java) {
-            StudentApiClient(baseUrl = "https://api.example.test")
+            V1ApiTransport(baseUrl = "https://api.example.test")
         }
         assertThrows(IllegalArgumentException::class.java) {
-            StudentApiClient(baseUrl = "https://api.example.test/api/v1?tenant=other")
+            V1ApiTransport(baseUrl = "https://api.example.test/api/v1?tenant=other")
         }
         assertThrows(IllegalArgumentException::class.java) {
-            StudentApiClient(baseUrl = "https://user:secret@api.example.test/api/v1")
+            V1ApiTransport(baseUrl = "https://user:secret@api.example.test/api/v1")
         }
     }
 
     @Test
     fun requestAddsJsonAndBearerHeaders() {
-        val client = client(bearerToken = "token-123")
-
-        val get = client.request(StudentEndpoint.SportSummary)
-        val post = client.request(
-            StudentEndpoint.Login,
-            StudentLoginRequest(account = "student", password = "secret")
+        val transport = transport(accessToken = "token-123")
+        val get = transport.buildRequest(
+            V1ApiRequest("getCurrentUser", V1HttpMethod.GET, "me")
+        )
+        val post = transport.buildRequest(
+            V1ApiRequest(
+                "createFeedback",
+                V1HttpMethod.POST,
+                "feedback",
+                body = mapOf("content" to "test")
+            )
         )
 
-        assertEquals("application/json", get.headers["Accept"])
-        assertEquals("Bearer token-123", get.headers["Authorization"])
-        assertFalse(get.headers.containsKey("Content-Type"))
-        assertEquals("application/json", post.headers["Content-Type"])
-        assertFalse(post.headers.containsKey("Idempotency-Key"))
-        assertEquals("${server.url("/api/v1").toString().trimEnd('/')}/auth/login", post.url)
+        assertEquals("application/json", get.header("Accept"))
+        assertEquals("Bearer token-123", get.header("Authorization"))
+        assertEquals(null, get.header("Content-Type"))
+        assertEquals("application", post.body?.contentType()?.type)
+        assertEquals("json", post.body?.contentType()?.subtype)
+        assertEquals(null, post.header("Idempotency-Key"))
+        assertEquals("${server.url("/api/v1").toString().trimEnd('/')}/feedback", post.url.toString())
     }
 
     @Test
     fun mutationsGetOneStableIdempotencyKeyPerLogicalRequest() {
         var generatedKeys = 0
-        val client = client(
-            idempotencyKeyProvider = {
+        val registry = MutationIntentRegistry(
+            keyFactory = {
                 generatedKeys += 1
                 "request-key-$generatedKeys"
             }
         )
-
-        val submit = client.request(
-            StudentEndpoint.SportRecords,
-            SubmitSportRecordRequest(
-                creditType = "其他运动",
-                courseId = null,
-                hours = 1.0,
-                description = "run",
-                proofFiles = emptyList()
-            )
+        val scope = MutationIntentScope("account-1", "createFeedback", "feedback-form")
+        val fingerprint = IntentFingerprint.fromCanonicalInput("createFeedback", "content=test")
+        val firstIntent = registry.acquire(scope, fingerprint)
+        val repeatedIntent = registry.acquire(scope, fingerprint)
+        val changedIntent = registry.acquire(
+            scope,
+            IntentFingerprint.fromCanonicalInput("createFeedback", "content=changed")
         )
-        val markRead = client.request(StudentEndpoint.MarkNotificationRead("notice-1"))
-        val get = client.request(StudentEndpoint.SportSummary)
-        val login = client.request(
-            StudentEndpoint.Login,
-            StudentLoginRequest(account = "student", password = "secret")
+        val mutation = V1ApiRequest(
+            "createFeedback",
+            V1HttpMethod.POST,
+            "feedback",
+            body = mapOf("content" to "test")
         )
 
-        assertEquals("request-key-1", submit.headers["Idempotency-Key"])
-        assertEquals("request-key-1", submit.headers["Idempotency-Key"])
-        assertEquals("request-key-2", markRead.headers["Idempotency-Key"])
-        assertFalse(get.headers.containsKey("Idempotency-Key"))
-        assertFalse(login.headers.containsKey("Idempotency-Key"))
+        assertEquals("request-key-1", firstIntent.idempotencyKey.wireValue)
+        assertEquals(firstIntent.idempotencyKey, repeatedIntent.idempotencyKey)
+        assertEquals("request-key-2", changedIntent.idempotencyKey.wireValue)
+        assertEquals(
+            "request-key-1",
+            mutation.withMutationIntent(firstIntent).headers["Idempotency-Key"]
+        )
         assertEquals(2, generatedKeys)
     }
 
     @Test
-    fun executeParsesDtoAndClosesErrorResponsesForReuse() {
-        server.enqueue(MockResponse().setResponseCode(500).setBody("{\"message\":\"failed\"}"))
+    fun executeParsesEnvelopeAndClosesErrorResponsesForReuse() {
         server.enqueue(
-            MockResponse().setBody(
-                """
-                {
-                  "id":"student-remote",
-                  "name":"Remote Student",
-                  "email":"remote@bnbu.edu.cn",
-                  "role":"student",
-                  "college":"Science",
-                  "className":"Class 2"
-                }
-                """.trimIndent()
-            )
+            MockResponse()
+                .setResponseCode(500)
+                .setHeader("X-Request-ID", "req-failed")
+                .setBody(
+                    """{"code":"INTERNAL_ERROR","message":"failed","details":{},"requestId":"req-failed","timestamp":"2026-08-11T00:00:00Z"}"""
+                )
         )
-        val client = client()
+        server.enqueue(
+            MockResponse()
+                .setHeader("X-Request-ID", "req-success")
+                .setBody("""{"data":{"id":"student-remote","className":"Class 2"},"meta":{"requestId":"req-success"}}""")
+        )
+        val transport = transport()
+        val request = V1ApiRequest("getCurrentUser", V1HttpMethod.GET, "me")
 
-        assertThrows(IOException::class.java) {
-            client.execute(client.request(StudentEndpoint.StudentProfile))
+        assertThrows(V1HttpException::class.java) {
+            transport.execute<Map<String, String>>(request, Map::class.java)
         }
-        val profile = client.executeAndParse(
-            client.request(StudentEndpoint.StudentProfile),
-            StudentProfileResponse::class.java
-        )
+        val profile = transport.execute<Map<String, String>>(request, Map::class.java)
 
         val first = server.takeRequest()
         val second = server.takeRequest()
-        assertEquals("/api/v1/student/profile", first.path)
-        assertEquals("/api/v1/student/profile", second.path)
+        assertEquals("/api/v1/me", first.path)
+        assertEquals("/api/v1/me", second.path)
         assertEquals(1, second.sequenceNumber)
-        assertEquals("student-remote", profile.id)
-        assertEquals("Class 2", profile.className)
+        assertEquals("student-remote", profile.data?.get("id"))
+        assertEquals("Class 2", profile.data?.get("className"))
     }
 
     @Test
@@ -150,19 +168,17 @@ class StudentApiClientTest {
                 "{\"id\":\"record-2\",\"status\":\"待审核\",\"submittedAt\":\"2026-07-14T00:00:00Z\"}"
             )
         )
-        val client = client(httpClient = SharedHttpClient.instance)
-        val request = client.request(
-            StudentEndpoint.SportRecords,
-            SubmitSportRecordRequest(
-                creditType = "其他运动",
-                courseId = null,
-                hours = 1.0,
-                description = "run",
-                proofFiles = emptyList()
-            )
+        val transport = transport(httpClient = SharedHttpClient.instance)
+        val request = V1ApiRequest(
+            "createExerciseRecordDraft",
+            V1HttpMethod.POST,
+            "exercise-records",
+            body = mapOf("sessionId" to "session-1")
         )
 
-        assertThrows(IOException::class.java) { client.execute(request) }
+        assertThrows(V1NetworkException::class.java) {
+            transport.execute<Map<String, String>>(request, Map::class.java)
+        }
         assertEquals(1, server.requestCount)
         assertFalse(SharedHttpClient.isRetryableHttpMethod("POST"))
         assertFalse(SharedHttpClient.isRetryableHttpMethod("PUT"))
@@ -178,10 +194,13 @@ class StudentApiClientTest {
         val httpClient = okhttp3.OkHttpClient.Builder()
             .retryOnConnectionFailure(false)
             .build()
-        val client = client(httpClient = httpClient)
+        val transport = transport(httpClient = httpClient)
 
         val requestJob = async(Dispatchers.IO) {
-            client.executeCancellable(client.request(StudentEndpoint.StudentProfile))
+            transport.executeCancellable<Map<String, String>>(
+                V1ApiRequest("getCurrentUser", V1HttpMethod.GET, "me"),
+                Map::class.java
+            )
         }
         assertNotNull(server.takeRequest(2, TimeUnit.SECONDS))
         requestJob.cancelAndJoin()
@@ -194,48 +213,47 @@ class StudentApiClientTest {
     }
 
     @Test
-    fun cancellableUploadReportsMonotonicActualRequestBodyProgress() = runBlocking {
-        server.enqueue(
-            MockResponse().setBody(
-                """{"files":[{"url":"https://media.invalid/proof.jpg","cosKey":"redacted","mediaType":"image","mimeType":"image/jpeg","size":131072}],"count":1}"""
-            )
-        )
-        val source = File.createTempFile("student-upload-progress", ".jpg")
-        source.writeBytes(ByteArray(128 * 1_024) { index -> (index % 251).toByte() })
+    fun privateObjectUploadReportsMonotonicActualRequestBodyProgress() {
+        server.enqueue(MockResponse().setResponseCode(200).setHeader("ETag", "etag-1"))
+        val source = ByteArray(128 * 1_024) { index -> (index % 251).toByte() }
         val events = mutableListOf<UploadProgress>()
+        val body = ProgressRequestBody(
+            source.toRequestBody("image/jpeg".toMediaType()),
+            events::add
+        )
+        val request = Request.Builder()
+            .url(server.url("/private-upload/object-1"))
+            .put(body)
+            .build()
 
-        try {
-            val response = client().uploadProofFilesCancellable(listOf(source), events::add)
+        OkHttpClient.Builder().retryOnConnectionFailure(false).build()
+            .newCall(request).execute().use { response -> assertTrue(response.isSuccessful) }
 
-            assertEquals(1, response.count)
-            assertTrue(events.isNotEmpty())
-            assertEquals(0L, events.first().bytesSent)
-            assertEquals(100, events.last().percent)
-            assertEquals(events.last().totalBytes, events.last().bytesSent)
-            assertTrue(events.zipWithNext().all { (left, right) ->
-                left.bytesSent <= right.bytesSent && left.totalBytes == right.totalBytes
-            })
-            val request = server.takeRequest()
-            assertEquals("/api/v1/upload/proof", request.path)
-            assertTrue(request.bodySize > source.length())
-            assertEquals(request.bodySize, events.last().totalBytes)
-        } finally {
-            source.delete()
-        }
+        val recorded = server.takeRequest(2, TimeUnit.SECONDS)!!
+        assertEquals("PUT", recorded.method)
+        assertEquals("/private-upload/object-1", recorded.path)
+        assertEquals(source.size.toLong(), recorded.bodySize)
+        assertTrue(events.isNotEmpty())
+        assertEquals(0L, events.first().bytesSent)
+        assertEquals(100, events.last().percent)
+        assertEquals(events.last().totalBytes, events.last().bytesSent)
+        assertEquals(recorded.bodySize, events.last().totalBytes)
+        assertTrue(events.zipWithNext().all { (left, right) ->
+            left.bytesSent <= right.bytesSent && left.totalBytes == right.totalBytes
+        })
     }
 
-    private fun client(
-        bearerToken: String? = null,
-        httpClient: okhttp3.OkHttpClient = okhttp3.OkHttpClient.Builder()
+    private fun transport(
+        accessToken: String? = null,
+        httpClient: OkHttpClient = OkHttpClient.Builder()
             .retryOnConnectionFailure(false)
-            .build(),
-        idempotencyKeyProvider: () -> String = { "test-idempotency-key" }
-    ): StudentApiClient {
-        return StudentApiClient(
+            .build()
+    ): V1ApiTransport {
+        return V1ApiTransport(
             baseUrl = server.url("/api/v1").toString(),
-            bearerToken = bearerToken,
+            accessTokenProvider = { accessToken },
             httpClient = httpClient,
-            idempotencyKeyProvider = idempotencyKeyProvider
+            requestIdProvider = { "req-client" }
         )
     }
 }

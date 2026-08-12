@@ -13,7 +13,6 @@ import edu.bnbu.student.mvp.MainActivity
 import edu.bnbu.student.mvp.R
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
-import edu.bnbu.student.mvp.core.network.StudentApiClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,11 +28,12 @@ class BnbuFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         if (token.isBlank()) return
-        val sessionToken = AndroidAppLocalStore(applicationContext).loadAuthToken() ?: return
+        val credentialStore = AndroidAppLocalStore(applicationContext)
+        credentialStore.loadAuthSession() ?: return
         serviceScope.launch {
             FcmPushRegistrar.registerCurrentDevice(
                 applicationContext,
-                StudentApiClient().withToken(sessionToken)
+                credentialStore
             )
         }
     }

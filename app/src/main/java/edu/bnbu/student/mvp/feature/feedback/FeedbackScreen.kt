@@ -1,10 +1,6 @@
 package edu.bnbu.student.mvp.feature.feedback
 
-import android.net.Uri
-import android.os.Environment
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,13 +12,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.SupportAgent
@@ -44,12 +36,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
-import coil3.compose.AsyncImage
 import edu.bnbu.student.mvp.BuildConfig
 import edu.bnbu.student.mvp.core.data.ApiStudentRepository
 import edu.bnbu.student.mvp.core.designsystem.ActionButton
@@ -63,22 +51,18 @@ import edu.bnbu.student.mvp.core.designsystem.ValidationPanel
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
-import edu.bnbu.student.mvp.core.model.ProofAttachment
-import edu.bnbu.student.mvp.core.model.ProofMediaType
 import edu.bnbu.student.mvp.core.network.ApiHttpException
 import edu.bnbu.student.mvp.core.network.FeedbackTicketResponse
 import edu.bnbu.student.mvp.core.network.SubmitFeedbackRequest
 import edu.bnbu.student.mvp.core.state.StudentAppState
-import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 
 private const val MaxDescriptionLength = 2_000
-private const val MaxScreenshots = 3
 
 private enum class FeedbackTab { New, Tickets }
 
-/** Problem-feedback form. Screenshots are uploaded first and submitted as COS keys. */
+/** Problem-feedback form backed by the privacy-bounded V1 feedback contract. */
 @Composable
 fun FeedbackScreen(
     appState: StudentAppState,
@@ -86,7 +70,6 @@ fun FeedbackScreen(
     onUnauthorized: () -> Unit,
     onBack: () -> Unit
 ) {
-    val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     // Categories and transient messages are presentation copy. Keep their
     // remembered state scoped to the active app language so an in-place
@@ -113,11 +96,6 @@ fun FeedbackScreen(
     var selectedCategory by remember(appLanguage) { mutableStateOf(categories.first()) }
     var description by remember { mutableStateOf("") }
     val currentPage = interfaceText("我的 / 问题反馈", "Profile / Report a problem")
-    var email by remember { mutableStateOf(appState.workspace.student.email) }
-    var phone by remember { mutableStateOf("") }
-    var screenshots by remember { mutableStateOf<List<Uri>>(emptyList()) }
-    var cameraTempFile by remember { mutableStateOf<File?>(null) }
-    var cameraTempUri by remember { mutableStateOf<Uri?>(null) }
 
     fun loadTickets() {
         if (isLoadingTickets || isSubmitting) return
@@ -144,16 +122,6 @@ fun FeedbackScreen(
         if (job == null) { isLoadingTickets = false; onUnauthorized() }
     }
 
-    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-        val uri = cameraTempUri
-        if (success && uri != null && screenshots.size < MaxScreenshots) screenshots = screenshots + uri
-        else if (!success) cameraTempFile?.delete()
-        cameraTempUri = null; cameraTempFile = null
-    }
-    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        screenshots = screenshots + uris.take((MaxScreenshots - screenshots.size).coerceAtLeast(0))
-    }
-
     fun submit() {
         val availableRepository = repository ?: run {
             errorMessage = interfaceText(
@@ -170,8 +138,6 @@ fun FeedbackScreen(
             return
         }
         val note = description.trim()
-        val contactEmail = email.trim()
-        val contactPhone = phone.trim()
         when {
             isSubmitting -> return
             note.isEmpty() -> {
@@ -185,43 +151,13 @@ fun FeedbackScreen(
                 )
                 return
             }
-            contactEmail.isEmpty() -> {
-                errorMessage = interfaceText(
-                    "请留下邮箱，便于接收处理回复。",
-                    "Enter an email address so we can reply."
-                )
-                return
-            }
-            !contactEmail.matches(Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) -> {
-                errorMessage = interfaceText("请输入有效的邮箱地址。", "Enter a valid email address.")
-                return
-            }
-            contactPhone.isEmpty() -> {
-                errorMessage = interfaceText(
-                    "请留下联系电话，便于跟进问题。",
-                    "Enter a phone number so we can follow up."
-                )
-                return
-            }
-            !contactPhone.matches(Regex("^[0-9+()\\-\\s]{5,32}$")) -> {
-                errorMessage = interfaceText("请输入有效的联系电话。", "Enter a valid phone number.")
-                return
-            }
         }
         isSubmitting = true; errorMessage = null
-        val screenshotSnapshot = screenshots
         val job = appState.launchAuthenticatedRequest {
             try {
-                val screenshotsKeys = if (screenshotSnapshot.isEmpty()) emptyList() else availableRepository.uploadProofFiles(
-                    screenshotSnapshot.mapIndexed { index, uri -> ProofAttachment(
-                        id = uri.toString(), type = ProofMediaType.Image,
-                        fileName = "feedback_screenshot_${index + 1}.jpg", byteCount = null, source = uri.toString()
-                    ) }, context.cacheDir
-                ).getOrThrow().map { it.cosKey }
                 val ticket = availableRepository.submitFeedback(SubmitFeedbackRequest(
                     category = selectedCategory, description = note, currentPage = currentPage,
-                    clientVersion = BuildConfig.VERSION_NAME, screenshots = screenshotsKeys,
-                    email = contactEmail, phone = contactPhone
+                    clientVersion = BuildConfig.VERSION_NAME
                 ))
                 submittedTicket = ticket
                 tickets = listOf(ticket) + tickets.filterNot { it.id == ticket.id }
@@ -238,7 +174,7 @@ fun FeedbackScreen(
         if (job == null) { isSubmitting = false; onUnauthorized() }
     }
 
-    DisposableEffect(Unit) { onDispose { requestJob.value?.cancel(); cameraTempFile?.delete() } }
+    DisposableEffect(Unit) { onDispose { requestJob.value?.cancel() } }
     BackHandler {
         focusManager.clearFocus(force = true)
         when {
@@ -276,26 +212,10 @@ fun FeedbackScreen(
         when (tab) {
             FeedbackTab.New -> item { FeedbackForm(
                 categories, selectedCategory, { selectedCategory = it }, description, { description = it.take(MaxDescriptionLength) },
-                email, { email = it }, phone, { phone = it }, screenshots, isSubmitting,
+                isSubmitting,
                 writeEnabled = appState.isWriteAllowed && repository != null,
                 serviceUnavailable = repository == null,
-                onTakePicture = {
-                    val directory = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: context.cacheDir
-                    val file = File(directory, "feedback_${System.currentTimeMillis()}.jpg")
-                    runCatching {
-                        file.parentFile?.mkdirs()
-                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                        cameraTempFile = file; cameraTempUri = uri; cameraLauncher.launch(uri)
-                    }.onFailure {
-                        file.delete()
-                        errorMessage = interfaceText(
-                            "无法打开相机：${it.message ?: "请稍后重试"}",
-                            "Could not open the camera: ${it.message ?: "Try again later."}"
-                        )
-                    }
-                },
-                onChooseImages = { galleryLauncher.launch(arrayOf("image/*")) },
-                onRemoveScreenshot = { screenshots = screenshots - it }, onSubmit = ::submit
+                onSubmit = ::submit
             ) }
             FeedbackTab.Tickets -> {
                 if (isLoadingTickets) item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { CircularProgressIndicator(Modifier.size(28.dp)) } }
@@ -337,10 +257,8 @@ fun FeedbackScreen(
 private fun FeedbackForm(
     categories: List<String>, selectedCategory: String, onCategoryChanged: (String) -> Unit,
     description: String, onDescriptionChanged: (String) -> Unit,
-    email: String, onEmailChanged: (String) -> Unit, phone: String, onPhoneChanged: (String) -> Unit,
-    screenshots: List<Uri>, isSubmitting: Boolean, writeEnabled: Boolean, serviceUnavailable: Boolean,
-    onTakePicture: () -> Unit, onChooseImages: () -> Unit,
-    onRemoveScreenshot: (Uri) -> Unit, onSubmit: () -> Unit
+    isSubmitting: Boolean, writeEnabled: Boolean, serviceUnavailable: Boolean,
+    onSubmit: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     val formEnabled = writeEnabled && !isSubmitting
@@ -393,43 +311,12 @@ private fun FeedbackForm(
                 modifier = Modifier.fillMaxWidth()
             )
         } }
-        SwissPanel { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(interfaceText("截图（可选）", "Screenshots (optional)"), style = MaterialTheme.typography.titleMedium)
-            Text(
-                interfaceText(
-                    "最多 $MaxScreenshots 张。截图可帮助我们更快定位问题。",
-                    "Add up to $MaxScreenshots screenshots to help us diagnose the problem."
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall
+        ValidationPanel(
+            interfaceText(
+                "为保护隐私，V1 反馈仅提交问题分类、描述和客户端上下文，不收集联系方式或附件。",
+                "For privacy, V1 feedback submits only the category, description, and client context; it does not collect contact details or attachments."
             )
-            screenshots.forEachIndexed { index, uri -> Row(verticalAlignment = Alignment.CenterVertically) {
-                val screenshotLabel = interfaceText("截图 ${index + 1}", "Screenshot ${index + 1}")
-                AsyncImage(uri, screenshotLabel, Modifier.size(64.dp))
-                Spacer(Modifier.width(12.dp))
-                Text(screenshotLabel, Modifier.weight(1f))
-                IconButton({ onRemoveScreenshot(uri) }, enabled = formEnabled) {
-                    Icon(Icons.Filled.Delete, interfaceText("删除截图", "Remove screenshot"))
-                }
-            } }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ActionButton(interfaceText("拍摄", "Take photo"), Icons.Filled.CameraAlt, false, Modifier.weight(1f), formEnabled && screenshots.size < MaxScreenshots, onTakePicture)
-                ActionButton(interfaceText("从相册选择", "Choose photos"), Icons.Filled.Photo, false, Modifier.weight(1f), formEnabled && screenshots.size < MaxScreenshots, onChooseImages)
-            }
-        } }
-        SwissPanel { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(interfaceText("联系方式", "Contact details"), style = MaterialTheme.typography.titleMedium)
-            Text(
-                interfaceText(
-                    "用于回复和跟进此问题，不会公开展示。",
-                    "Used only to reply and follow up. These details are not displayed publicly."
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall
-            )
-            OutlinedTextField(email, onEmailChanged, label = { Text(interfaceText("邮箱（必填）", "Email (required)")) }, placeholder = { Text("name@example.com") }, singleLine = true, enabled = formEnabled, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email), modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(phone, onPhoneChanged, label = { Text(interfaceText("联系电话（必填）", "Phone number (required)")) }, placeholder = { Text(interfaceText("例如：138 0000 0000", "e.g. +1 555 0100")) }, singleLine = true, enabled = formEnabled, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), modifier = Modifier.fillMaxWidth())
-        } }
+        )
         PrimaryActionButton(
             interfaceText("提交问题", "Submit report"),
             Icons.Filled.Send,

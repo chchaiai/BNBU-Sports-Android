@@ -30,10 +30,7 @@ import edu.bnbu.student.mvp.core.network.MarkReadResponse
 import edu.bnbu.student.mvp.core.network.NotificationResponse
 import edu.bnbu.student.mvp.core.network.SportRecordResponse
 import edu.bnbu.student.mvp.core.network.SportSummaryResponse
-import edu.bnbu.student.mvp.core.network.StudentApiClient
 import edu.bnbu.student.mvp.core.network.ApiHttpException
-import edu.bnbu.student.mvp.core.network.StudentApiRequest
-import edu.bnbu.student.mvp.core.network.StudentEndpoint
 import edu.bnbu.student.mvp.core.network.StudentLoginRequest
 import edu.bnbu.student.mvp.core.network.SubmitRecordResponse
 import edu.bnbu.student.mvp.core.network.SubmitSportRecordRequest
@@ -57,6 +54,18 @@ import edu.bnbu.student.mvp.core.network.HelpArticleResponse
 import edu.bnbu.student.mvp.core.network.SubmitFeedbackRequest
 import edu.bnbu.student.mvp.core.network.LanguagePreferenceResponse
 import edu.bnbu.student.mvp.core.network.UpdateLanguagePreferenceRequest
+import edu.bnbu.student.mvp.core.network.v1.V1StudentWorkspaceGateway
+import edu.bnbu.student.mvp.core.network.v1.V1StudentWorkspaceSnapshot
+import edu.bnbu.student.mvp.core.exercise.CreateExerciseRecordDraftCommand
+import edu.bnbu.student.mvp.core.exercise.ExerciseGateway
+import edu.bnbu.student.mvp.core.exercise.ExerciseRecordForm
+import edu.bnbu.student.mvp.core.exercise.SubmitExerciseRecordCommand
+import edu.bnbu.student.mvp.core.network.v1.generated.CreateExemptionApplicationRequest
+import edu.bnbu.student.mvp.core.network.v1.generated.CreateFeedbackRequest
+import edu.bnbu.student.mvp.core.network.v1.generated.ExemptionApplication as ContractExemptionApplication
+import edu.bnbu.student.mvp.core.network.v1.generated.Feedback as ContractFeedback
+import edu.bnbu.student.mvp.core.network.v1.generated.HelpArticle as ContractHelpArticle
+import edu.bnbu.student.mvp.core.network.v1.generated.UpdateUserPreferencesRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -70,30 +79,30 @@ import java.io.OutputStream
 import java.net.URI
 
 class ApiStudentRepository(
-    private var apiClient: StudentApiClient = StudentApiClient(),
-    private val userProfile: UserDto? = null
+    initialBearerToken: String? = null,
+    private val userProfile: UserDto? = null,
+    private val v1Gateway: V1StudentWorkspaceGateway? = null
 ) : StudentRepository {
+    private var lastV1Snapshot: V1StudentWorkspaceSnapshot? = null
+    private var exerciseGateway: ExerciseGateway? = null
+
+    internal fun attachExerciseGateway(gateway: ExerciseGateway?): ApiStudentRepository = apply {
+        exerciseGateway = gateway
+    }
 
     /**
-     * The current bearer token, mirrored from [apiClient].
-     *
-     * Setting this replaces the underlying client with one that carries the
-     * new token. Prefer calling [ApiStudentRepository.withToken] for a
-     * fresh copy when both the client and profile must change.
+     * The current access token is exposed only for session-state checks.
+     * All network calls use [v1Gateway], whose credential store performs
+     * refresh-token rotation and never falls back to legacy endpoints.
      */
-    var bearerToken: String?
-        get() = apiClient.bearerToken
-        set(value) {
-            apiClient = apiClient.withToken(value)
-        }
+    var bearerToken: String? = initialBearerToken
 
     // ── Auth ──────────────────────────────────────────────────────
 
     override suspend fun login(payload: StudentLoginRequest): LoginResponse {
-        val request = loginRequest(payload)
-        return withContext(Dispatchers.IO) {
-            apiClient.executeAndParseCancellable(request, LoginResponse::class.java)
-        }
+        throw UnsupportedOperationException(
+            "Password login is not part of the Android student flow; use V1 email-code login."
+        )
     }
 
     // ── Core loading ────────────────────────────────────────────
@@ -104,10 +113,8 @@ class ApiStudentRepository(
 
     /** Fetches only the current server-authoritative check-in admission policy. */
     suspend fun fetchCheckInTimeWindow(): CheckInTimeWindow = withContext(Dispatchers.IO) {
-        apiClient.executeAndParseCancellable(
-            apiClient.request(StudentEndpoint.CheckInTimeWindow),
-            CheckInTimeWindowResponse::class.java
-        ).toDomain()
+        val snapshot = requireV1Gateway().loadWorkspace().also { lastV1Snapshot = it }
+        snapshot.toCheckInTimeWindow()
     }
 
     /**
@@ -119,78 +126,8 @@ class ApiStudentRepository(
      * never returned silently from the network layer.
      */
     override suspend fun loadWorkspaceAsync(): StudentWorkspace = withContext(Dispatchers.IO) {
-        try {
-            val summary: SportSummaryResponse = apiClient.executeAndParseCancellable(
-                sportSummaryRequest(), SportSummaryResponse::class.java
-            )
-            val records: List<SportRecordResponse> = apiClient.executeAndParseCancellable(
-                recordsListRequest(), Array<SportRecordResponse>::class.java
-            ).toList()
-            val memberships: List<MembershipResponse> = apiClient.executeAndParseCancellable(
-                sportIdentityRequest(), Array<MembershipResponse>::class.java
-            ).toList()
-            val notices: List<NotificationResponse> = apiClient.executeAndParseCancellable(
-                notificationsRequest(), Array<NotificationResponse>::class.java
-            ).toList()
-            val checkInTimeWindow = fetchCheckInTimeWindow()
-            val profileResult: Result<StudentProfileResponse> = try {
-                Result.success(fetchProfile())
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (e.isUnauthorizedResponse()) throw e
-                Result.failure(e)
-            }
-            // Week2 course contract is optional during the transition from the
-            // shared port 96 API. A 404 falls back to summary.courses below.
-            val coursesResult: Result<StudentCoursesResponse> = try {
-                Result.success(
-                    apiClient.executeAndParseCancellable(
-                        apiClient.request(StudentEndpoint.StudentCourses(scope = "all")),
-                        StudentCoursesResponse::class.java
-                    )
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (e.isUnauthorizedResponse()) throw e
-                Result.failure(e)
-            }
-            val courseItems = coursesResult.getOrNull()?.courses.orEmpty()
-            val gradesResult: Result<StudentGradesResponse> = try {
-                Result.success(
-                    apiClient.executeAndParseCancellable(
-                        apiClient.request(StudentEndpoint.StudentGrades),
-                        StudentGradesResponse::class.java
-                    )
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (e.isUnauthorizedResponse()) throw e
-                Result.failure(e)
-            }
-            val gradesResponse = gradesResult.getOrNull()
-            val gradesLoadError = if (gradesResult.isFailure) gradesResult.exceptionOrNull()?.message else null
-
-            val workspace = buildWorkspace(
-                summary = summary,
-                records = records,
-                memberships = memberships,
-                notices = notices,
-                courseItems = courseItems,
-                gradesResponse = gradesResponse,
-                gradesLoadError = gradesLoadError,
-                remoteProfile = profileResult.getOrNull(),
-                checkInTimeWindow = checkInTimeWindow
-            )
-            workspace
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            android.util.Log.w("ApiStudentRepository", "Workspace refresh failed: ${e.message}")
-            throw e
-        }
+        val snapshot = requireV1Gateway().loadWorkspace().also { lastV1Snapshot = it }
+        snapshot.toWorkspace()
     }
 
     // ── Grades ────────────────────────────────────────────────────
@@ -202,27 +139,56 @@ class ApiStudentRepository(
      * is managed by teacher/admin endpoints and is not included in the summary.
      */
     suspend fun fetchStudentGrades(): StudentGradesResponse {
-        return withContext(Dispatchers.IO) {
-            apiClient.executeAndParseCancellable(
-                apiClient.request(StudentEndpoint.StudentGrades),
-                StudentGradesResponse::class.java
-            )
-        }
+        throw UnsupportedOperationException("Use the V1 student-score projection in loadWorkspaceAsync().")
     }
 
     // ── Mutations ───────────────────────────────────────────────
 
     override suspend fun submitRecord(payload: SubmitSportRecordRequest): Result<SubmitRecordResponse> {
         return withContext(Dispatchers.IO) {
-            try {
-                val request = submitSportRecordRequest(payload)
-                Result.success(
-                    apiClient.executeAndParseCancellable(request, SubmitRecordResponse::class.java)
+            runCatching {
+                val gateway = requireNotNull(exerciseGateway) {
+                    "The V1 ExerciseRecord gateway is not configured."
+                }
+                val sessionId = requireNotNull(payload.sessionId?.trim()?.takeIf(String::isNotEmpty)) {
+                    "A completed V1 exercise session ID is required."
+                }
+                val clientRequestId = requireNotNull(
+                    payload.clientRequestId?.trim()?.takeIf(String::isNotEmpty)
+                ) { "A V1 client request ID is required." }
+                val mediaIds = payload.proofFiles.map { it.cosKey.trim() }
+                    .filter(String::isNotEmpty)
+                    .distinct()
+                require(mediaIds.isNotEmpty()) { "At least one confirmed V1 media ID is required." }
+                val creditType = when (payload.creditType.trim().uppercase()) {
+                    "COURSE_RELATED", "课程相关" -> CreditType.CourseRelated
+                    "GENERAL", "其他运动" -> CreditType.General
+                    else -> error("Unsupported V1 credit type.")
+                }
+                val sportType = payload.sportType?.trim()?.uppercase()?.takeIf(String::isNotEmpty)
+                    ?: error("A V1 sport type is required.")
+                val draft = gateway.createRecordDraft(
+                    CreateExerciseRecordDraftCommand(
+                        sessionId = sessionId,
+                        creditType = creditType,
+                        clientRequestId = clientRequestId,
+                        form = ExerciseRecordForm(
+                            description = payload.description,
+                            sportType = sportType
+                        )
+                    )
                 )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Result.failure(e)
+                val submitted = gateway.submitRecord(
+                    SubmitExerciseRecordCommand(
+                        recordId = draft.recordId,
+                        expectedVersion = draft.version,
+                        mediaIds = mediaIds
+                    )
+                )
+                SubmitRecordResponse(
+                    id = submitted.recordId,
+                    submittedAt = java.time.Instant.ofEpochMilli(submitted.submittedAtEpochMillis).toString()
+                )
             }
         }
     }
@@ -230,10 +196,8 @@ class ApiStudentRepository(
     override suspend fun markNotificationRead(id: String): Result<MarkReadResponse> {
         return withContext(Dispatchers.IO) {
             try {
-                val request = markNotificationReadRequest(id)
-                Result.success(
-                    apiClient.executeAndParseCancellable(request, MarkReadResponse::class.java)
-                )
+                val notice = requireV1Gateway().markNotificationRead(id)
+                Result.success(MarkReadResponse(id = notice.id, read = notice.readAt != null))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -591,89 +555,35 @@ class ApiStudentRepository(
 
     // ── Request factories ────────────────────────────────────────
 
-    fun loginRequest(payload: StudentLoginRequest): StudentApiRequest {
-        return apiClient.request(StudentEndpoint.Login, payload)
-    }
-
-    fun sportSummaryRequest(): StudentApiRequest {
-        return apiClient.request(StudentEndpoint.SportSummary)
-    }
-
-    fun submitSportRecordRequest(payload: SubmitSportRecordRequest): StudentApiRequest {
-        return apiClient.request(StudentEndpoint.SportRecords, payload)
-    }
-
-    fun recordsListRequest(): StudentApiRequest {
-        return apiClient.request(StudentEndpoint.SportRecordsList)
-    }
-
-    fun sportIdentityRequest(): StudentApiRequest {
-        return apiClient.request(StudentEndpoint.SportIdentity)
-    }
-
-    fun notificationsRequest(): StudentApiRequest {
-        return apiClient.request(StudentEndpoint.Notifications)
-    }
-
-    fun markNotificationReadRequest(id: String): StudentApiRequest {
-        return apiClient.request(StudentEndpoint.MarkNotificationRead(id))
-    }
-
     // ── New: Endurance scoring ────────────────────────────────────
 
     suspend fun convertEndurance(request: EnduranceConversionRequest): EnduranceScoreResponse {
-        return withContext(Dispatchers.IO) {
-            apiClient.executeAndParseCancellable(
-                apiClient.request(StudentEndpoint.ConvertEndurance, request),
-                EnduranceScoreResponse::class.java
-            )
-        }
+        throw UnsupportedOperationException(
+            "Activity conversion rules are currently an explicit V1 default-deny capability."
+        )
     }
 
     // ── New: Exemptions ───────────────────────────────────────────
 
     suspend fun listExemptions(): List<ExemptionResponse> {
         return withContext(Dispatchers.IO) {
-            val physical = try {
-                apiClient.executeAndParseCancellable(
-                    apiClient.request(StudentEndpoint.PhysicalTestExemptions),
-                    Array<ExemptionResponse>::class.java
-                ).toList()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (e !is ApiHttpException || e.statusCode != 404) throw e
-                // Shared port 96 still exposes the legacy physical-test path.
-                apiClient.executeAndParseCancellable(
-                    apiClient.request(StudentEndpoint.StudentExemptions),
-                    Array<ExemptionResponse>::class.java
-                ).toList()
-            }
-            val checkIn = try {
-                apiClient.executeAndParseCancellable(
-                    apiClient.request(StudentEndpoint.CheckInExemptions),
-                    Array<ExemptionResponse>::class.java
-                ).toList()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (e is ApiHttpException && e.statusCode == 404) emptyList() else throw e
-            }
-            (physical + checkIn).sortedByDescending { it.createdAt }
+            requireV1Gateway().listExemptions()
+                .map { it.toLegacyResponse() }
+                .sortedByDescending(ExemptionResponse::createdAt)
         }
     }
 
     suspend fun submitExemption(payload: ExemptionApplication): ExemptionSubmitResponse {
         return withContext(Dispatchers.IO) {
-            val endpoint = if (payload.type == "team" || payload.type == "club") {
-                StudentEndpoint.SubmitCheckInExemption
-            } else {
-                StudentEndpoint.SubmitPhysicalTestExemption
-            }
-            apiClient.executeAndParseCancellable(
-                apiClient.request(endpoint, payload),
-                ExemptionSubmitResponse::class.java
+            val gateway = requireV1Gateway()
+            val created = gateway.createExemption(
+                enrollmentId = activeEnrollmentId(),
+                applicationType = payload.toContractApplicationType(),
+                reason = payload.reason,
+                mediaIds = payload.proofFiles.filter(String::isNotBlank).toSet(),
+                intentId = java.util.UUID.randomUUID().toString()
             )
+            gateway.submitExemption(created.id, created.version).toLegacySubmitResponse()
         }
     }
 
@@ -685,8 +595,8 @@ class ApiStudentRepository(
      * Upload proof media to the backend and return COS-backed file metadata.
      *
      * Copies files from [proofAttachments] that have valid local [ProofAttachment.source]
-     * URIs to temporary files, then uploads them via multipart POST.
-     * Returns signed display URLs together with stable COS keys and media metadata.
+     * URIs to temporary files, then uploads them through the private V1 media lifecycle.
+     * Returns the confirmed media identifiers used by an exemption application.
      *
      * @param proofAttachments the attachments selected by the user. Only those whose
      *   [ProofAttachment.source] is a readable content:// or file:// URI are used.
@@ -725,9 +635,8 @@ class ApiStudentRepository(
                     tempFiles.add(tempFile)
                     openAttachmentStream(attachment).use { input ->
                         tempFile.outputStream().use { output ->
-                            // This legacy multipart helper remains only for image-only
-                            // feedback and exemption attachments. Exercise video uses
-                            // the private /api/v1 media lifecycle instead.
+                            // Exemption evidence is image-only. Exercise video is owned by
+                            // the separate session media lifecycle.
                             require(attachment.type == ProofMediaType.Image) {
                                 "Exercise video must use the private media upload flow"
                             }
@@ -746,17 +655,37 @@ class ApiStudentRepository(
                     )
                 }
 
-                val response = apiClient.uploadProofFilesCancellable(tempFiles, onProgress)
-                if (response.files.size != proofAttachments.size) {
-                    throw IOException(
-                        "Server accepted ${response.files.size} of ${proofAttachments.size} upload files"
+                val enrollmentId = activeEnrollmentId()
+                val totalBytes = tempFiles.sumOf(File::length).coerceAtLeast(1L)
+                var completedBytes = 0L
+                val uploaded = tempFiles.mapIndexed { index, file ->
+                    val attachment = proofAttachments[index]
+                    val media = requireV1Gateway().uploadExemptionMedia(
+                        enrollmentId = enrollmentId,
+                        file = file,
+                        mimeType = attachment.mimeTypeForV1(),
+                        durationSeconds = attachment.durationSeconds?.toLong(),
+                        intentId = attachment.id,
+                        onProgress = { itemProgress ->
+                            onProgress(
+                                UploadProgress(
+                                    bytesSent = (completedBytes + itemProgress.bytesSent)
+                                        .coerceAtMost(totalBytes),
+                                    totalBytes = totalBytes
+                                )
+                            )
+                        }
+                    )
+                    completedBytes += file.length()
+                    UploadedProofFile(
+                        url = "",
+                        cosKey = media.mediaId,
+                        mediaType = if (attachment.type == ProofMediaType.Video) "video" else "image",
+                        mimeType = media.mimeType,
+                        size = media.fileSizeBytes
                     )
                 }
-                if (response.files.any { it.cosKey.isBlank() }) {
-                    throw IOException("Server upload response is missing a COS key")
-                }
-
-                Result.success(response.files)
+                Result.success(uploaded)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -772,22 +701,16 @@ class ApiStudentRepository(
         payload: ExemptionApplication
     ): ExemptionSubmitResponse {
         return withContext(Dispatchers.IO) {
-            val isCheckIn = exemption.category == "checkin" ||
-                exemption.type == "team" || exemption.type == "club"
-            val endpoint = if (isCheckIn) {
-                StudentEndpoint.SupplementCheckInExemption(exemption.id)
-            } else {
-                StudentEndpoint.SupplementPhysicalTestExemption(exemption.id)
-            }
-            val supplement = ExemptionSupplementRequest(
+            val gateway = requireV1Gateway()
+            val current = gateway.listExemptions().firstOrNull { it.id == exemption.id }
+                ?: throw IOException("Exemption application no longer exists.")
+            val updated = gateway.updateExemption(
+                applicationId = current.id,
                 reason = payload.reason,
-                proofFiles = payload.proofFiles,
-                organization = payload.organization
+                mediaIds = current.mediaIds + payload.proofFiles.filter(String::isNotBlank),
+                expectedVersion = current.version
             )
-            apiClient.executeAndParseCancellable(
-                apiClient.request(endpoint, supplement),
-                ExemptionSubmitResponse::class.java
-            )
+            gateway.submitExemption(updated.id, updated.version).toLegacySubmitResponse()
         }
     }
 
@@ -856,20 +779,14 @@ class ApiStudentRepository(
 
     suspend fun fetchProfile(): StudentProfileResponse {
         return withContext(Dispatchers.IO) {
-            apiClient.executeAndParseCancellable(
-                apiClient.request(StudentEndpoint.StudentProfile),
-                StudentProfileResponse::class.java
-            )
+            requireV1Gateway().loadWorkspace()
+                .also { lastV1Snapshot = it }
+                .toLegacyProfile()
         }
     }
 
     suspend fun updateProfile(payload: StudentProfileUpdateRequest): StudentProfileResponse {
-        return withContext(Dispatchers.IO) {
-            apiClient.executeAndParseCancellable(
-                apiClient.request(StudentEndpoint.UpdateStudentProfile, payload),
-                StudentProfileResponse::class.java
-            )
-        }
+        throw UnsupportedOperationException("School-owned student profile facts are read-only in Android.")
     }
 
     /**
@@ -878,43 +795,348 @@ class ApiStudentRepository(
      */
     suspend fun updateLanguagePreference(language: AppLanguage): LanguagePreferenceResponse {
         return withContext(Dispatchers.IO) {
-            apiClient.executeAndParseCancellable(
-                apiClient.request(
-                    StudentEndpoint.UpdateLanguagePreference,
-                    UpdateLanguagePreferenceRequest(language.languageTag)
-                ),
-                LanguagePreferenceResponse::class.java
+            val gateway = requireV1Gateway()
+            val current = gateway.getPreferences()
+            val locale = when (language.languageTag) {
+                "en" -> UpdateUserPreferencesRequest.Locale.en
+                else -> UpdateUserPreferencesRequest.Locale.zhMinusCN
+            }
+            val updated = gateway.updatePreferences(
+                locale = locale,
+                pushEnabled = current.pushEnabled,
+                emailEnabled = current.emailEnabled,
+                expectedVersion = current.version
             )
+            LanguagePreferenceResponse(updated.locale.value)
         }
     }
 
     /** Loads only the articles currently published by an administrator. */
     suspend fun fetchHelpArticles(): List<HelpArticleResponse> {
         return withContext(Dispatchers.IO) {
-            apiClient.executeAndParseCancellable(
-                apiClient.request(StudentEndpoint.HelpArticles),
-                Array<HelpArticleResponse>::class.java
-            ).toList()
+            requireV1Gateway().listHelpArticles(languageTagForV1())
+                .map { it.toLegacyResponse() }
         }
     }
 
     // Feedback API contract is isolated here while the backend endpoint is being finalized.
     suspend fun submitFeedback(payload: SubmitFeedbackRequest): FeedbackTicketResponse {
         return withContext(Dispatchers.IO) {
-            apiClient.executeAndParseCancellable(
-                apiClient.request(StudentEndpoint.SubmitFeedback, payload),
-                FeedbackTicketResponse::class.java
+            val content = buildString {
+                append(payload.description.trim())
+                payload.currentPage.trim().takeIf(String::isNotEmpty)?.let {
+                    append("\n\nPage: ").append(it)
+                }
+            }.take(2000)
+            val body = CreateFeedbackRequest(
+                category = payload.category.toContractFeedbackCategory(),
+                content = content,
+                clientContext = edu.bnbu.student.mvp.core.network.v1.generated.CreateFeedbackRequestClientContext(
+                    platform = edu.bnbu.student.mvp.core.network.v1.generated.CreateFeedbackRequestClientContext.Platform.ANDROID,
+                    appVersion = payload.clientVersion,
+                    osVersion = android.os.Build.VERSION.RELEASE
+                )
             )
+            requireV1Gateway().createFeedback(body, java.util.UUID.randomUUID().toString())
+                .toLegacyResponse()
         }
     }
 
     suspend fun listFeedbackTickets(): List<FeedbackTicketResponse> {
         return withContext(Dispatchers.IO) {
-            apiClient.executeAndParseCancellable(
-                apiClient.request(StudentEndpoint.FeedbackTickets),
-                FeedbackTicketListResponse::class.java
-            ).tickets
+            requireV1Gateway().listFeedback().map { it.toLegacyResponse() }
         }
+    }
+
+    private fun requireV1Gateway(): V1StudentWorkspaceGateway = v1Gateway
+        ?: throw IllegalStateException("The authenticated V1 workspace gateway is not configured.")
+
+    private suspend fun activeEnrollmentId(): String {
+        val gateway = requireV1Gateway()
+        val snapshot = lastV1Snapshot ?: gateway.loadWorkspace().also {
+            lastV1Snapshot = it
+        }
+        val active = snapshot.enrollments.filter { it.status.value == "ACTIVE" }
+        gateway.currentSessionEnrollmentId()?.let { sessionEnrollmentId ->
+            if (active.any { it.id == sessionEnrollmentId }) return sessionEnrollmentId
+            throw IllegalStateException("The authenticated session enrollment is not active.")
+        }
+        return active.singleOrNull()?.id
+            ?: throw IllegalStateException(
+                if (active.isEmpty()) "An active enrollment is required."
+                else "The active enrollment is ambiguous. Sign in through the intended course."
+            )
+    }
+
+    private fun languageTagForV1(): String =
+        edu.bnbu.student.mvp.core.local.AppLanguagePreferences.currentLanguage.languageTag
+
+    private fun V1StudentWorkspaceSnapshot.toWorkspace(): StudentWorkspace {
+        val contractProfile = requireNotNull(currentUser.studentProfile) {
+            "The authenticated student projection is missing."
+        }
+        val student = StudentProfile(
+            // Android's student identity key follows StudentProfile.id; User.id
+            // remains the authentication principal and is never substituted.
+            id = contractProfile.id,
+            name = contractProfile.fullName,
+            studentNumber = contractProfile.studentNumber,
+            email = currentUser.user.primaryEmailMasked.orEmpty(),
+            college = contractProfile.collegeName.orEmpty(),
+            className = contractProfile.administrativeClassName.orEmpty(),
+            status = contractProfile.status,
+            gender = contractProfile.gender.value.lowercase(),
+            gradeLevel = contractProfile.gradeYear.toString(),
+            admissionYear = contractProfile.gradeYear,
+            currentAcademicYear = "",
+            gradeCalculatedAt = scores.maxOfOrNull { it.calculatedAt?.toString().orEmpty() }.orEmpty(),
+            accountStatus = currentUser.user.status.value
+        )
+        val courses = enrollments.mapNotNull { enrollment ->
+            val section = classSections[enrollment.classSectionId] ?: return@mapNotNull null
+            val contractCourse = this.courses[section.courseId] ?: return@mapNotNull null
+            Course(
+                id = contractCourse.id,
+                code = contractCourse.courseCode,
+                section = section.classCode,
+                name = contractCourse.courseName,
+                semester = section.semesterId,
+                students = 0,
+                completion = 0,
+                missing = 0,
+                deadline = section.submissionDeadlineAt?.toLocalDate()?.toString().orEmpty(),
+                teacher = section.teacherId,
+                teacherId = section.teacherId,
+                semesterId = section.semesterId,
+                status = section.status.value.lowercase(),
+                enrollmentStatus = enrollment.status.value.lowercase(),
+                isCurrent = enrollment.status.value == "ACTIVE"
+            )
+        }
+        val courseSeconds = scores.sumOf { it.validCourseDurationSeconds }
+        val generalSeconds = scores.sumOf { it.validGeneralDurationSeconds }
+        val qualified = scores.any { it.qualificationStatus.value == "QUALIFIED" }
+        val progress = StudentProgress(
+            id = student.id,
+            name = student.name,
+            college = student.college,
+            className = student.className,
+            course = courseSeconds / 3600.0,
+            general = generalSeconds / 3600.0,
+            rawCourse = courseSeconds / 3600.0,
+            rawGeneral = generalSeconds / 3600.0,
+            exam = 0,
+            attendance = 0,
+            physical = 0,
+            status = if (qualified) "completed" else "in_progress",
+            source = "v1:student-scores",
+            organizationCredit = null
+        )
+        val primaryScore = scores.firstOrNull { score ->
+            enrollments.any { it.id == score.enrollmentId && it.status.value == "ACTIVE" }
+        } ?: scores.firstOrNull()
+        val publishedScore = primaryScore?.takeIf {
+            it.status.value == "PUBLISHED" || it.status.value == "LOCKED"
+        }?.finalScore
+        val gradeBlocks = primaryScore?.let { score ->
+            listOf(
+                GradeBlock(
+                    id = score.id,
+                    name = "Sports score",
+                    weight = 1.0,
+                    score = publishedScore?.toInt(),
+                    scoreDisplay = publishedScore?.toPlainString() ?: "Not published",
+                    isVisible = true,
+                    displayOrder = 10,
+                    blockType = "student_score",
+                    description = "Server-authoritative score and qualification projection",
+                    subItems = null
+                )
+            )
+        }.orEmpty()
+        val gradeRow = GradeRow(
+            studentId = student.id,
+            studentName = student.name,
+            visibleBlocks = gradeBlocks,
+            totalScore = publishedScore?.toInt(),
+            totalDisplay = publishedScore?.toPlainString() ?: "Not published",
+            isPassed = primaryScore?.qualificationStatus?.value?.let { it == "QUALIFIED" },
+            courseGradeStatus = primaryScore?.status?.value?.lowercase() ?: "not_calculated",
+            displayConfigVersion = primaryScore?.calculationRevision?.toInt() ?: 0,
+            sourceTrace = "V1:/student-scores"
+        )
+        return StudentWorkspace(
+            student = student,
+            courses = courses,
+            progress = progress,
+            // StudentScore exposes credited duration and qualification, but the
+            // student role cannot read ScoreRule targets. Never invent targets.
+            hourRule = SportHourRule.Unavailable,
+            records = records.map { record ->
+                CheckInRecord(
+                    id = record.id,
+                    courseId = record.courseId,
+                    taskTitle = record.sportName ?: record.sportType,
+                    creditType = if (record.creditType.value == "COURSE_RELATED") {
+                        CreditType.CourseRelated
+                    } else {
+                        CreditType.General
+                    },
+                    hours = record.creditedDurationSeconds / 3600.0,
+                    submittedAt = record.submittedAt?.toString().orEmpty(),
+                    proofSummary = "Server-managed private evidence",
+                    proofPhotoCount = 0,
+                    proofVideoCount = 0,
+                    proofFiles = emptyList(),
+                    teacherPublicFeedback = record.currentReview?.publicComment,
+                    teacherInternalNote = null,
+                    note = record.description,
+                    sportType = record.sportType,
+                    actualDurationSeconds = record.actualDurationSeconds
+                )
+            },
+            grades = gradeRow,
+            memberships = emptyList(),
+            notices = notifications.map { notification ->
+                StudentNotice(
+                    id = notification.id,
+                    title = notification.title,
+                    message = notification.body,
+                    time = notification.createdAt.toString(),
+                    category = notification.notificationType.toNoticeCategory(),
+                    isUnread = notification.readAt == null,
+                    targetType = notification.targetType,
+                    targetId = notification.targetId
+                )
+            },
+            teachers = classSections.values.map { it.teacherId }.distinct().map {
+                TeacherInfo(teacherId = it, teacherName = it)
+            },
+            checkInTimeWindow = toCheckInTimeWindow()
+        )
+    }
+
+    private fun V1StudentWorkspaceSnapshot.toCheckInTimeWindow(): CheckInTimeWindow {
+        val activeSection = enrollments.firstOrNull { it.status.value == "ACTIVE" }
+            ?.let { classSections[it.classSectionId] }
+            ?: return CheckInTimeWindow.unavailable()
+        return CheckInTimeWindow(
+            windowMode = activeSection.checkInWindowMode.value.lowercase(),
+            dateRangeStart = activeSection.checkInStartDate?.toString(),
+            dateRangeEnd = activeSection.checkInEndDate?.toString(),
+            dailyStartTime = activeSection.dailyStartTime?.toString().orEmpty(),
+            dailyEndTime = activeSection.dailyEndTime?.toString().orEmpty(),
+            excludedDates = activeSection.excludedDates.map { it.toString() },
+            semesterDeadline = activeSection.submissionDeadlineAt?.toLocalDate()?.toString()
+        )
+    }
+
+    private fun V1StudentWorkspaceSnapshot.toLegacyProfile(): StudentProfileResponse {
+        val profile = requireNotNull(currentUser.studentProfile)
+        return StudentProfileResponse(
+            id = profile.id,
+            name = profile.fullName,
+            studentNumber = profile.studentNumber,
+            email = currentUser.user.primaryEmailMasked.orEmpty(),
+            role = currentUser.user.role.value,
+            college = profile.collegeName.orEmpty(),
+            className = profile.administrativeClassName.orEmpty(),
+            gender = profile.gender.value.lowercase(),
+            preferredLanguage = languageTagForV1(),
+            gradeLevel = profile.gradeYear.toString(),
+            admissionYear = profile.gradeYear,
+            currentGradeLevel = profile.gradeYear.toString(),
+            status = profile.status,
+            enrolledCourses = enrollments.count { it.status.value == "ACTIVE" },
+            accountStatus = currentUser.user.status.value,
+            contacts = edu.bnbu.student.mvp.core.network.ContactStatusResponse(
+                email = edu.bnbu.student.mvp.core.network.ContactMethodResponse(
+                    masked = currentUser.user.primaryEmailMasked,
+                    verified = currentUser.user.emailVerified
+                )
+            )
+        )
+    }
+
+    private fun ContractExemptionApplication.toLegacyResponse(): ExemptionResponse =
+        ExemptionResponse(
+            id = id,
+            studentId = studentId,
+            type = when (applicationType.value) {
+                "EXERCISE_CHECK_IN" -> "exercise_check_in"
+                "PHYSICAL_TEST" -> "physical_test"
+                else -> "special_circumstance"
+            },
+            category = applicationType.value.lowercase(),
+            reason = reason,
+            status = status.value.lowercase(),
+            proofFiles = mediaIds.map { mediaId ->
+                edu.bnbu.student.mvp.core.network.ProofFileResponse(cosKey = mediaId)
+            },
+            reviewComment = publicComment,
+            createdAt = submittedAt?.toString().orEmpty(),
+            updatedAt = decidedAt?.toString() ?: submittedAt?.toString()
+        )
+
+    private fun ContractExemptionApplication.toLegacySubmitResponse(): ExemptionSubmitResponse =
+        ExemptionSubmitResponse(
+            id = id,
+            status = status.value.lowercase(),
+            createdAt = submittedAt?.toString().orEmpty()
+        )
+
+    private fun ExemptionApplication.toContractApplicationType():
+        CreateExemptionApplicationRequest.ApplicationType = when (type.lowercase()) {
+        "exercise_check_in" -> CreateExemptionApplicationRequest.ApplicationType.EXERCISE_CHECK_IN
+        "physical_test" -> CreateExemptionApplicationRequest.ApplicationType.PHYSICAL_TEST
+        else -> CreateExemptionApplicationRequest.ApplicationType.SPECIAL_CIRCUMSTANCE
+    }
+
+    private fun ProofAttachment.mimeTypeForV1(): String = when {
+        type == ProofMediaType.Video -> "video/mp4"
+        fileName.endsWith(".png", ignoreCase = true) -> "image/png"
+        else -> "image/jpeg"
+    }
+
+    private fun String.toContractFeedbackCategory(): CreateFeedbackRequest.Category = when {
+        contains("bug", ignoreCase = true) || contains("故障") || contains("异常") ->
+            CreateFeedbackRequest.Category.BUG
+        contains("access", ignoreCase = true) || contains("无障碍") ->
+            CreateFeedbackRequest.Category.ACCESSIBILITY
+        contains("privacy", ignoreCase = true) || contains("隐私") ->
+            CreateFeedbackRequest.Category.PRIVACY
+        contains("suggest", ignoreCase = true) || contains("建议") ->
+            CreateFeedbackRequest.Category.SUGGESTION
+        else -> CreateFeedbackRequest.Category.OTHER
+    }
+
+    private fun ContractFeedback.toLegacyResponse(): FeedbackTicketResponse =
+        FeedbackTicketResponse(
+            id = id,
+            ticketNumber = id,
+            category = category.value.lowercase(),
+            description = content,
+            status = status.value.lowercase(),
+            createdAt = createdAt.toString(),
+            updatedAt = updatedAt.toString(),
+            reply = publicReply
+        )
+
+    private fun ContractHelpArticle.toLegacyResponse(): HelpArticleResponse =
+        HelpArticleResponse(
+            id = id,
+            title = title,
+            category = category,
+            content = bodyMarkdown,
+            updatedAt = publishedAt.toString()
+        )
+
+    private fun String.toNoticeCategory(): NoticeCategory = when {
+        contains("DEADLINE", ignoreCase = true) -> NoticeCategory.Deadline
+        contains("REVIEW", ignoreCase = true) || contains("EXEMPTION", ignoreCase = true) ->
+            NoticeCategory.Review
+        contains("ORGANIZATION", ignoreCase = true) -> NoticeCategory.Organization
+        else -> NoticeCategory.System
     }
 
     // ── Context access for content:// URIs ─────────────────────────

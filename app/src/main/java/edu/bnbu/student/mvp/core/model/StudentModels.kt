@@ -477,10 +477,18 @@ data class SportHourRule(
     val total: Double,
     val courseRequired: Double,
     val generalRequired: Double,
-    val dailyLimit: Double
+    val dailyLimit: Double,
+    val isAvailable: Boolean = true
 ) {
     companion object {
         val Standard = SportHourRule(total = 20.0, courseRequired = 10.0, generalRequired = 10.0, dailyLimit = 2.0)
+        val Unavailable = SportHourRule(
+            total = 0.0,
+            courseRequired = 0.0,
+            generalRequired = 0.0,
+            dailyLimit = 0.0,
+            isAvailable = false
+        )
     }
 }
 
@@ -530,13 +538,12 @@ data class EnduranceConversionRequest(
 // ── Exemptions ─────────────────────────────────────────────────────
 
 enum class ExemptionType(val apiValue: String, val label: String) {
-    Run800("800m", "800m 免测"),
-    Run1000("1000m", "1000m 免测"),
-    Team("team", "校队免打卡"),
-    Club("club", "社团免打卡");
+    PhysicalTest("physical_test", "体测免测"),
+    ExerciseCheckIn("exercise_check_in", "运动打卡豁免"),
+    SpecialCircumstance("special_circumstance", "特殊情况申请");
 
     val isCheckInExemption: Boolean
-        get() = this == Team || this == Club
+        get() = this == ExerciseCheckIn
 }
 
 enum class ExemptionStatus(val label: String) {
@@ -563,10 +570,9 @@ data class Exemption(
 ) {
     val typeLabel: String
         get() = when (type) {
-            "800m" -> ExemptionType.Run800.label
-            "1000m" -> ExemptionType.Run1000.label
-            "team" -> ExemptionType.Team.label
-            "club" -> ExemptionType.Club.label
+            "physical_test" -> ExemptionType.PhysicalTest.label
+            "exercise_check_in" -> ExemptionType.ExerciseCheckIn.label
+            "special_circumstance" -> ExemptionType.SpecialCircumstance.label
             else -> type
         }
 }

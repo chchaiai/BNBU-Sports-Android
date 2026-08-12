@@ -26,7 +26,6 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -68,8 +67,7 @@ import java.time.format.DateTimeFormatter
 
 @Composable
 private fun ApplicationPanel(
-    onOpenExemption: (String?) -> Unit,
-    onOpenEnduranceScoring: () -> Unit
+    onOpenExemption: (String?) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionTitle(
@@ -83,13 +81,6 @@ private fun ApplicationPanel(
                 icon = Icons.Filled.FitnessCenter,
                 modifier = Modifier.weight(1f),
                 onClick = { onOpenExemption(null) }
-            )
-            ServiceShortcut(
-                title = stringResource(R.string.profile_endurance),
-                description = stringResource(R.string.profile_endurance_short_hint),
-                icon = Icons.Filled.Speed,
-                modifier = Modifier.weight(1f),
-                onClick = onOpenEnduranceScoring
             )
         }
     }
@@ -151,8 +142,7 @@ fun ProfileScreen(
     appState: StudentAppState,
     onOpenAccountDetails: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
-    onOpenExemption: (String?) -> Unit = {},
-    onOpenEnduranceScoring: () -> Unit = {}
+    onOpenExemption: (String?) -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -160,7 +150,7 @@ fun ProfileScreen(
     ) {
         item { ProfileHeader(appState, onOpenAccountDetails, onOpenSettings) }
 
-        item { ApplicationPanel(onOpenExemption, onOpenEnduranceScoring) }
+        item { ApplicationPanel(onOpenExemption) }
         item { TeacherPanel(appState) }
         item { IdentityPanel(appState) }
         item { Spacer(Modifier.height(40.dp)) }

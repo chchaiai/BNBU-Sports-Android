@@ -18,6 +18,7 @@ import com.google.gson.stream.JsonWriter
 import java.io.IOException
 import java.lang.reflect.Type
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.OffsetDateTime
 
 /** Gson configuration shared by the generated OpenAPI models and transport. */
@@ -26,6 +27,7 @@ object V1Json {
         .registerTypeAdapterFactory(StrictEnumTypeAdapterFactory)
         .registerTypeAdapter(OffsetDateTime::class.java, OffsetDateTimeAdapter)
         .registerTypeAdapter(LocalDate::class.java, LocalDateAdapter)
+        .registerTypeAdapter(LocalTime::class.java, LocalTimeAdapter)
         .disableHtmlEscaping()
         .create()
 
@@ -56,6 +58,20 @@ object V1Json {
             type: Type,
             context: JsonDeserializationContext
         ): LocalDate = parseDateTime(json) { LocalDate.parse(it) }
+    }
+
+    private object LocalTimeAdapter : JsonSerializer<LocalTime>, JsonDeserializer<LocalTime> {
+        override fun serialize(
+            source: LocalTime,
+            type: Type,
+            context: JsonSerializationContext
+        ): JsonElement = context.serialize(source.toString())
+
+        override fun deserialize(
+            json: JsonElement,
+            type: Type,
+            context: JsonDeserializationContext
+        ): LocalTime = parseDateTime(json) { LocalTime.parse(it) }
     }
 
     private fun <T> parseDateTime(json: JsonElement, parser: (String) -> T): T {

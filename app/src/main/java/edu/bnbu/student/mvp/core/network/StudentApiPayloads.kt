@@ -49,7 +49,10 @@ data class SubmitSportRecordRequest(
     val sportType: String? = null,
     val startTime: String? = null,
     val endTime: String? = null,
-    val actualDurationSeconds: Long? = null
+    val actualDurationSeconds: Long? = null,
+    /** Required by the V1 ExerciseRecord lifecycle; legacy callers fail closed. */
+    val sessionId: String? = null,
+    val clientRequestId: String? = null
 )
 
 data class EnduranceConversionRequest(
@@ -64,14 +67,10 @@ data class ExemptionSupplementRequest(
     val organization: String? = null
 )
 
-/** Request body for POST /api/v1/student/feedback. */
+/** UI input adapted to the privacy-bounded POST /api/v1/feedback contract. */
 data class SubmitFeedbackRequest(
     val category: String,
     val description: String,
     val currentPage: String,
-    val clientVersion: String,
-    val screenshots: List<String> = emptyList(),
-    /** Contact details are used only to follow up on this feedback ticket. */
-    val email: String,
-    val phone: String
+    val clientVersion: String
 )

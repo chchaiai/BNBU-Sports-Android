@@ -1,82 +1,105 @@
 package edu.bnbu.student.mvp.core.network
 
+import edu.bnbu.student.mvp.core.network.v1.V1ApiRequest
+import edu.bnbu.student.mvp.core.network.v1.V1ApiTransport
+import edu.bnbu.student.mvp.core.network.v1.V1HttpMethod
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class StudentEndpointTest {
     @Test
-    fun endpointContractsMatchBackendRoutes() {
+    fun endpointContractsMatchAuthoritativeV1Routes() {
         val contracts = listOf(
-            Triple(StudentEndpoint.Health, HttpMethod.GET, "/health"),
-            Triple(StudentEndpoint.Login, HttpMethod.POST, "/auth/login"),
-            Triple(StudentEndpoint.SportSummary, HttpMethod.GET, "/sport/summary"),
-            Triple(StudentEndpoint.SportRecords, HttpMethod.POST, "/sport/records"),
-            Triple(StudentEndpoint.SportRecordsList, HttpMethod.GET, "/sport/records"),
-            Triple(StudentEndpoint.SportRecordDetail("record-1"), HttpMethod.GET, "/sport/records/record-1"),
-            Triple(StudentEndpoint.SportIdentity, HttpMethod.GET, "/sport/identity"),
-            Triple(StudentEndpoint.Notifications, HttpMethod.GET, "/common/notifications"),
-            Triple(
-                StudentEndpoint.MarkNotificationRead("notice-1"),
-                HttpMethod.PUT,
-                "/common/notifications/notice-1/read"
-            ),
-            Triple(StudentEndpoint.ConvertEndurance, HttpMethod.POST, "/scoring/convert-endurance"),
-            Triple(StudentEndpoint.StudentExemptions, HttpMethod.GET, "/student/exemptions"),
-            Triple(StudentEndpoint.SubmitExemption, HttpMethod.POST, "/student/exemptions"),
-            Triple(
-                StudentEndpoint.PhysicalTestExemptions,
-                HttpMethod.GET,
-                "/student/physical-test-exemptions"
-            ),
-            Triple(
-                StudentEndpoint.SubmitPhysicalTestExemption,
-                HttpMethod.POST,
-                "/student/physical-test-exemptions"
-            ),
-            Triple(
-                StudentEndpoint.SupplementPhysicalTestExemption("physical-1"),
-                HttpMethod.POST,
-                "/student/physical-test-exemptions/physical-1/supplements"
-            ),
-            Triple(StudentEndpoint.CheckInExemptions, HttpMethod.GET, "/student/checkin-exemptions"),
-            Triple(
-                StudentEndpoint.SubmitCheckInExemption,
-                HttpMethod.POST,
-                "/student/checkin-exemptions"
-            ),
-            Triple(
-                StudentEndpoint.SupplementCheckInExemption("checkin-1"),
-                HttpMethod.POST,
-                "/student/checkin-exemptions/checkin-1/supplements"
-            ),
-            Triple(StudentEndpoint.StudentProfile, HttpMethod.GET, "/student/profile"),
-            Triple(StudentEndpoint.CheckInTimeWindow, HttpMethod.GET, "/student/checkin-time-window"),
-            Triple(StudentEndpoint.UpdateStudentProfile, HttpMethod.PUT, "/student/profile"),
-            Triple(StudentEndpoint.UploadProof, HttpMethod.POST, "/upload/proof"),
-            Triple(StudentEndpoint.StudentGrades, HttpMethod.GET, "/student/grades"),
-            Triple(StudentEndpoint.SubmitFeedback, HttpMethod.POST, "/student/feedback"),
-            Triple(StudentEndpoint.FeedbackTickets, HttpMethod.GET, "/student/feedback"),
-            Triple(StudentEndpoint.UpdateLanguagePreference, HttpMethod.PUT, "/student/preferences/language")
+            route("getLiveHealth", V1HttpMethod.GET, "health/live"),
+            route("getReadyHealth", V1HttpMethod.GET, "health/ready"),
+            route("getSystemMode", V1HttpMethod.GET, "system-mode"),
+            route("requestStudentSignInCode", V1HttpMethod.POST, "auth/student-sign-in-codes"),
+            route("getCurrentUser", V1HttpMethod.GET, "me"),
+            route("listEnrollments", V1HttpMethod.GET, "enrollments"),
+            route("getClassSection", V1HttpMethod.GET, "class-sections/section-1"),
+            route("getCourse", V1HttpMethod.GET, "courses/course-1"),
+            route("listExerciseRecords", V1HttpMethod.GET, "exercise-records"),
+            route("createExerciseRecordDraft", V1HttpMethod.POST, "exercise-records"),
+            route("updateExerciseRecordDraft", V1HttpMethod.PATCH, "exercise-records/record-1"),
+            route("submitExerciseRecord", V1HttpMethod.POST, "exercise-records/record-1/submit"),
+            route("listStudentScores", V1HttpMethod.GET, "student-scores"),
+            route("listNotifications", V1HttpMethod.GET, "notifications"),
+            route("markNotificationRead", V1HttpMethod.POST, "notifications/notice-1/read"),
+            route("registerPushDevice", V1HttpMethod.POST, "push-devices"),
+            route("unregisterPushDevice", V1HttpMethod.DELETE, "push-devices/device-1"),
+            route("getCurrentUserPreferences", V1HttpMethod.GET, "me/preferences"),
+            route("updateCurrentUserPreferences", V1HttpMethod.PATCH, "me/preferences"),
+            route("listHelpArticles", V1HttpMethod.GET, "help-articles"),
+            route("listFeedback", V1HttpMethod.GET, "feedback"),
+            route("createFeedback", V1HttpMethod.POST, "feedback"),
+            route("listExemptionApplications", V1HttpMethod.GET, "exemption-applications"),
+            route("createExemptionApplication", V1HttpMethod.POST, "exemption-applications"),
+            route("updateExemptionApplication", V1HttpMethod.PATCH, "exemption-applications/application-1"),
+            route("submitExemptionApplication", V1HttpMethod.POST, "exemption-applications/application-1/submit"),
+            route("initiateMediaUpload", V1HttpMethod.POST, "media-uploads"),
+            route("confirmMediaUpload", V1HttpMethod.POST, "media-uploads/upload-1/confirm"),
+            route("getAppReleasePolicy", V1HttpMethod.GET, "app-release-policy")
         )
+        val transport = transport()
 
-        contracts.forEach { (endpoint, method, path) ->
-            assertEquals(method, endpoint.method)
-            assertEquals(path, endpoint.path)
+        contracts.forEach { contract ->
+            val request = transport.buildRequest(
+                V1ApiRequest(
+                    operationId = contract.operationId,
+                    method = contract.method,
+                    relativePath = contract.path,
+                    body = if (contract.method.isReadOnly) null else emptyMap<String, String>()
+                )
+            )
+            assertEquals(contract.method.name, request.method)
+            assertEquals("/api/v1/${contract.path}", request.url.encodedPath)
         }
     }
 
     @Test
-    fun dynamicPathAndQueryValuesAreEncoded() {
-        assertEquals(
-            "/sport/records/a%2Fb%20c",
-            StudentEndpoint.SportRecordDetail("a/b c").path
+    fun dynamicPathAndQueryValuesAreEncodedAsOpaqueValues() {
+        val request = transport().buildRequest(
+            V1ApiRequest(
+                operationId = "getExerciseRecord",
+                method = V1HttpMethod.GET,
+                relativePath = "exercise-records/{recordId}",
+                pathSegments = listOf("exercise-records", "record/a b"),
+                query = mapOf("enrollmentId" to "enrollment/2026 fall")
+            )
         )
+
         assertEquals(
-            "/student/courses?scope=current%20term&semesterId=2026%2Ffall",
-            StudentEndpoint.StudentCourses(
-                scope = "current term",
-                semesterId = "2026/fall"
-            ).path
+            "https://api.example.test/api/v1/exercise-records/record%2Fa%20b?enrollmentId=enrollment%2F2026%20fall",
+            request.url.toString()
         )
     }
+
+    @Test
+    fun legacyAbsoluteTraversalAndEmbeddedQueryPathsFailClosed() {
+        listOf(
+            "/student/profile",
+            "https://legacy.example.test/student/profile",
+            "../student/profile",
+            "student/profile?scope=current"
+        ).forEach { path ->
+            assertThrows(IllegalArgumentException::class.java) {
+                V1ApiRequest("legacyPath", V1HttpMethod.GET, path)
+            }
+        }
+    }
+
+    private fun route(operationId: String, method: V1HttpMethod, path: String) =
+        RouteContract(operationId, method, path)
+
+    private fun transport(): V1ApiTransport = V1ApiTransport(
+        baseUrl = "https://api.example.test/api/v1",
+        requestIdProvider = { "android-test" }
+    )
+
+    private data class RouteContract(
+        val operationId: String,
+        val method: V1HttpMethod,
+        val path: String
+    )
 }
