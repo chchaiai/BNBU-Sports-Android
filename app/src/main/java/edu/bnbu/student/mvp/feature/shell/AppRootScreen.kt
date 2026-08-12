@@ -114,7 +114,6 @@ import edu.bnbu.student.mvp.feature.profile.AccountDetailsScreen
 import edu.bnbu.student.mvp.feature.profile.ProfileSettingsScreen
 import edu.bnbu.student.mvp.feature.profile.PrivacyPolicyScreen
 import edu.bnbu.student.mvp.feature.profile.ProfileScreen
-import edu.bnbu.student.mvp.feature.scoring.EnduranceScoringScreen
 import edu.bnbu.student.mvp.feature.exemption.ExemptionScreen
 import edu.bnbu.student.mvp.feature.feedback.FeedbackScreen
 import edu.bnbu.student.mvp.feature.settings.AboutScreen
@@ -137,7 +136,6 @@ enum class SubScreen {
     ScanJoin,
     EnterCode,
     CourseJoinConfirm,
-    EnduranceScoring,
     Exemption,
     AccountDetails,
     Settings,
@@ -709,10 +707,6 @@ private fun AuthenticatedAppContent(
                                 renderedSubScreen = SubScreen.Exemption
                                 subScreen = SubScreen.Exemption
                             },
-                            openEnduranceScoring = {
-                                renderedSubScreen = SubScreen.EnduranceScoring
-                                subScreen = SubScreen.EnduranceScoring
-                            },
                             openScanJoin = {
                                 scannedInviteCode = null
                                 scannedInviteCourse = null
@@ -959,15 +953,6 @@ private fun SubScreenOverlay(
             .padding(BNBULayout.ScreenHorizontal)
     ) {
         when (subScreen) {
-            SubScreen.EnduranceScoring -> {
-                EnduranceScoringScreen(
-                    appState = appState,
-                    student = appState.workspace.student,
-                    repository = repo,
-                    onUnauthorized = appState::handleUnauthorized,
-                    onBack = onClose
-                )
-            }
             SubScreen.Exemption -> {
                 ExemptionScreen(
                     appState = appState,
@@ -1330,7 +1315,6 @@ private fun RootTabContent(
     openAccountDetails: () -> Unit = {},
     openSettings: () -> Unit = {},
     openExemption: (String?) -> Unit = {},
-    openEnduranceScoring: () -> Unit = {},
     openScanJoin: () -> Unit = {},
     openEnterCode: () -> Unit = {}
 ) {
@@ -1366,8 +1350,7 @@ private fun RootTabContent(
                     appState = appState,
                     onOpenAccountDetails = openAccountDetails,
                     onOpenSettings = openSettings,
-                    onOpenExemption = openExemption,
-                    onOpenEnduranceScoring = openEnduranceScoring
+                    onOpenExemption = openExemption
                 )
             }
         }

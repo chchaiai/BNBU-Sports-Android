@@ -35,7 +35,6 @@ import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.model.withRecordedCheckIn
 import edu.bnbu.student.mvp.core.time.currentBeijingBusinessDate
 import edu.bnbu.student.mvp.core.time.toBeijingBusinessDate
-import edu.bnbu.student.mvp.core.network.StudentApiClient
 import edu.bnbu.student.mvp.core.network.ApiHttpException
 import edu.bnbu.student.mvp.core.push.FcmPushRegistrar
 import edu.bnbu.student.mvp.core.network.StudentLoginRequest
@@ -48,6 +47,8 @@ import edu.bnbu.student.mvp.core.network.UploadProgress
 import edu.bnbu.student.mvp.core.network.StudentProfileResponse
 import edu.bnbu.student.mvp.core.network.ContactMethodResponse
 import edu.bnbu.student.mvp.core.network.v1.V1StudentApi
+import edu.bnbu.student.mvp.core.network.v1.V1StudentWorkspaceGateway
+import edu.bnbu.student.mvp.core.network.v1.createV1ExerciseGateway
 import edu.bnbu.student.mvp.core.network.v1.generated.CurrentUserData
 import java.io.File
 import java.time.Instant
@@ -339,6 +340,9 @@ class StudentAppState(
 
     val totalCompleted: Double
         get() {
+            if (!hourRule.isAvailable) {
+                return (workspace.progress.course + workspace.progress.general).coerceAtLeast(0.0)
+            }
             // Cap each category at its required max to avoid double-counting overflow.
             // e.g., if a student has 15h course (over 10h cap), only 10h counts toward total.
             val cappedCourse = workspace.progress.course.coerceAtMost(hourRule.courseRequired)
@@ -347,7 +351,7 @@ class StudentAppState(
         }
 
     val totalRemaining: Double
-        get() = (hourRule.total - totalCompleted).coerceAtLeast(0.0)
+        get() = if (hourRule.isAvailable) (hourRule.total - totalCompleted).coerceAtLeast(0.0) else 0.0
 
     val completionRatio: Double
         get() = if (hourRule.total <= 0.0) 0.0 else (totalCompleted / hourRule.total).coerceIn(0.0, 1.0)
@@ -416,106 +420,11 @@ class StudentAppState(
      * On failure, stays on the login screen and surfaces the error via [lastError].
      */
     fun login(account: String, password: String, onResult: (Boolean) -> Unit = {}) {
-        if (isLoading) return
-        if (account.isBlank() || password.isBlank()) {
-            lastError = interfaceText("请输入账号和密码", "Enter your account and password.")
-            return
-        }
-        isLoading = true
-        lastError = null
-        isUsingMockUser = false
-        val generation = beginSessionGeneration()
-
-        launchSessionRequest {
-            try {
-                ensureInitialLocalState()
-                val repo = ApiStudentRepository()
-                val response = repo.login(StudentLoginRequest(account = account, password = password))
-                val client = StudentApiClient().withToken(response.token)
-                val apiRepo = ApiStudentRepository(apiClient = client, userProfile = response.user)
-                val isPendingContactActivation = AccountStatus.from(response.user.accountStatus) ==
-                    AccountStatus.PENDING_CONTACT_BINDING
-
-                awaitPendingSessionClear()
-                if (!isCurrentSession(generation)) return@launchSessionRequest
-                localSessionInvalidated = false
-
-                // A pending account is an intentionally minimal session. Never load
-                // or surface an old workspace before the server confirms activation.
-                if (isPendingContactActivation) {
-                    val sessionSaved = withLocalStoreOnIo(
-                        event = "save pending contact-activation session",
-                        expectedGeneration = generation
-                    ) {
-                        clearWorkspaceCache() &&
-                            saveAuthToken(response.token) &&
-                            saveUserProfile(gson.toJson(response.user))
-                    }
-                    if (!isCurrentSession(generation)) return@launchSessionRequest
-                    if (sessionSaved == false) {
-                        android.util.Log.w("StudentAppState", "save pending contact-activation session failed")
-                    }
-                    apiRepository = apiRepo
-                    contactStatus = response.user.contacts
-                    workspace = activationWorkspace(response.user)
-                    isPreparingActivatedWorkspace = false
-                    contactActivationLoadError = null
-                    isAuthenticated = true
-                    isShowingCachedData = false
-                    lastSyncTimestamp = null
-                    onResult(true)
-                    return@launchSessionRequest
-                }
-
-                // Active accounts may now hydrate the full workspace.
-                val remoteWorkspace = apiRepo.loadWorkspaceAsync()
-                if (!isCurrentSession(generation)) return@launchSessionRequest
-                val isNewSemester = detectNewSemester(remoteWorkspace.student.currentAcademicYear)
-                val now = currentSyncTimestamp()
-                val sessionSaved = withLocalStoreOnIo(
-                    event = "save authenticated session",
-                    expectedGeneration = generation
-                ) {
-                    val workspaceCacheCleared = !isNewSemester || clearWorkspaceCache()
-                    val tokenSaved = saveAuthToken(response.token)
-                    val profileSaved = saveUserProfile(gson.toJson(response.user))
-                    val workspaceSaved = saveWorkspace(remoteWorkspace)
-                    val syncTimeSaved = saveLastSyncTime(now)
-                    workspaceCacheCleared && tokenSaved && profileSaved && workspaceSaved && syncTimeSaved
-                }
-                if (!isCurrentSession(generation)) return@launchSessionRequest
-                if (sessionSaved == false) {
-                    android.util.Log.w("StudentAppState", "save authenticated session failed")
-                }
-
-                apiRepository = apiRepo
-                contactStatus = response.user.contacts
-                workspace = remoteWorkspace
-                isPreparingActivatedWorkspace = false
-                contactActivationLoadError = null
-                showNewSemesterWelcomeIfNeeded(isNewSemester, remoteWorkspace)
-                isAuthenticated = true
-                isShowingCachedData = false
-                lastSyncTimestamp = now
-                syncPushToken(client)
-                onResult(true)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (!isCurrentSession(generation)) return@launchSessionRequest
-                android.util.Log.e("StudentAppState", "Login failed", e)
-                apiRepository = null
-                isAuthenticated = false
-                isShowingCachedData = false
-                withLocalStoreOnIo(event = "rollback failed login session") {
-                    clearAuth()
-                }
-                lastError = errorMessage(e)
-                onResult(false)
-            } finally {
-                if (isCurrentSession(generation)) isLoading = false
-            }
-        }
+        lastError = interfaceText(
+            "密码登录已停用，请使用邮箱验证码登录",
+            "Password login is retired. Use the email verification-code flow."
+        )
+        onResult(false)
     }
 
     /**
@@ -547,12 +456,8 @@ class StudentAppState(
                         ?: error("CURRENT_USER_DATA_MISSING")
                     if (!isCurrentSession(generation)) return@launchSessionRequest
                     applyV1CurrentUser(current, loaded.workspace)
-                    val latestAccessToken = localStore.loadAuthSession()?.accessToken
+                    val repository = createV1Repository(current.toLegacyUserDto())
                         ?: error("ACCESS_TOKEN_MISSING")
-                    val repository = ApiStudentRepository(
-                        apiClient = StudentApiClient().withToken(latestAccessToken),
-                        userProfile = current.toLegacyUserDto()
-                    )
                     apiRepository = repository
                     if (AccountStatus.from(workspace.student.accountStatus) == AccountStatus.ACTIVE) {
                         hydrateV1ActiveWorkspace(repository, generation)
@@ -560,59 +465,12 @@ class StudentAppState(
                     onResult(true)
                     return@launchSessionRequest
                 }
-                val savedToken = loaded.authToken
-                val savedUserJson = loaded.userProfileJson
-                if (savedToken == null || savedUserJson == null) {
-                    onResult(false)
-                    return@launchSessionRequest
-                }
-                val user = withContext(Dispatchers.IO) {
-                    gson.fromJson(savedUserJson, UserDto::class.java)
-                }
-                val client = StudentApiClient().withToken(savedToken)
-                val apiRepo = ApiStudentRepository(apiClient = client, userProfile = user)
-                apiRepository = apiRepo
-                // The profile endpoint is deliberately part of the narrow
-                // pending-account allowlist. It is the authority on every
-                // restore; a cached workspace must never unlock a pending user.
-                val profile = apiRepo.fetchProfile()
-                if (!isCurrentSession(generation)) return@launchSessionRequest
-                val currentUser = user.withProfile(profile)
-                contactStatus = profile.contacts
-                if (AccountStatus.from(profile.accountStatus) == AccountStatus.PENDING_CONTACT_BINDING) {
-                    clearWorkspaceCacheNow(expectedGeneration = generation)
-                    if (!isCurrentSession(generation)) return@launchSessionRequest
-                    workspace = activationWorkspace(currentUser)
-                    isPreparingActivatedWorkspace = false
-                    contactActivationLoadError = null
-                    isAuthenticated = true
-                    isShowingCachedData = false
-                    withLocalStoreOnIo(
-                        event = "refresh pending contact-activation profile",
-                        expectedGeneration = generation
-                    ) {
-                        saveUserProfile(gson.toJson(currentUser))
-                    }
-                    onResult(true)
-                    return@launchSessionRequest
-                }
-                val remoteWorkspace = apiRepo.loadWorkspaceAsync()
-                if (!isCurrentSession(generation)) return@launchSessionRequest
-                val isNewSemester = detectNewSemester(remoteWorkspace.student.currentAcademicYear)
-                if (isNewSemester) {
-                    clearWorkspaceCacheNow(expectedGeneration = generation)
-                    if (!isCurrentSession(generation)) return@launchSessionRequest
-                }
-                workspace = remoteWorkspace
-                isPreparingActivatedWorkspace = false
-                contactActivationLoadError = null
-                showNewSemesterWelcomeIfNeeded(isNewSemester, remoteWorkspace)
-                isAuthenticated = true
-                isShowingCachedData = false
-                syncPushToken(client)
-                saveWorkspaceNow(event = "会话已恢复", expectedGeneration = generation)
-                if (!isCurrentSession(generation)) return@launchSessionRequest
-                onResult(true)
+                // Legacy access-token-only sessions cannot satisfy V1 refresh rotation.
+                // Fail closed and require the email-code flow to establish a complete session.
+                apiRepository = null
+                workspace = StudentWorkspace.empty()
+                onResult(false)
+                return@launchSessionRequest
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -656,13 +514,7 @@ class StudentAppState(
         localSessionInvalidated = false
         isUsingMockUser = false
         applyV1CurrentUser(current, cachedWorkspace = null)
-        val accessToken = localStore?.loadAuthSession()?.accessToken
-        val repository = accessToken?.let {
-            ApiStudentRepository(
-                apiClient = StudentApiClient().withToken(it),
-                userProfile = current.toLegacyUserDto()
-            )
-        }
+        val repository = createV1Repository(current.toLegacyUserDto())
         apiRepository = repository
         if (
             repository != null &&
@@ -805,6 +657,9 @@ class StudentAppState(
         expectedCourseId: String,
         allowLocalSession: Boolean = false
     ) {
+        require(allowLocalSession) {
+            "Direct course join is available only in the explicitly labelled local demo."
+        }
         val student = response.resolvedStudent()
             ?: throw IllegalArgumentException("JOIN_RESPONSE_STUDENT_MISSING")
         val joinedCourse = response.resolvedCourse()
@@ -826,13 +681,6 @@ class StudentAppState(
             "JOIN_RESPONSE_STUDENT_MISMATCH"
         }
         val authoritativeAccountStatus = AccountStatus.requireKnown(student.accountStatus)
-
-        val token = response.resolvedToken().ifBlank {
-            apiRepository?.bearerToken.orEmpty()
-        }
-        if (!allowLocalSession && !isAuthenticated && token.isBlank()) {
-            throw IllegalArgumentException("JOIN_RESPONSE_SESSION_MISSING")
-        }
 
         val generation = if (isAuthenticated) sessionGeneration else beginSessionGeneration()
         val profile = StudentProfile(
@@ -908,30 +756,11 @@ class StudentAppState(
         contactActivationLoadError = null
         isShowingCachedData = false
         lastError = null
-        apiRepository = token.takeIf { it.isNotBlank() }?.let {
-            ApiStudentRepository(apiClient = StudentApiClient().withToken(it), userProfile = user)
-        }
+        apiRepository = null
         val now = currentSyncTimestamp()
         lastSyncTimestamp = now
 
-        if (allowLocalSession) {
-            saveWorkspace(event = "本地演示课程已直接加入")
-        } else {
-            val saved = withLocalStoreOnIo(
-                event = "save direct course join session",
-                expectedGeneration = generation
-            ) {
-                saveAuthToken(token) &&
-                    saveUserProfile(gson.toJson(user)) &&
-                    saveWorkspace(joinedWorkspace) &&
-                    saveLastSyncTime(now) &&
-                    markPostEnrollmentGuideCompleted(profile.id.ifBlank { profile.studentNumber })
-            }
-            if (saved == false) {
-                android.util.Log.w("StudentAppState", "save direct course join session failed")
-            }
-            syncPushToken(StudentApiClient().withToken(token))
-        }
+        saveWorkspace(event = "本地演示课程已直接加入")
     }
 
     /** Re-reads /me and retries workspace hydration, never the consumed verification code. */
@@ -1006,17 +835,15 @@ class StudentAppState(
     }
 
     fun logout() {
-        val pushClient = if (requiresContactBinding) {
-            null
-        } else {
-            apiRepository?.bearerToken
-                ?.takeIf { it.isNotBlank() }
-                ?.let { StudentApiClient().withToken(it) }
-        }
+        val pushCredentials = localStore
+            ?.takeUnless { requiresContactBinding }
+            ?.loadAuthSession()
         val context = ApiStudentRepository.androidAppContext()
-        if (pushClient != null && context != null) {
+        if (pushCredentials != null && context != null) {
             // Best effort: logout must still complete if FCM or the network is unavailable.
-            scope.launch(Dispatchers.IO) { FcmPushRegistrar.unregisterCurrentDevice(context, pushClient) }
+            scope.launch(Dispatchers.IO) {
+                FcmPushRegistrar.unregisterCurrentDevice(context, pushCredentials)
+            }
         }
         invalidateSessionGeneration()
         localSessionInvalidated = true
@@ -1182,6 +1009,17 @@ class StudentAppState(
         onResult: (Result<Unit>) -> Unit = {}
     ) {
         if (!allowWrite("submitCheckIn", onResult)) return
+        if (!isUsingMockUser) {
+            failSubmission(
+                "submitExerciseCheckIn",
+                interfaceText(
+                    "正式环境打卡必须使用 V1 运动会话、媒体确认和结束会话流程。",
+                    "Formal check-in must use the V1 exercise-session, media-confirmation, and end-session flow."
+                ),
+                onResult
+            )
+            return
+        }
         if (isLoading) {
             failSubmission("submitExerciseCheckIn", interfaceText("正在处理上一项请求，请稍候", "The previous request is still being processed. Please wait."), onResult)
             return
@@ -1579,6 +1417,18 @@ class StudentAppState(
         )
     }
 
+    private fun createV1Repository(user: UserDto): ApiStudentRepository? {
+        val store = localStore ?: return null
+        val accessToken = store.loadAuthSession()?.accessToken
+            ?.takeIf(String::isNotBlank)
+            ?: return null
+        return ApiStudentRepository(
+            initialBearerToken = accessToken,
+            userProfile = user,
+            v1Gateway = V1StudentWorkspaceGateway.create(store)
+        ).attachExerciseGateway(createV1ExerciseGateway(store))
+    }
+
     private fun prepareActivatedWorkspace(current: CurrentUserData): ApiStudentRepository? {
         require(AccountStatus.requireKnown(current.user.status.value) == AccountStatus.ACTIVE) {
             "ACTIVE_ACCOUNT_REQUIRED"
@@ -1591,12 +1441,7 @@ class StudentAppState(
             )
         )
         val user = current.toLegacyUserDto()
-        val repository = localStore?.loadAuthSession()?.accessToken?.let { accessToken ->
-            ApiStudentRepository(
-                apiClient = StudentApiClient().withToken(accessToken),
-                userProfile = user
-            )
-        }
+        val repository = createV1Repository(user)
         apiRepository = repository
         isAuthenticated = true
         isPreparingActivatedWorkspace = true
@@ -1623,7 +1468,7 @@ class StudentAppState(
         val now = currentSyncTimestamp()
         lastSyncTimestamp = now
         saveWorkspaceNow(event = "v1 workspace loaded", expectedGeneration = generation)
-        repository.bearerToken?.let { syncPushToken(StudentApiClient().withToken(it)) }
+        repository.bearerToken?.let { syncPushToken() }
     }
 
     private fun applyContactProfile(profile: StudentProfileResponse) {
@@ -1706,9 +1551,10 @@ class StudentAppState(
         return workspace.student.id.isNotBlank()
     }
 
-    private suspend fun syncPushToken(client: StudentApiClient) {
+    private suspend fun syncPushToken() {
         val context = ApiStudentRepository.androidAppContext() ?: return
-        FcmPushRegistrar.registerCurrentDevice(context, client)
+        val store = localStore ?: return
+        FcmPushRegistrar.registerCurrentDevice(context, store)
             .onFailure { error ->
                 android.util.Log.w("StudentAppState", "FCM token registration deferred", error)
             }
@@ -1808,7 +1654,7 @@ class StudentAppState(
         isPreparingActivatedWorkspace = false
         repository.bearerToken
             ?.takeIf { it.isNotBlank() }
-            ?.let { token -> syncPushToken(StudentApiClient().withToken(token)) }
+            ?.let { syncPushToken() }
         return isCurrentSession(generation)
     }
 

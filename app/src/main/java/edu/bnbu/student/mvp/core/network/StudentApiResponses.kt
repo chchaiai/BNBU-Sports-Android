@@ -375,12 +375,10 @@ data class FeedbackTicketResponse(
     val status: String = "pending",
     val createdAt: String = "",
     val updatedAt: String? = null,
-    val reply: String? = null,
-    val email: String? = null,
-    val phone: String? = null
+    val reply: String? = null
 )
 
-/** Expected response for GET /api/v1/student/feedback. */
+/** UI projection adapted from GET /api/v1/feedback. */
 data class FeedbackTicketListResponse(
     val tickets: List<FeedbackTicketResponse> = emptyList()
 )

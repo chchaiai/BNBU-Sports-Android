@@ -198,7 +198,9 @@ private fun CheckInHoursCard(progress: StudentProgress, rule: SportHourRule) {
                     )
                 },
                 title = interfaceText("打卡学时", "Check-in hours"),
-                supportingText = if (isComplete) {
+                supportingText = if (!rule.isAvailable) {
+                    interfaceText("仅显示服务端已确认学时", "Showing server-confirmed hours only")
+                } else if (isComplete) {
                     interfaceText("已完成本学期打卡要求", "Semester check-in requirement complete")
                 } else {
                     interfaceText("还需 ${formatHours(remaining)} 小时", "${formatHours(remaining)} hours remaining")
@@ -212,7 +214,7 @@ private fun CheckInHoursCard(progress: StudentProgress, rule: SportHourRule) {
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.SemiBold
                 )
-                Text(
+                if (rule.isAvailable) Text(
                     text = interfaceText(
                         " / ${formatHours(required)} 小时",
                         " / ${formatHours(required)} hours"
@@ -223,7 +225,7 @@ private fun CheckInHoursCard(progress: StudentProgress, rule: SportHourRule) {
                 )
             }
 
-            if (required > 0.0) {
+            if (rule.isAvailable && required > 0.0) {
                 LinearProgressIndicator(
                     progress = { (completed / required).toFloat().coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth().height(4.dp),
@@ -238,14 +240,14 @@ private fun CheckInHoursCard(progress: StudentProgress, rule: SportHourRule) {
                     modifier = Modifier.weight(1f),
                     label = interfaceText("课程相关", "Course-related"),
                     completed = progress.course,
-                    required = rule.courseRequired
+                    required = rule.courseRequired.takeIf { rule.isAvailable }
                 )
                 Spacer(Modifier.width(BNBULayout.Space16))
                 HourBreakdown(
                     modifier = Modifier.weight(1f),
                     label = interfaceText("其他运动", "Other exercise"),
                     completed = progress.general,
-                    required = rule.generalRequired
+                    required = rule.generalRequired.takeIf { rule.isAvailable }
                 )
             }
         }
@@ -280,13 +282,15 @@ private fun HourBreakdown(
     modifier: Modifier = Modifier,
     label: String,
     completed: Double,
-    required: Double
+    required: Double?
 ) {
     val cs = MaterialTheme.colorScheme
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(text = label, color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
         Text(
-            text = interfaceText(
+            text = if (required == null) {
+                interfaceText("${formatHours(completed)} 小时", "${formatHours(completed)} hours")
+            } else interfaceText(
                 "${formatHours(completed)} / ${formatHours(required)} 小时",
                 "${formatHours(completed)} / ${formatHours(required)} hours"
             ),

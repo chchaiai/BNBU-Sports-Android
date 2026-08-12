@@ -368,6 +368,17 @@ val normalizeGeneratedOpenApiModels by tasks.registering {
             "_100Period0(\"100.0\");",
             "_100Period0(java.math.BigDecimal(\"100.0\"));"
         )
+        val localTimeCompatibilityModel = modelRoot.resolve("ClassSectionDailyStartTime.kt")
+        check(localTimeCompatibilityModel.isFile) {
+            "Expected generated model is missing: ClassSectionDailyStartTime.kt"
+        }
+        val localTimePackage = "package $generatedPackage"
+        localTimeCompatibilityModel.writeText(
+            "$localTimePackage\n\n" +
+                "/** Organization-local wall time from the V1 contract. */\n" +
+                "typealias ClassSectionDailyStartTime = java.time.LocalTime\n",
+            Charsets.UTF_8
+        )
     }
 }
 
@@ -429,8 +440,41 @@ val verifyAppLocaleBoundary by tasks.registering {
     }
 }
 
+/** Prevents the pre-contract Android route table from reappearing in production code. */
+val verifyV1ApiBoundary by tasks.registering {
+    group = "verification"
+    description = "Rejects legacy Android endpoint symbols and route literals outside the OpenAPI-backed V1 layer."
+    val sources = fileTree("src/main/java") { include("**/*.kt") }
+    inputs.files(sources)
+
+    doLast {
+        val forbiddenMarkers = listOf(
+            "StudentEndpoint",
+            "class StudentApiClient",
+            "data class StudentApiClient",
+            "\"/auth/login\"",
+            "\"/sport/",
+            "\"/common/notifications",
+            "\"/student/",
+            "\"/upload/proof\"",
+            "\"/scoring/"
+        )
+        val violations = sources.files.flatMap { file ->
+            file.readLines(Charsets.UTF_8).mapIndexedNotNull { index, line ->
+                forbiddenMarkers.firstOrNull(line::contains)?.let { marker ->
+                    "${file.relativeTo(projectDir)}:${index + 1} contains $marker"
+                }
+            }
+        }
+        check(violations.isEmpty()) {
+            "Legacy Android API boundary violation:\n${violations.joinToString("\n")}"
+        }
+    }
+}
+
 tasks.named("preBuild") {
     dependsOn(verifyAppLocaleBoundary)
+    dependsOn(verifyV1ApiBoundary)
     dependsOn(verifyOpenApiContractBinding)
     dependsOn(verifyGeneratedOpenApiModels)
 }

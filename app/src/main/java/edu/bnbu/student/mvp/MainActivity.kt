@@ -29,11 +29,7 @@ import edu.bnbu.student.mvp.core.data.ApiStudentRepository
 import edu.bnbu.student.mvp.core.designsystem.BNBUStudentTheme
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
-import edu.bnbu.student.mvp.core.network.MinimumAppVersionResponse
 import edu.bnbu.student.mvp.core.network.SharedHttpClient
-import edu.bnbu.student.mvp.core.network.StudentApiClient
-import edu.bnbu.student.mvp.core.network.StudentEndpoint
-import edu.bnbu.student.mvp.core.network.SystemHealthResponse
 import edu.bnbu.student.mvp.core.model.SystemMode
 import edu.bnbu.student.mvp.core.model.SystemModeStatus
 import edu.bnbu.student.mvp.core.state.StudentAppState
@@ -44,6 +40,7 @@ import edu.bnbu.student.mvp.feature.checkin.session.SessionVideoCompressor
 import edu.bnbu.student.mvp.core.network.v1.PrivateExerciseMediaObjectUploader
 import edu.bnbu.student.mvp.core.network.v1.V1AuthorizedApiClient
 import edu.bnbu.student.mvp.core.network.v1.V1ExerciseMediaUploadGateway
+import edu.bnbu.student.mvp.core.network.v1.V1PublicStatusClient
 import edu.bnbu.student.mvp.core.network.v1.createV1ExerciseGateway
 import edu.bnbu.student.mvp.R
 import com.google.android.play.core.appupdate.AppUpdateManager
@@ -186,19 +183,15 @@ class MainActivity : ComponentActivity() {
      */
     private suspend fun checkMinimumVersion(): UpdateRequirement? {
         return try {
-            val apiClient = StudentApiClient()
-            val response = apiClient.executeAndParseCancellable(
-                apiClient.request(StudentEndpoint.MinimumAppVersion),
-                MinimumAppVersionResponse::class.java
-            )
-            val minimumVersion = response.minimumVersion.trim()
+            val response = V1PublicStatusClient().getAndroidReleasePolicy()
+            val minimumVersion = response.minimumSupportedVersion.trim()
             if (minimumVersion.isNotEmpty() &&
                 compareVersions(BuildConfig.VERSION_NAME, minimumVersion) < 0
             ) {
                 UpdateRequirement(
                     minimumVersion = minimumVersion,
-                    downloadUrl = response.downloadUrl.trim(),
-                    updateMessage = response.updateMessage.trim()
+                    downloadUrl = response.downloadUrl?.toString().orEmpty(),
+                    updateMessage = response.message.orEmpty().trim()
                 )
             } else {
                 null
@@ -213,16 +206,12 @@ class MainActivity : ComponentActivity() {
     /** A missing health-mode field keeps the app in NORMAL during staged backend rollout. */
     private suspend fun checkSystemMode(): SystemModeStatus {
         return try {
-            val apiClient = StudentApiClient()
-            val response = apiClient.executeAndParseCancellable(
-                apiClient.request(StudentEndpoint.Health),
-                SystemHealthResponse::class.java
-            )
+            val response = V1PublicStatusClient().getSystemMode()
             SystemModeStatus(
-                mode = SystemMode.from(response.systemMode),
-                message = response.maintenanceMessage.trim(),
-                estimatedRecoveryTime = response.estimatedRecoveryTime?.trim()?.takeIf { it.isNotEmpty() },
-                plannedMaintenanceAt = response.plannedMaintenanceAt?.trim()?.takeIf { it.isNotEmpty() }
+                mode = SystemMode.from(response.mode.value),
+                message = "",
+                estimatedRecoveryTime = null,
+                plannedMaintenanceAt = null
             )
         } catch (error: CancellationException) {
             throw error
