@@ -578,8 +578,10 @@ private fun ExemptionTypeSelector(
 ) {
     val cs = MaterialTheme.colorScheme
     val availableTypes = listOf(
-        ExemptionType.PhysicalTest,
-        ExemptionType.ExerciseCheckIn,
+        ExemptionType.Run800m,
+        ExemptionType.Run1000m,
+        ExemptionType.SchoolTeam,
+        ExemptionType.StudentClub,
         ExemptionType.SpecialCircumstance
     )
     availableTypes.chunked(2).forEachIndexed { rowIndex, options ->
@@ -640,7 +642,14 @@ private fun NewExemptionForm(
 ) {
     val writeEnabled = appState.isWriteAllowed
     var selectedType by remember(initialExemption?.id) {
-        mutableStateOf(initialExemption?.type.toExemptionType())
+        mutableStateOf(
+            initialExemption?.type?.toExemptionType()
+                ?: if (appState.workspace.student.gender.equals("female", ignoreCase = true)) {
+                    ExemptionType.Run800m
+                } else {
+                    ExemptionType.Run1000m
+                }
+        )
     }
     var organization by remember(initialExemption?.id) { mutableStateOf(initialExemption?.organization.orEmpty()) }
     var reason by remember(initialExemption?.id) { mutableStateOf("") }
@@ -916,10 +925,12 @@ private fun NewExemptionForm(
                 ) {
                     if (proofAttachments.isEmpty()) {
                         Text(
-                            text = if (selectedType.isCheckInExemption) {
-                                interfaceText("可选：上传能够证明相关组织身份的材料。", "Optional: upload documents that prove your organization membership.")
-                            } else {
+                            text = if (selectedType == ExemptionType.SpecialCircumstance) {
                                 interfaceText("可选：上传与申请有关的证明材料。", "Optional: upload supporting documents related to the application.")
+                            } else if (selectedType.isCheckInExemption) {
+                                interfaceText("必填：至少上传一份能够证明相关组织身份的材料。", "Required: upload at least one document proving organization membership.")
+                            } else {
+                                interfaceText("必填：至少上传一份耐力跑免测证明材料。", "Required: upload at least one endurance-run exemption document.")
                             },
                             color = cs.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall
@@ -968,9 +979,16 @@ private fun NewExemptionForm(
                         onError(interfaceText("请填写相关组织名称", "Enter the organization name."))
                         return@PrimaryActionButton
                     }
+                    if (
+                        selectedType != ExemptionType.SpecialCircumstance &&
+                        proofAttachments.isEmpty()
+                    ) {
+                        onError(interfaceText("请至少上传一份证明材料", "Upload at least one supporting document."))
+                        return@PrimaryActionButton
+                    }
                     val remoteRepository = repository
                     if (remoteRepository == null) {
-                        onError(interfaceText("演示账户不发送正式申请；请使用已连接服务器的学生账户提交材料。", "Demo accounts cannot submit applications. Use a student account connected to the server."))
+                        onError(interfaceText("尚未连接服务器，无法提交申请；请重新登录后重试。", "The server is not connected, so the application cannot be submitted. Sign in again and retry."))
                         return@PrimaryActionButton
                     }
                     val selectedTypeSnapshot = selectedType
@@ -994,9 +1012,7 @@ private fun NewExemptionForm(
 
                             val application = ExemptionApplication(
                                 type = selectedTypeSnapshot.apiValue,
-                                reason = organizationSnapshot?.let {
-                                    "Organization: $it\n$normalizedReason"
-                                } ?: normalizedReason,
+                                reason = normalizedReason,
                                 proofFiles = uploadedCosKeys,
                                 organization = organizationSnapshot
                             )
@@ -1126,23 +1142,31 @@ private fun String.localizedExemptionStatus(): String = when (this) {
 
 /** Stable type codes use client-owned labels; an unknown server value stays unchanged. */
 private fun Exemption.localizedTypeLabel(): String = when (type) {
-    "physical_test" -> interfaceText("体测免测", "Physical-test exemption")
-    "exercise_check_in" -> interfaceText("运动打卡豁免", "Exercise check-in exemption")
+    "run_800m" -> interfaceText("800m 耐力跑免测", "800m endurance-run exemption")
+    "run_1000m" -> interfaceText("1000m 耐力跑免测", "1000m endurance-run exemption")
+    "school_team" -> interfaceText("校队免打卡", "School-team check-in exemption")
+    "student_club" -> interfaceText("社团免打卡", "Student-club check-in exemption")
+    "physical_test" -> interfaceText("历史体测免测", "Legacy physical-test exemption")
+    "exercise_check_in" -> interfaceText("历史运动打卡豁免", "Legacy exercise check-in exemption")
     "special_circumstance" -> interfaceText("特殊情况申请", "Special-circumstance application")
     else -> type
 }
 
 private fun ExemptionType.localizedLabel(): String = when (this) {
-    ExemptionType.PhysicalTest -> interfaceText("体测免测", "Physical-test exemption")
-    ExemptionType.ExerciseCheckIn -> interfaceText("运动打卡豁免", "Exercise check-in exemption")
+    ExemptionType.Run800m -> interfaceText("800m 耐力跑免测", "800m endurance-run exemption")
+    ExemptionType.Run1000m -> interfaceText("1000m 耐力跑免测", "1000m endurance-run exemption")
+    ExemptionType.SchoolTeam -> interfaceText("校队免打卡", "School-team check-in exemption")
+    ExemptionType.StudentClub -> interfaceText("社团免打卡", "Student-club check-in exemption")
     ExemptionType.SpecialCircumstance -> interfaceText("特殊情况申请", "Special-circumstance application")
 }
 
-private fun String?.toExemptionType(): ExemptionType = when (this) {
-    "exercise_check_in", "team", "club" -> ExemptionType.ExerciseCheckIn
+private fun String.toExemptionType(): ExemptionType = when (this) {
+    "run_800m", "800m" -> ExemptionType.Run800m
+    "run_1000m", "1000m", "physical_test" -> ExemptionType.Run1000m
+    "school_team", "team", "exercise_check_in" -> ExemptionType.SchoolTeam
+    "student_club", "club" -> ExemptionType.StudentClub
     "special_circumstance", "special" -> ExemptionType.SpecialCircumstance
-    "physical_test", "800m", "1000m" -> ExemptionType.PhysicalTest
-    else -> ExemptionType.PhysicalTest
+    else -> ExemptionType.SpecialCircumstance
 }
 
 @Composable
@@ -1151,23 +1175,23 @@ private fun ExemptionRulesPanel(isPreview: Boolean) {
     SwissPanel {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                text = if (isPreview) interfaceText("演示数据", "Demo data") else interfaceText("申请说明", "Application information"),
+                text = if (isPreview) interfaceText("服务未连接", "Server unavailable") else interfaceText("申请说明", "Application information"),
                 color = cs.primary,
                 style = MaterialTheme.typography.labelMedium
             )
             Text(
-                text = interfaceText("体测免测、运动打卡豁免和特殊情况申请严格对应后端支持的三种申请类型。", "Physical-test, exercise check-in, and special-circumstance applications match the three application types supported by the server."),
+                text = interfaceText("申请会精确区分 800m、1000m、校队、社团和特殊情况，并由后端保存结构化类型。", "Applications preserve exact 800m, 1000m, school-team, student-club, and special-circumstance subtypes on the server."),
                 color = cs.onSurface,
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
-                text = interfaceText("运动打卡豁免须填写组织名称并上传证明；组织名称会作为申请理由的一部分提交。", "Exercise check-in exemptions require an organization name and evidence; the organization name is submitted as part of the application reason."),
+                text = interfaceText("耐力跑免测和校队/社团免打卡至少上传一份证明；组织名称会独立提交，不再拼入申请理由。", "Endurance-run and team/club applications require evidence. Organization names are submitted separately from the reason."),
                 color = cs.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall
             )
             Text(
                 text = if (isPreview) {
-                    interfaceText("当前为本地演示账户：可查看完整申请状态与材料示例；正式提交请登录已连接服务器的学生账户。", "This is a local demo account. You can view example applications, but must sign in with a server-connected student account to submit one.")
+                    interfaceText("当前尚未连接服务器，页面不会生成本地申请数据；请重新登录后提交。", "The server is not connected. This page will not create local application data; sign in again to submit.")
                 } else {
                     interfaceText("申请被驳回或需要补材料时，可在申请详情中补充材料后再次提交。", "If an application is rejected or needs more documents, add them from its details and submit again.")
                 },

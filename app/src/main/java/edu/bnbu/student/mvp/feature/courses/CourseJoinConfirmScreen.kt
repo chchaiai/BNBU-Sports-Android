@@ -52,16 +52,11 @@ import edu.bnbu.student.mvp.core.designsystem.ValidationPanel
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.network.ApiHttpException
-import edu.bnbu.student.mvp.core.network.CourseJoinCourseResponse
-import edu.bnbu.student.mvp.core.network.CourseJoinMembershipResponse
 import edu.bnbu.student.mvp.core.network.CourseJoinRequestBody
-import edu.bnbu.student.mvp.core.network.CourseJoinResponse
-import edu.bnbu.student.mvp.core.network.CourseJoinStudentResponse
 import edu.bnbu.student.mvp.core.network.v1.V1HttpException
 import edu.bnbu.student.mvp.core.network.v1.generated.CourseInvitePreview
 import edu.bnbu.student.mvp.core.network.v1.generated.CurrentUserData
 import java.io.IOException
-import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -78,9 +73,7 @@ data class CourseJoinInfo(
     val courseNumber: String,
     val section: String,
     val teacher: String,
-    val semester: String,
-    /** True only for the explicitly labelled local direct-join demonstration. */
-    val isDemoScanResult: Boolean = false
+    val semester: String
 )
 
 internal fun CourseInvitePreview.toCourseJoinInfo(): CourseJoinInfo = CourseJoinInfo(
@@ -99,13 +92,6 @@ sealed interface CourseJoinCompletion {
         val currentUser: CurrentUserData,
         override val alreadyJoined: Boolean = false
     ) : CourseJoinCompletion
-
-    data class Demo(
-        val response: CourseJoinResponse
-    ) : CourseJoinCompletion {
-        override val alreadyJoined: Boolean
-            get() = response.isAlreadyJoined()
-    }
 }
 
 private enum class JoinGender(val apiValue: String) {
@@ -274,10 +260,6 @@ fun CourseJoinConfirmScreen(
                 )
             }
 
-            if (course.isDemoScanResult) {
-                DemoDirectJoinPanel()
-            }
-
             CompactCourseSummary(course)
 
             Column(verticalArrangement = Arrangement.spacedBy(BNBULayout.Space8)) {
@@ -429,16 +411,6 @@ fun CourseJoinConfirmScreen(
 }
 
 @Composable
-private fun DemoDirectJoinPanel() {
-    ValidationPanel(
-        interfaceText(
-            "本地演示：不会访问真实课程、账号或服务端。",
-            "Local demo: no real course, account, or server is accessed."
-        )
-    )
-}
-
-@Composable
 private fun CompactCourseSummary(course: CourseJoinInfo) {
     val colors = MaterialTheme.colorScheme
     SwissPanel(contentPadding = BNBULayout.Space16) {
@@ -587,45 +559,6 @@ internal fun directJoinErrorMessage(error: Throwable): String {
             "The server could not complete enrollment. Check the course and your details, then try again."
         )
     }
-}
-
-/** Local-only direct-enrollment result used by the clearly labelled scan demo. */
-internal fun buildDemoCourseJoinResponse(
-    course: CourseJoinInfo,
-    body: CourseJoinRequestBody
-): CourseJoinResponse {
-    val studentId = "demo-${body.studentNumber.lowercase()}"
-    return CourseJoinResponse(
-        student = CourseJoinStudentResponse(
-            id = studentId,
-            name = body.studentName,
-            studentNumber = body.studentNumber,
-            email = body.email.orEmpty(),
-            className = body.grade,
-            gender = body.gender,
-            grade = body.grade,
-            accountStatus = "PENDING_CONTACT_BINDING"
-        ),
-        course = CourseJoinCourseResponse(
-            id = course.id,
-            code = course.courseNumber,
-            section = course.section,
-            name = course.name,
-            teacherName = course.teacher,
-            semester = course.semester,
-            status = "active"
-        ),
-        membership = CourseJoinMembershipResponse(
-            id = "demo-membership-${course.id}-${body.studentNumber.lowercase()}",
-            courseId = course.id,
-            studentId = studentId,
-            status = "active",
-            joinedAt = Instant.now().toString(),
-            joinMethod = "qr"
-        ),
-        result = "joined",
-        alreadyJoined = false
-    )
 }
 
 private fun extractServerErrorCode(responseBody: String): String? =

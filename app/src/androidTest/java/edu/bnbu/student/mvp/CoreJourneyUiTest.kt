@@ -1,13 +1,11 @@
 package edu.bnbu.student.mvp
 
+import android.Manifest
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.hasClickAction
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.performClick
@@ -16,18 +14,13 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import edu.bnbu.student.mvp.core.designsystem.BNBUStudentTheme
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
-import edu.bnbu.student.mvp.core.mock.MockStudentWorkspace
-import edu.bnbu.student.mvp.core.network.CourseJoinRequestBody
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
-import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionState
 import edu.bnbu.student.mvp.feature.shell.AppRootScreen
 import edu.bnbu.student.mvp.feature.login.ContactBindingMode
 import edu.bnbu.student.mvp.feature.login.ContactBindingScreen
-import edu.bnbu.student.mvp.feature.courses.DemoStudentScanCourse
-import edu.bnbu.student.mvp.feature.courses.DemoStudentScanInviteCode
 import edu.bnbu.student.mvp.feature.courses.CourseJoinConfirmScreen
-import edu.bnbu.student.mvp.feature.courses.buildDemoCourseJoinResponse
+import edu.bnbu.student.mvp.feature.courses.CourseJoinInfo
 import java.io.File
 import java.time.Instant
 import org.junit.After
@@ -36,14 +29,13 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.Assert.assertTrue
-import kotlinx.coroutines.runBlocking
 
 /**
  * Device/emulator regression coverage for the critical student journey.
  *
- * It uses the explicit local Mock-user entry point, so it neither needs a live
- * backend nor submits a real check-in. A complete submission intentionally
- * remains outside this test because production requires a camera-created proof.
+ * Authentication and enrollment remain server-owned. These device tests verify
+ * the formal pre-authentication and activation surfaces without manufacturing a
+ * local student session. Full submission still requires a camera and backend.
  */
 @RunWith(AndroidJUnit4::class)
 class CoreJourneyUiTest {
@@ -62,8 +54,6 @@ class CoreJourneyUiTest {
         localStore.clearAll()
         localStore.agreePrivacyPolicy(BuildConfig.PRIVACY_POLICY_VERSION, Instant.now().toString())
         localStore.markPreLoginCourseGuideCompleted()
-        localStore.markOnboardingCompleted(MockStudentWorkspace.studentId)
-        localStore.markHealthReminderShown(MockStudentWorkspace.studentId)
 
         appState = StudentAppState(localStore = localStore, cacheDir = context.cacheDir)
         exerciseController = ExerciseSessionController(
@@ -91,67 +81,41 @@ class CoreJourneyUiTest {
     }
 
     @Test
-    fun mockLogin_canStartCheckIn_andOpenGrades() {
+    fun formalLogin_exposesOnlyServerBackedEntryPoints() {
         setAppRootContent()
         composeRule.waitUntil(timeoutMillis = 5_000) {
             runCatching {
-                composeRule.onNodeWithTag("login.mockUser").assertIsEnabled()
+                composeRule.onNodeWithTag("login.email").assertIsEnabled()
             }.isSuccess
         }
-        composeRule.onNodeWithTag("login.mockUser").assertIsEnabled().performClick()
-
-        val checkInLabel = InstrumentationRegistry.getInstrumentation().targetContext
-            .getString(R.string.navigation_checkin)
-        composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodes(hasText(checkInLabel) and hasClickAction())
-                .fetchSemanticsNodes().isNotEmpty()
-        }
-        composeRule.onNode(hasText(checkInLabel) and hasClickAction()).performClick()
-        composeRule.onNodeWithTag("screen.checkIn").assertIsDisplayed()
-
-        val gradesLabel = InstrumentationRegistry.getInstrumentation().targetContext
-            .getString(R.string.navigation_grades)
-        composeRule.onNode(hasText(gradesLabel) and hasClickAction()).performClick()
-        composeRule.onNodeWithTag("screen.grades").assertExists().assertIsDisplayed()
-
-        composeRule.onNode(hasText(checkInLabel) and hasClickAction()).performClick()
-        composeRule.onNodeWithTag("checkIn.startExercise").assertIsEnabled().performClick()
-        composeRule.waitUntil(timeoutMillis = 5_000) {
-            exerciseController.state is ExerciseSessionState.Active
-        }
+        composeRule.onNodeWithTag("login.email").assertIsEnabled().assertIsDisplayed()
+        composeRule.onNodeWithTag("login.scanJoin").assertIsEnabled().assertIsDisplayed()
+        composeRule.onNodeWithTag("login.recoveryRequest").assertIsDisplayed()
+        assertTrue(composeRule.onAllNodesWithTag("login.mockUser").fetchSemanticsNodes().isEmpty())
+        assertTrue(composeRule.onAllNodesWithTag("screen.checkIn").fetchSemanticsNodes().isEmpty())
     }
 
     @Test
-    fun bottomNavigation_switchesRepeatedlyAcrossAllTabs() {
+    fun scanEntry_opensTheRealQrResolverSurface() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.uiAutomation.grantRuntimePermission(
+            instrumentation.targetContext.packageName,
+            Manifest.permission.CAMERA
+        )
         setAppRootContent()
         composeRule.waitUntil(timeoutMillis = 5_000) {
             runCatching {
-                composeRule.onNodeWithTag("login.mockUser").assertIsEnabled()
+                composeRule.onNodeWithTag("login.scanJoin").assertIsEnabled()
             }.isSuccess
         }
-        composeRule.onNodeWithTag("login.mockUser").performClick()
-
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val tabLabels = listOf(
-            context.getString(R.string.navigation_dashboard),
-            context.getString(R.string.navigation_courses),
-            context.getString(R.string.navigation_checkin),
-            context.getString(R.string.navigation_grades),
-            context.getString(R.string.navigation_profile)
+        composeRule.onNodeWithTag("login.scanJoin").performClick()
+        composeRule.onNodeWithTag("screen.courseJoin.scan").assertIsDisplayed()
+        composeRule.onNodeWithTag("courseJoin.scan.camera").assertIsDisplayed()
+        composeRule.onNodeWithTag("courseJoin.scan.manualInput").assertIsDisplayed()
+        assertTrue(
+            composeRule.onAllNodesWithTag("courseJoin.scan.simulateSuccess")
+                .fetchSemanticsNodes().isEmpty()
         )
-        composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodes(hasText(tabLabels.first()) and hasClickAction())
-                .fetchSemanticsNodes().isNotEmpty()
-        }
-
-        // Exercise quick, repeated hand-offs while selection animations are active.
-        repeat(3) {
-            tabLabels.forEach { label ->
-                composeRule.onNode(hasText(label) and hasClickAction()).performClick()
-            }
-        }
-
-        composeRule.onNode(hasText(tabLabels.last()) and hasClickAction()).assertIsSelected()
     }
 
     @Test
@@ -188,35 +152,20 @@ class CoreJourneyUiTest {
     }
 
     @Test
-    fun demoCourseJoin_entersMandatoryEmailGateWithoutWorkspaceNavigation() = runBlocking {
-        val response = buildDemoCourseJoinResponse(
-            DemoStudentScanCourse,
-            CourseJoinRequestBody(
-                studentName = "Student",
-                studentNumber = "20260001",
-                gender = "female",
-                grade = "2026",
-                inviteCode = DemoStudentScanInviteCode
-            )
-        )
-        appState.acceptDirectCourseJoin(
-            response = response,
-            expectedCourseId = DemoStudentScanCourse.id,
-            allowLocalSession = true
-        )
-
-        setAppRootContent()
-        composeRule.onNodeWithTag("screen.emailSecurity").assertIsDisplayed()
-        assertTrue(composeRule.onAllNodesWithTag("screen.checkIn").fetchSemanticsNodes().isEmpty())
-    }
-
-    @Test
     fun courseJoinForm_hasOnlyMaleAndFemaleAndStartsDisabled() {
+        val serverCourse = CourseJoinInfo(
+            id = "section-test",
+            name = "体育课程",
+            courseNumber = "PE-TEST",
+            section = "测试教学班",
+            teacher = "测试教师",
+            semester = "测试学期"
+        )
         composeRule.setContent {
             BNBUStudentTheme {
                 CourseJoinConfirmScreen(
-                    inviteCode = DemoStudentScanInviteCode,
-                    course = DemoStudentScanCourse,
+                    inviteCode = "0123456789abcdef",
+                    course = serverCourse,
                     submitCourseJoin = { error("Submit must remain disabled for an empty form") }
                 )
             }

@@ -100,6 +100,7 @@ class V1ExerciseRecordGatewayTest {
             UpdateExerciseRecordDraftCommand(
                 recordId = "record-1",
                 expectedVersion = 1L,
+                creditType = CreditType.General,
                 form = form().copy(
                     description = "Updated running",
                     sportType = "running",
@@ -157,6 +158,7 @@ class V1ExerciseRecordGatewayTest {
                     UpdateExerciseRecordDraftCommand(
                         recordId = "record-1",
                         expectedVersion = 1L,
+                        creditType = CreditType.General,
                         form = form()
                     )
                 )
@@ -164,6 +166,23 @@ class V1ExerciseRecordGatewayTest {
         }
 
         assertTrue(thrown.cause is V1HttpException)
+    }
+
+    @Test
+    fun courseRelatedDraftSerializesBlankDescriptionAsNull() = runBlocking {
+        server.enqueue(success(201, "req-course", recordJson("DRAFT", 1L)))
+
+        gateway.createRecordDraft(
+            CreateExerciseRecordDraftCommand(
+                sessionId = "session-1",
+                creditType = CreditType.CourseRelated,
+                clientRequestId = "android-course-record-1",
+                form = form().copy(description = "   ")
+            )
+        )
+
+        val body = JsonParser.parseString(server.takeRequest().body.readUtf8()).asJsonObject
+        assertTrue(body["description"].isJsonNull)
     }
 
     private fun form(): ExerciseRecordForm = ExerciseRecordForm(

@@ -43,7 +43,6 @@
     <string name="i18n_26de5e5aced94097797b5464f567cb52073ab231a8c789d58526fb60f38eafcc" formatted="false"><![CDATA[Enter a valid email address.]]></string>
     <string name="i18n_2846e24437694dba0659bdd568ddfebae1eb7cd91398f2e5d11ef70127e4f250" formatted="false"><![CDATA[Enter invitation code]]></string>
     <string name="i18n_28cfc14c7f22b1f745fe70f761812c91b7d4f1037a7508f4344b9925772259f5" formatted="false"><![CDATA[Submitted: ]]></string>
-    <string name="i18n_28f112c33143a3d81bb7727cf9ec3e2bd2ef59fe9add6f643bfa0074bd68f797" formatted="false"><![CDATA[Feedback cannot be submitted in demo or offline mode. Connect to the server with a signed-in account and try again.]]></string>
     <string name="i18n_2973d90722b11098254c175da57f8b7ccda6f8c7139d31e4f8e051c80e134b28" formatted="false"><![CDATA[Status: ]]></string>
     <string name="i18n_2ae35c14b7efd004bedaf9a513c4c1aa8cc544fbf1acc38561a0ff75c01e9deb" formatted="false"><![CDATA[Enter a phone number so we can follow up.]]></string>
     <string name="i18n_2bf5d2059b6efcd65fc970c08c1c8e78515926e5812d9e72548331b5e5da3ff7" formatted="false"><![CDATA[Continue recording]]></string>
@@ -113,7 +112,6 @@
     <string name="i18n_65bff7ad17623ea376fbd4cacc2539ca44a06144b03a9cd98727d6aed5bcd8c3" formatted="false"><![CDATA[Back to check-in records]]></string>
     <string name="i18n_65fb5ae5e2dac100d0df10db7b539d78b49154daf5ec7e121b94a8bed911eb6a" formatted="false"><![CDATA[Start time]]></string>
     <string name="i18n_6668469a394449629de0ea6c78e4c9dbe42376b6cd7df7a27331563b6546bac7" formatted="false"><![CDATA[End exercise]]></string>
-    <string name="i18n_67beb605e98bd8edc92db0965c6ef602a913623f9182a8a71a6172d6ee0e23f5" formatted="false"><![CDATA[Feedback history is unavailable in demo or offline mode.]]></string>
     <string name="i18n_67c5822fe169f3ab7660de48495fa38ae69b0e1e7d6a834ba7a04c22c776ae38" formatted="false"><![CDATA[Exercise within your limits. Stop immediately if you feel unwell and seek medical help when necessary.]]></string>
     <string name="i18n_68f563da140e772e7fdce0e3260f6d267df442548ce07f9dc37660ed6eacc2f7" formatted="false"><![CDATA[Cancel]]></string>
     <string name="i18n_695a06ec8c2a70824188465c7fe1623cf129bc5b5b7ba0b6f8b783913222af98" formatted="false"><![CDATA[This semester\'s progress]]></string>
@@ -141,7 +139,6 @@
     <string name="i18n_77e378e6a3d3fbd354bc91984c6b11c7236a94f8e273c5e373ba94dda47b3049" formatted="false"><![CDATA[Describe this exercise]]></string>
     <string name="i18n_7ab1579985c71d668e9a43e84983bd2aec972d7930b6df1cf65f7b9bde466bec" formatted="false"><![CDATA[No on-site proof]]></string>
     <string name="i18n_7b7a69179b3709dbbf0bfeed4b2a1e09f059e548a0874284da3f6d141f39b4a4" formatted="false"><![CDATA[Submit check-in]]></string>
-    <string name="i18n_7bb7b49f7a64210e7d7602ea8341eae83ee88ebd29ba32e1fec513ce62f8240e" formatted="false"><![CDATA[You can view the feedback form in demo or offline mode, but submission requires a server connection and a signed-in account.]]></string>
     <string name="i18n_7cd0fe13ad51981bf346d31b48f8cc4ef7d8b51ebf1dfea2dbfa16b9f362dd25" formatted="false"><![CDATA[My courses]]></string>
     <string name="i18n_7d1698ac26603d5f59efcb4d9e3670172e31c41dc6ce57196d52d808eaad552b" formatted="false"><![CDATA[Add a short note if there is anything else to mention.]]></string>
     <string name="i18n_7d2d0d53915f5be395957339ec2c7ecbb23c6c2dc9897bf2aba06ddf2ee14d96" formatted="false"><![CDATA[Check-in category]]></string>

@@ -12,9 +12,10 @@ import org.junit.Test
 class ScanJoinScreenTest {
     @Test
     fun extractsInviteCodeFromExpectedQrUrl() {
+        val opaqueToken = "019ff95a-84ad-cd03-f69b34d4.wKlhxS_lbM"
         assertEquals(
-            "BNBU-7K3P9Q",
-            inviteCodeFromQr("https://sports.example.com/join/BNBU-7K3P9Q")
+            opaqueToken,
+            inviteCodeFromQr("https://sports.example.com/join/$opaqueToken")
         )
     }
 
@@ -27,8 +28,10 @@ class ScanJoinScreenTest {
 
     @Test
     fun validatesManualInviteCodes() {
-        assertTrue(isInviteCode("BNBU-7K3P9Q"))
+        assertTrue(isInviteCode("019ff95a-84ad-cd03-f69b34d4.wKlhxS_lbM"))
+        assertTrue(isInviteCode("  0123456789abcdef  "))
         assertFalse(isInviteCode("bad code"))
+        assertFalse(isInviteCode("x".repeat(513)))
     }
 
     @Test
@@ -59,14 +62,23 @@ class ScanJoinScreenTest {
     }
 
     @Test
-    fun demoScanResultIsClearlyMarkedAndUsesTheWebCourseExample() {
-        assertEquals("PE01-7K2Q", DemoStudentScanInviteCode)
-        assertTrue(DemoStudentScanCourse.isDemoScanResult)
-        assertEquals("demo-course-pe101-01", DemoStudentScanCourse.id)
-        assertEquals("大学体育（一）", DemoStudentScanCourse.name)
-        assertEquals("PE101", DemoStudentScanCourse.courseNumber)
-        assertEquals("01班", DemoStudentScanCourse.section)
-        assertEquals("陈若宁", DemoStudentScanCourse.teacher)
-        assertEquals("2025–2026 第二学期", DemoStudentScanCourse.semester)
+    fun previewMappingKeepsEveryServerOwnedDisplayField() {
+        val course = CourseInvitePreview(
+            classSectionId = "server-section",
+            displayName = "Server Section",
+            courseCode = "PE-SERVER",
+            courseName = "Server Course",
+            semesterDisplayName = "Server Semester",
+            teacherDisplayName = "Server Teacher",
+            enrollmentOpen = true,
+            expiresAt = OffsetDateTime.parse("2026-12-01T00:00:00Z")
+        ).toCourseJoinInfo()
+
+        assertEquals("server-section", course.id)
+        assertEquals("Server Course", course.name)
+        assertEquals("PE-SERVER", course.courseNumber)
+        assertEquals("Server Section", course.section)
+        assertEquals("Server Teacher", course.teacher)
+        assertEquals("Server Semester", course.semester)
     }
 }

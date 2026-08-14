@@ -51,6 +51,7 @@ import edu.bnbu.student.mvp.core.designsystem.ValidationPanel
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
+import edu.bnbu.student.mvp.core.model.feedbackCategoryLabel
 import edu.bnbu.student.mvp.core.network.ApiHttpException
 import edu.bnbu.student.mvp.core.network.FeedbackTicketResponse
 import edu.bnbu.student.mvp.core.network.SubmitFeedbackRequest
@@ -101,8 +102,8 @@ fun FeedbackScreen(
         if (isLoadingTickets || isSubmitting) return
         val availableRepository = repository ?: run {
             errorMessage = interfaceText(
-                "演示或离线模式下暂时无法加载反馈记录。",
-                "Feedback history is unavailable in demo or offline mode."
+                "尚未连接服务器，无法加载反馈记录。",
+                "The server is not connected, so feedback history cannot be loaded."
             )
             return
         }
@@ -113,8 +114,8 @@ fun FeedbackScreen(
             catch (e: Exception) {
                 if (e is ApiHttpException && e.statusCode == 401) { onUnauthorized(); return@launchAuthenticatedRequest }
                 errorMessage = interfaceText(
-                    "加载反馈记录失败：${e.message ?: "请稍后重试"}",
-                    "Could not load feedback history: ${e.message ?: "Try again later."}"
+                    "加载反馈记录失败，请检查网络后重试。",
+                    "Could not load feedback history. Check your connection and try again."
                 )
             } finally { isLoadingTickets = false }
         }
@@ -125,8 +126,8 @@ fun FeedbackScreen(
     fun submit() {
         val availableRepository = repository ?: run {
             errorMessage = interfaceText(
-                "演示或离线模式下暂时无法提交反馈，请连接服务器并使用正式账户后重试。",
-                "Feedback cannot be submitted in demo or offline mode. Connect to the server with a signed-in account and try again."
+                "尚未连接服务器，无法提交反馈；请重新登录后重试。",
+                "The server is not connected, so feedback cannot be submitted. Sign in again and retry."
             )
             return
         }
@@ -165,8 +166,8 @@ fun FeedbackScreen(
             catch (e: Exception) {
                 if (e is ApiHttpException && e.statusCode == 401) { onUnauthorized(); return@launchAuthenticatedRequest }
                 errorMessage = interfaceText(
-                    "提交失败：${e.message ?: "请稍后重试"}",
-                    "Submission failed: ${e.message ?: "Try again later."}"
+                    "提交失败，请检查网络或稍后重试。",
+                    "Submission failed. Check your connection or try again later."
                 )
             } finally { isSubmitting = false }
         }
@@ -267,8 +268,8 @@ private fun FeedbackForm(
             ValidationPanel(
                 if (serviceUnavailable) {
                     interfaceText(
-                        "当前为演示或离线模式。你仍可查看反馈表单，但连接服务器并使用正式账户后才能提交。",
-                        "You can view the feedback form in demo or offline mode, but submission requires a server connection and a signed-in account."
+                        "当前尚未连接服务器。你仍可查看反馈表单，但重新登录并连接后才能提交。",
+                        "The server is not connected. You can view the form, but submission requires signing in again."
                     )
                 } else {
                     interfaceText(
@@ -339,7 +340,7 @@ private fun FeedbackForm(
 
 @Composable private fun FeedbackTicketCard(ticket: FeedbackTicketResponse) = SwissPanel { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Row(verticalAlignment = Alignment.CenterVertically) { Text(ticket.ticketNumber.ifBlank { ticket.id }, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f)); StatusBadge(ticket.status.feedbackStatusLabel(), filled = true) }
-    Text(ticket.category, color = MaterialTheme.colorScheme.primary); Text(ticket.description, maxLines = 3)
+    Text(feedbackCategoryLabel(ticket.category), color = MaterialTheme.colorScheme.primary); Text(ticket.description, maxLines = 3)
     if (ticket.createdAt.isNotBlank()) Text(interfaceText("提交时间：", "Submitted: ") + ticket.createdAt, color = MaterialTheme.colorScheme.onSurfaceVariant)
     ticket.reply?.takeIf { it.isNotBlank() }?.let { Text(interfaceText("处理说明：", "Response: ") + it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 } }

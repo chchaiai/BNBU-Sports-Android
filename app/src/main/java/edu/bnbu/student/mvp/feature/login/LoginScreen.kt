@@ -23,7 +23,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
@@ -58,7 +57,6 @@ fun LoginScreen(
     onEmailLogin: () -> Unit,
     onScanJoin: () -> Unit,
     onRecoveryRequest: () -> Unit,
-    onMockUserLogin: () -> Unit,
     onOpenPrivacy: () -> Unit = {},
     privacyAccepted: Boolean = false,
     onPrivacyAcceptedChange: (Boolean) -> Unit = {},
@@ -141,27 +139,6 @@ fun LoginScreen(
                     onClick = onScanJoin
                 )
 
-                Spacer(Modifier.height(4.dp))
-                TextButton(
-                    onClick = onMockUserLogin,
-                    enabled = privacyAccepted,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 48.dp)
-                        .testTag("login.mockUser")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Person,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(R.string.login_mock_button),
-                        style = MaterialTheme.typography.labelLarge
-                    )
-                }
             }
 
             Spacer(Modifier.height(12.dp))

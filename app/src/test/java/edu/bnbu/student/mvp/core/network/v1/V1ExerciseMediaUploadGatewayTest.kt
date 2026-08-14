@@ -207,7 +207,7 @@ class V1ExerciseMediaUploadGatewayTest {
         val request = server.takeRequest()
         assertEquals("POST", request.method)
         assertEquals("/api/v1/media-uploads/upload-1/confirm", request.path)
-        assertEquals("\"etag-1\"", JsonParser.parseString(request.body.readUtf8())
+        assertEquals("etag-1", JsonParser.parseString(request.body.readUtf8())
             .asJsonObject["etag"].asString)
         assertEquals("media-intent", request.getHeader("Idempotency-Key"))
     }

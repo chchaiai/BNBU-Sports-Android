@@ -2,6 +2,7 @@ package edu.bnbu.student.mvp.core.network.v1
 
 import com.google.gson.JsonNull
 import com.google.gson.JsonPrimitive
+import com.google.gson.reflect.TypeToken
 import edu.bnbu.student.mvp.core.exercise.CreateExerciseRecordDraftCommand
 import edu.bnbu.student.mvp.core.exercise.ExerciseGateway
 import edu.bnbu.student.mvp.core.exercise.ExerciseRecord
@@ -21,6 +22,7 @@ import edu.bnbu.student.mvp.core.network.v1.generated.ExerciseRecordStatus
 import edu.bnbu.student.mvp.core.network.v1.generated.ExerciseSession
 import edu.bnbu.student.mvp.core.network.v1.generated.ExerciseSessionStatus
 import edu.bnbu.student.mvp.core.network.v1.generated.SessionControlRequest
+import edu.bnbu.student.mvp.core.network.v1.generated.VersionedReasonRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.StartSessionRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.SubmitExerciseRecordRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.UpdateExerciseRecordRequest
@@ -38,7 +40,7 @@ internal class ExerciseEnrollmentMissingException : IllegalStateException(
     "An active enrollment is required to start an exercise session."
 )
 
-/** OpenAPI 1.3 adapter for the server-authoritative ExerciseSession lifecycle. */
+/** OpenAPI 1.5 adapter for the server-authoritative ExerciseSession lifecycle. */
 internal class V1ExerciseSessionGateway(
     private val authorizedClient: V1AuthorizedApiClient,
     private val enrollmentIdProvider: () -> String?,
@@ -147,19 +149,74 @@ internal class V1ExerciseSessionGateway(
     override suspend fun finish(current: ExerciseSessionRecord): ExerciseSessionRecord =
         control("finishExerciseSession", "finish", current)
 
+    override suspend fun cancel(current: ExerciseSessionRecord): ExerciseSessionRecord {
+        val operationId = "cancelExerciseSession"
+        current.sessionId.requireOpaqueId("sessionId")
+        require(current.version >= 1L) {
+            "Server exercise session version must be positive."
+        }
+        val scope = mutationScope(
+            operationId,
+            "session:${current.sessionId}:version:${current.version}"
+        )
+        val reason = "Student ended exercise before the minimum valid duration."
+        val intent = mutationRegistry.acquire(
+            scope,
+            IntentFingerprint.fromCanonicalInput(
+                operationId,
+                "sessionId=${current.sessionId}\nexpectedVersion=${current.version}\nreason=$reason"
+            )
+        )
+        return executeMutation(operationId, scope, intent) {
+            val response = authorizedClient.executeCancellable<ExerciseSession>(
+                V1ApiRequest(
+                    operationId = operationId,
+                    method = V1HttpMethod.POST,
+                    relativePath = "exercise-sessions/{sessionId}/cancel",
+                    pathSegments = listOf("exercise-sessions", current.sessionId, "cancel"),
+                    body = VersionedReasonRequest(
+                        reason = reason,
+                        expectedVersion = current.version
+                    )
+                ).withMutationIntent(intent),
+                ExerciseSession::class.java
+            )
+            val remote = response.requireStatusAndData(operationId, setOf(200))
+            require(remote.id == current.sessionId) {
+                "Server returned a different exercise session."
+            }
+            remote.toDomain(
+                creditType = current.creditType,
+                sportType = current.sportType,
+                customSportName = current.customSportName,
+                expectedEnrollmentId = current.enrollmentId
+            )
+        }
+    }
+
     override suspend fun createRecordDraft(
         command: CreateExerciseRecordDraftCommand
     ): ExerciseRecordDraft {
         val operationId = "createExerciseRecordDraft"
-        val normalized = command.form.normalizedForDraft()
-        val body = CreateExerciseRecordRequest(
+        val normalized = command.form.normalizedForDraft(command.creditType)
+        val generatedBody = CreateExerciseRecordRequest(
             sessionId = command.sessionId,
             creditType = command.creditType.toContractCreditType(),
             sportType = normalized.sportType.toContractSportType(),
-            description = normalized.description,
+            description = null,
             clientRequestId = command.clientRequestId,
             sportName = normalized.otherSportName
         )
+        // OpenAPI Generator represents a nullable string union as an empty
+        // compatibility class. Serialize the authoritative 1.5 value explicitly:
+        // GENERAL is nonblank; COURSE_RELATED blank input is normalized to null.
+        val body = V1Json.gson.toJsonTree(generatedBody).asJsonObject.apply {
+            add(
+                "description",
+                normalized.description.takeIf(String::isNotEmpty)
+                    ?.let(::JsonPrimitive) ?: JsonNull.INSTANCE
+            )
+        }
         val scope = mutationScope(operationId, "session:${command.sessionId}")
         val intent = mutationRegistry.acquire(
             scope,
@@ -175,7 +232,7 @@ internal class V1ExerciseSessionGateway(
                     operationId = operationId,
                     method = V1HttpMethod.POST,
                     relativePath = "exercise-records",
-                    body = body
+                    body = V1ExplicitJsonBody(body)
                 ).withMutationIntent(intent),
                 ContractExerciseRecord::class.java
             )
@@ -184,11 +241,51 @@ internal class V1ExerciseSessionGateway(
         }
     }
 
+    override suspend fun findRecordDraft(sessionId: String): ExerciseRecordDraft? {
+        val normalizedSessionId = sessionId.requireOpaqueId("sessionId")
+        val operationId = "listExerciseRecords"
+        val matches = mutableListOf<ContractExerciseRecord>()
+        var cursor: String? = null
+        do {
+            val response = authorizedClient.executeCancellable<List<ContractExerciseRecord>>(
+                V1ApiRequest(
+                    operationId = operationId,
+                    method = V1HttpMethod.GET,
+                    relativePath = "exercise-records",
+                    query = mapOf(
+                        "status" to ExerciseRecordStatus.DRAFT.value,
+                        "limit" to "100",
+                        "cursor" to cursor
+                    )
+                ),
+                object : TypeToken<List<ContractExerciseRecord>>() {}.type
+            )
+            requireStatus(operationId, response, setOf(200))
+            matches += response.data.orEmpty().filter { it.sessionId == normalizedSessionId }
+            val pagination = response.meta.pagination?.takeIf { it.isJsonObject }?.asJsonObject
+            val hasMore = pagination?.get("hasMore")?.asBoolean == true
+            cursor = pagination?.get("nextCursor")
+                ?.takeUnless { it.isJsonNull }
+                ?.asString
+                ?.takeIf(String::isNotBlank)
+            if (hasMore && cursor == null) {
+                throw V1ProtocolException(
+                    operationId,
+                    response.statusCode,
+                    response.meta.requestId,
+                    "pagination says hasMore without nextCursor"
+                )
+            }
+        } while (cursor != null)
+        require(matches.size <= 1) { "Server returned multiple drafts for one exercise session." }
+        return matches.singleOrNull()?.toDraft(expectedSessionId = normalizedSessionId)
+    }
+
     override suspend fun updateRecordDraft(
         command: UpdateExerciseRecordDraftCommand
     ): ExerciseRecordDraft {
         val operationId = "updateExerciseRecordDraft"
-        val normalized = command.form.normalizedForDraft()
+        val normalized = command.form.normalizedForDraft(command.creditType)
         val generatedBody = UpdateExerciseRecordRequest(
             expectedVersion = command.expectedVersion,
             sportType = normalized.sportType.toContractSportType(),

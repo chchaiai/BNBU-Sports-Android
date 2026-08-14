@@ -120,6 +120,49 @@ class V1AuthSessionClientTest {
     }
 
     @Test
+    fun separateApiFacadesSharingOneStoreReuseTheSameRefreshRotation() {
+        val refreshCount = AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                return when {
+                    request.path == "/api/v1/auth/refresh" -> {
+                        refreshCount.incrementAndGet()
+                        Thread.sleep(100)
+                        authSuccess("req-refresh-shared-store")
+                    }
+                    request.getHeader("Authorization") == "Bearer access-old" ->
+                        authError("AUTH_TOKEN_EXPIRED", "req-old-shared-${server.requestCount}")
+                    request.getHeader("Authorization") == "Bearer access-new" ->
+                        success("req-new-shared-${server.requestCount}", """{"value":"ok"}""")
+                    else -> authError("AUTH_REQUIRED", "req-missing-shared")
+                }
+            }
+        }
+        val store = FakeCredentialStore(oldSession())
+        val firstClient = client(store)
+        val secondClient = client(store)
+        val executor = Executors.newFixedThreadPool(2)
+
+        try {
+            val first = executor.submit<String> {
+                firstClient.execute<Map<String, String>>(meRequest(), Map::class.java)
+                    .data?.get("value")
+            }
+            val second = executor.submit<String> {
+                secondClient.execute<Map<String, String>>(meRequest(), Map::class.java)
+                    .data?.get("value")
+            }
+
+            assertEquals("ok", first.get(5, TimeUnit.SECONDS))
+            assertEquals("ok", second.get(5, TimeUnit.SECONDS))
+            assertEquals(1, refreshCount.get())
+            assertEquals("access-new", store.session?.accessToken)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
     fun invalidAccessTokenDoesNotRefreshAndClearsSession() {
         server.enqueue(authError("AUTH_TOKEN_INVALID", "req-invalid"))
         val store = FakeCredentialStore(oldSession())
@@ -237,6 +280,7 @@ class V1AuthSessionClientTest {
     private fun oldSession(): AuthSessionCredentials =
         AuthSessionCredentials.fromContract(
             sessionId = "session-old",
+            enrollmentId = "enrollment-1",
             accessToken = "access-old",
             refreshToken = "refresh-old",
             tokenType = "Bearer",
@@ -248,8 +292,8 @@ class V1AuthSessionClientTest {
         success(
             requestId,
             """{
-                "sessionId":"session-new",
-                "enrollmentId":"enrollment-1",
+                "sessionId":"session-old",
+                "enrollmentId":null,
                 "accessToken":"access-new",
                 "refreshToken":"refresh-new",
                 "tokenType":"Bearer",

@@ -30,7 +30,9 @@ class V1StudentWorkspaceGatewayTest {
     @Test
     fun workspaceUsesOnlyCurrentV1StudentProjectionRoutes() = runBlocking {
         server.enqueue(success("me", currentUserJson))
-        repeat(4) { index -> server.enqueue(paged("list-$index", "[]")) }
+        server.enqueue(paged("enrollments", "[]"))
+        server.enqueue(success("semester", semesterJson))
+        repeat(3) { index -> server.enqueue(paged("list-$index", "[]")) }
         val gateway = V1StudentWorkspaceGateway.create(
             credentialStore = FakeStore(credentials()),
             baseUrl = server.url("/api/v1").toString(),
@@ -44,13 +46,15 @@ class V1StudentWorkspaceGatewayTest {
         assertTrue(snapshot.records.isEmpty())
         assertTrue(snapshot.scores.isEmpty())
         assertTrue(snapshot.notifications.isEmpty())
-        val requests = (0 until 5).map { server.takeRequest(1, TimeUnit.SECONDS)!! }
+        assertEquals("2026-2027 秋季学期", snapshot.currentSemester?.displayName)
+        val requests = (0 until 6).map { server.takeRequest(1, TimeUnit.SECONDS)!! }
         assertEquals("/api/v1/me", requests[0].path)
         assertTrue(requests[1].path!!.startsWith("/api/v1/enrollments?"))
-        assertTrue(requests[1].requestUrl!!.queryParameterValues("studentId").contains("student-1"))
-        assertTrue(requests[2].path!!.startsWith("/api/v1/exercise-records?"))
-        assertTrue(requests[3].path!!.startsWith("/api/v1/student-scores?"))
-        assertTrue(requests[4].path!!.startsWith("/api/v1/notifications?"))
+        assertEquals(null, requests[1].requestUrl!!.queryParameter("studentId"))
+        assertEquals("/api/v1/semesters/current", requests[2].path)
+        assertTrue(requests[3].path!!.startsWith("/api/v1/exercise-records?"))
+        assertTrue(requests[4].path!!.startsWith("/api/v1/student-scores?"))
+        assertTrue(requests[5].path!!.startsWith("/api/v1/notifications?"))
         requests.forEach { request ->
             assertEquals("Bearer access-token", request.getHeader("Authorization"))
             assertEquals("application/json", request.getHeader("Accept"))
@@ -62,6 +66,7 @@ class V1StudentWorkspaceGatewayTest {
         server.enqueue(success("me", currentUserJson))
         server.enqueue(paged("enrollments-1", "[]", nextCursor = "next-page", hasMore = true))
         server.enqueue(paged("enrollments-2", "[]"))
+        server.enqueue(success("semester", semesterJson))
         repeat(3) { index -> server.enqueue(paged("rest-$index", "[]")) }
         val gateway = V1StudentWorkspaceGateway.create(
             credentialStore = FakeStore(credentials()),
@@ -126,6 +131,14 @@ class V1StudentWorkspaceGatewayTest {
                 "deletedAt":null,"version":1
             },
             "teacherProfile":null,"adminProfile":null
+        }""".trimIndent()
+
+    private val semesterJson: String
+        get() = """{
+            "id":"semester-1","organizationId":"org-1","academicYear":"2026-2027",
+            "termCode":"FIRST","displayName":"2026-2027 秋季学期","startDate":"2026-08-01",
+            "endDate":"2026-12-31","status":"CURRENT","isCurrent":true,"createdBy":null,
+            "createdAt":"2026-08-01T00:00:00Z","updatedAt":"2026-08-01T00:00:00Z","version":1
         }""".trimIndent()
 
     private class FakeStore(initial: AuthSessionCredentials?) : AuthSessionCredentialStore {

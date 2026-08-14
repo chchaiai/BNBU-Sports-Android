@@ -420,7 +420,7 @@ class V1StudentApiTest {
 
     private fun authSessionJson(
         sessionId: String? = "session-new",
-        enrollmentId: String? = "enrollment-1",
+        enrollmentId: String? = null,
         userStatus: String = "ACTIVE"
     ): String {
         val sessionIdJson = sessionId?.let { "\"$it\"" } ?: "null"

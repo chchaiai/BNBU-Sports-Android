@@ -26,6 +26,7 @@ import edu.bnbu.student.mvp.core.designsystem.BrandMark
 import edu.bnbu.student.mvp.core.designsystem.StatusBadge
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
+import edu.bnbu.student.mvp.core.model.studentStatusLabel
 import edu.bnbu.student.mvp.core.state.StudentAppState
 
 /** Full account information, opened from the profile header instead of the main Profile tab. */
@@ -86,7 +87,7 @@ fun AccountDetailsScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    StatusBadge(text = student.status, filled = true)
+                    StatusBadge(text = studentStatusLabel(student.status), filled = true)
                 }
             }
         }

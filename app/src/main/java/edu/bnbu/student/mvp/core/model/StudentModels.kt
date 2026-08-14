@@ -245,7 +245,9 @@ data class CheckInRecord(
     /** ISO-8601 timestamps and active duration captured by the exercise session. */
     val startTime: String? = null,
     val endTime: String? = null,
-    val actualDurationSeconds: Long? = null
+    val actualDurationSeconds: Long? = null,
+    /** PENDING, VALID, or INVALID from the latest server ReviewRecord. */
+    val reviewStatus: String? = null
 )
 
 /** The period in which a student may start an exercise check-in session. */
@@ -538,12 +540,14 @@ data class EnduranceConversionRequest(
 // ── Exemptions ─────────────────────────────────────────────────────
 
 enum class ExemptionType(val apiValue: String, val label: String) {
-    PhysicalTest("physical_test", "体测免测"),
-    ExerciseCheckIn("exercise_check_in", "运动打卡豁免"),
+    Run800m("run_800m", "800m 耐力跑免测"),
+    Run1000m("run_1000m", "1000m 耐力跑免测"),
+    SchoolTeam("school_team", "校队免打卡"),
+    StudentClub("student_club", "社团免打卡"),
     SpecialCircumstance("special_circumstance", "特殊情况申请");
 
     val isCheckInExemption: Boolean
-        get() = this == ExerciseCheckIn
+        get() = this == SchoolTeam || this == StudentClub
 }
 
 enum class ExemptionStatus(val label: String) {
@@ -570,8 +574,10 @@ data class Exemption(
 ) {
     val typeLabel: String
         get() = when (type) {
-            "physical_test" -> ExemptionType.PhysicalTest.label
-            "exercise_check_in" -> ExemptionType.ExerciseCheckIn.label
+            "run_800m" -> ExemptionType.Run800m.label
+            "run_1000m" -> ExemptionType.Run1000m.label
+            "school_team" -> ExemptionType.SchoolTeam.label
+            "student_club" -> ExemptionType.StudentClub.label
             "special_circumstance" -> ExemptionType.SpecialCircumstance.label
             else -> type
         }

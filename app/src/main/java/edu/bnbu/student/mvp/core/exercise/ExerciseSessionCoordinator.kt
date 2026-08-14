@@ -8,7 +8,8 @@ internal enum class ExerciseSessionAction {
     START,
     PAUSE,
     RESUME,
-    FINISH
+    FINISH,
+    CANCEL
 }
 
 internal enum class ExerciseOperationRejection {
@@ -107,6 +108,15 @@ internal class ExerciseSessionCoordinator(
         }
     }
 
+    suspend fun cancel(): ExerciseSessionOperationResult {
+        val current = state.session?.takeIf {
+            it.phase == ExerciseSessionPhase.ACTIVE || it.phase == ExerciseSessionPhase.PAUSED
+        } ?: return invalidState()
+        return mutate(ExerciseSessionAction.CANCEL, current) {
+            gateway.cancel(current)
+        }
+    }
+
     fun clearCompletedSession(): Boolean {
         if (state.inFlightAction != null || state.session?.phase != ExerciseSessionPhase.COMPLETED) {
             return false
@@ -128,6 +138,7 @@ internal class ExerciseSessionCoordinator(
             ExerciseSessionAction.PAUSE -> ExerciseSessionPhase.PAUSED
             ExerciseSessionAction.RESUME -> ExerciseSessionPhase.ACTIVE
             ExerciseSessionAction.FINISH -> ExerciseSessionPhase.COMPLETED
+            ExerciseSessionAction.CANCEL -> ExerciseSessionPhase.CANCELLED
             else -> error("Unsupported mutation action: $action")
         }
         require(updated.phase == expectedPhase) {

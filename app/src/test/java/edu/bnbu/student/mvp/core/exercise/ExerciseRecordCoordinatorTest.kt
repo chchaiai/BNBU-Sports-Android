@@ -50,7 +50,10 @@ class ExerciseRecordCoordinatorTest {
         assertTrue(result is ExerciseRecordOperationResult.Success)
         assertEquals(session.sessionId, createCommand?.sessionId)
         assertEquals("android-record-1", createCommand?.clientRequestId)
-        assertEquals("morning run", createCommand?.form?.normalizedForDraft()?.description)
+        assertEquals(
+            "morning run",
+            createCommand?.form?.normalizedForDraft(session.creditType)?.description
+        )
         assertEquals(1L, updateCommand?.expectedVersion)
         assertEquals("evening run", updateCommand?.form?.description)
         assertEquals(2L, submitCommand?.expectedVersion)
@@ -84,6 +87,38 @@ class ExerciseRecordCoordinatorTest {
             listOf("android-record-stable", "android-record-stable"),
             observedClientRequestIds
         )
+    }
+
+    @Test
+    fun processRestartRecoversAndUpdatesExistingSessionDraftBeforeSubmission() = runBlocking {
+        val recovered = ExerciseRecordDraft("record-existing", "session-1", version = 4L)
+        var createCalls = 0
+        var updateCommand: UpdateExerciseRecordDraftCommand? = null
+        val gateway = FakeExerciseGateway().apply {
+            onFindRecordDraft = { sessionId ->
+                assertEquals("session-1", sessionId)
+                recovered
+            }
+            onCreateRecordDraft = {
+                createCalls += 1
+                error("an existing session draft must not be recreated")
+            }
+            onUpdateRecordDraft = { command ->
+                updateCommand = command
+                recovered.copy(version = 5L)
+            }
+        }
+        val coordinator = ExerciseRecordCoordinator(gateway) { "android-after-restart" }
+        coordinator.begin(completedSession())
+        coordinator.edit(validForm(description = "retry after restart"))
+
+        val result = coordinator.updateDraft()
+
+        assertTrue(result is ExerciseRecordOperationResult.Success)
+        assertEquals(0, createCalls)
+        assertEquals("record-existing", updateCommand?.recordId)
+        assertEquals(4L, updateCommand?.expectedVersion)
+        assertEquals(5L, coordinator.state.remoteDraft?.version)
     }
 
     @Test

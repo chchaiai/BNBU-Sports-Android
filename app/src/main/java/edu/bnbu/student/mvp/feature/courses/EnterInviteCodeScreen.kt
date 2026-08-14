@@ -61,15 +61,15 @@ fun EnterInviteCodeScreen(
     // Activity recreation; the input itself remains saveable.
     var errorMessage by rememberSaveable(appLanguage) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    val normalizedCode = code.trim().uppercase()
+    val normalizedCode = code.trim()
     val hasFormatError = code.isNotBlank() && !isInviteCode(normalizedCode)
 
     fun resolveInviteCode() {
         if (isResolving) return
         if (!isInviteCode(normalizedCode)) {
             errorMessage = interfaceText(
-                "请输入有效的邀请码，格式如 BNBU-7K3P9Q。",
-                "Enter a valid invitation code, such as BNBU-7K3P9Q."
+                "请输入教师提供的完整加入凭证。",
+                "Enter the complete join credential provided by your teacher."
             )
             return
         }
@@ -140,13 +140,13 @@ fun EnterInviteCodeScreen(
                 },
                 enabled = !isResolving,
                 label = { Text(interfaceText("邀请码", "Invitation code")) },
-                placeholder = { Text(interfaceText("例如 BNBU-7K3P9Q", "For example: BNBU-7K3P9Q")) },
+                placeholder = { Text(interfaceText("粘贴或扫描加入凭证", "Paste or scan the join credential")) },
                 supportingText = if (hasFormatError) {
                     {
                         Text(
                             interfaceText(
-                                "请输入有效的邀请码，格式如 BNBU-7K3P9Q。",
-                                "Enter a valid invitation code, such as BNBU-7K3P9Q."
+                                "请输入教师提供的完整加入凭证。",
+                                "Enter the complete join credential provided by your teacher."
                             )
                         )
                     }
@@ -156,7 +156,7 @@ fun EnterInviteCodeScreen(
                 isError = hasFormatError,
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.Characters,
+                    capitalization = KeyboardCapitalization.None,
                     keyboardType = KeyboardType.Ascii,
                     imeAction = ImeAction.Done
                 ),

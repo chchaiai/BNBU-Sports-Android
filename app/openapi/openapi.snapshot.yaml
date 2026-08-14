@@ -1,13 +1,13 @@
 openapi: 3.1.0
 info:
   title: BNBU Sports Unified API
-  version: 1.4.0-contract
+  version: 1.5.0-contract
   summary: Unified contract for the sports check-in platform
   license:
     name: UNLICENSED
     identifier: LicenseRef-UNLICENSED
   description: |
-    Production-closure candidate derived from the immutable published 1.3.0
+    Cross-client compatibility candidate derived from the immutable published 1.4.0
     snapshot. It does not prove that every registered capability is
     business-enabled or production-ready.
     Business fields come from 02-data-dictionary.md, state transitions from
@@ -130,6 +130,33 @@ paths:
           $ref: '#/components/responses/HealthSuccess'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /health/admin:
+    get:
+      tags: [Health]
+      operationId: getAdminHealth
+      x-access-policy:
+        policyId: ADMIN-HEALTH-READ
+        authentication: ACCESS_TOKEN
+        allowedRoles: [ADMIN]
+        organizationScope: PRINCIPAL_ORGANIZATION
+        resourceScope: ORGANIZATION
+        resourceResolver: PRINCIPAL_ORGANIZATION
+        defaultDeny: true
+      summary: Read dependency-aware operational health as an administrator
+      description: Returns safe dependency categories, status, latency, and notification backlog without exposing endpoints, credentials, or storage keys.
+      x-allowed-roles: [ADMIN]
+      x-default-deny-error: PERMISSION_DENIED
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+      responses:
+        '200':
+          $ref: '#/components/responses/AdminHealthSuccess'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /system-mode:
     get:
       tags: [System Mode]
@@ -1199,7 +1226,7 @@ paths:
         resourceResolver: COURSE_INVITE_FROM_PATH
         defaultDeny: true
       summary: Validate student profile data and issue a short-lived one-time Join Capability
-      description: The plaintext capability is returned once. Persistence stores only an irreversible digest, its target ClassSection, a normalized profile digest, status, and configured expiry.
+      description: This public bootstrap step intentionally runs before an Access Token exists. The plaintext capability is returned once. Persistence stores only an irreversible digest, its target ClassSection, a normalized profile digest, status, and configured expiry.
       security: []
       parameters:
         - $ref: '#/components/parameters/InviteToken'
@@ -1241,7 +1268,7 @@ paths:
         resourceResolver: JOIN_CAPABILITY
         defaultDeny: true
       summary: Consume a Join Capability and atomically establish the student session
-      description: No ordinary Access Token is accepted. One transaction consumes the capability and creates or reuses User, StudentProfile, ACTIVE Enrollment, and AuthSession; any failure rolls back all effects.
+      description: No ordinary Access Token is accepted because this is the pre-authentication enrollment bootstrap. One transaction consumes the capability and creates or reuses User, StudentProfile, ACTIVE Enrollment, and AuthSession; a new student is returned as PENDING_CONTACT_BINDING and the client must complete email verification before any protected sports operation. Any failure rolls back all effects.
       security:
         - JoinCapability: []
       parameters:
@@ -2164,6 +2191,31 @@ paths:
           $ref: '#/components/responses/UnprocessableEntity'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /exercise-records/{recordId}/evidence-context:
+    get:
+      tags: [Exercise Records]
+      operationId: getExerciseRecordEvidenceContext
+      x-access-policy:
+        policyId: EXERCISE-RECORD-EVIDENCE-CONTEXT-READ
+        authentication: ACCESS_TOKEN
+        allowedRoles: [STUDENT, TEACHER, ADMIN]
+        organizationScope: PRINCIPAL_ORGANIZATION
+        resourceScope: ROLE_SCOPED
+        resourceResolver: EXERCISE_RECORD_FROM_PATH
+        defaultDeny: true
+      summary: Get server-authoritative timing and private evidence references for an authorized record
+      parameters:
+        - $ref: '#/components/parameters/RecordId'
+        - $ref: '#/components/parameters/RequestIdHeader'
+      responses:
+        '200':
+          $ref: '#/components/responses/ExerciseRecordEvidenceContextSuccess'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /exercise-records/{recordId}/submit:
     post:
       tags: [Exercise Records]
@@ -2329,7 +2381,7 @@ paths:
     post:
       tags: [Media Uploads]
       operationId: confirmMediaUpload
-      x-error-codes: [MEDIA_VIDEO_DURATION_EXCEEDED, MEDIA_AUDIO_TRACK_REQUIRED]
+      x-error-codes: [MEDIA_VIDEO_DURATION_EXCEEDED, MEDIA_AUDIO_TRACK_REQUIRED, MEDIA_LOCATION_METADATA_NOT_ALLOWED]
       x-access-policy:
         policyId: MEDIA-UPLOAD-CONFIRM
         authentication: ACCESS_TOKEN
@@ -3782,6 +3834,36 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/UnprocessableEntity' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /exemption-application-details:
+    get:
+      tags: [Exemption Applications, Client Capabilities]
+      operationId: listStructuredExemptionApplications
+      x-access-policy:
+        policyId: EXEMPTION-APPLICATION-STRUCTURED-LIST
+        authentication: ACCESS_TOKEN
+        allowedRoles: [STUDENT, TEACHER, ADMIN]
+        organizationScope: PRINCIPAL_ORGANIZATION
+        resourceScope: ROLE_SCOPED
+        resourceResolver: NONE
+        defaultDeny: true
+      summary: List role-scoped exemption applications with lossless structured details
+      description: Additive Contract 1.5 read model for updated clients. It preserves exact 800m/1000m or school-team/student-club subtype and independent organizationName while returning null for pre-migration legacy applications.
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
+        - name: classSectionId
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/OpaqueId' }
+        - $ref: '#/components/parameters/RequestIdHeader'
+      responses:
+        '200': { $ref: '#/components/responses/StructuredExemptionApplicationListSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /exemption-applications:
     get:
       tags: [Exemption Applications, Client Capabilities]
@@ -3824,7 +3906,7 @@ paths:
         resourceResolver: PRINCIPAL_STUDENT
         defaultDeny: true
       summary: Create a student-owned exemption application draft
-      description: Creates a DRAFT owned by the authenticated student and atomically associates eligible private EXEMPTION_APPLICATION media from the same active Enrollment.
+      description: Creates a DRAFT owned by the authenticated student and atomically associates eligible private EXEMPTION_APPLICATION media from the same active Enrollment. applicationSubtype preserves the exact 800m/1000m or school-team/student-club business meaning; organizationName is required only for school-team and student-club applications.
       parameters:
         - $ref: '#/components/parameters/RequestIdHeader'
         - $ref: '#/components/parameters/IdempotencyKeyHeader'
@@ -3875,7 +3957,7 @@ paths:
         resourceResolver: PRINCIPAL_STUDENT
         defaultDeny: true
       summary: Update an owned draft or supplement-requested application
-      description: Updates only an owned DRAFT or SUPPLEMENT_REQUIRED application using expectedVersion and atomically replaces eligible private attachment associations.
+      description: Updates only an owned DRAFT or SUPPLEMENT_REQUIRED application using expectedVersion and atomically replaces eligible private attachment associations. Updated subtype and organization fields must remain compatible with the immutable applicationType.
       parameters:
         - name: applicationId
           in: path
@@ -3892,6 +3974,7 @@ paths:
         '200': { $ref: '#/components/responses/ExemptionApplicationSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /exemption-applications/{applicationId}/submit:
     post:
@@ -3906,7 +3989,7 @@ paths:
         resourceResolver: PRINCIPAL_STUDENT
         defaultDeny: true
       summary: Submit an owned exemption application for responsible-teacher review
-      description: Moves an owned DRAFT or SUPPLEMENT_REQUIRED application to SUBMITTED for the one responsible ClassSection teacher. Submission does not directly change Score facts.
+      description: Moves an owned DRAFT or SUPPLEMENT_REQUIRED application to SUBMITTED for the one responsible ClassSection teacher. PHYSICAL_TEST and EXERCISE_CHECK_IN applications require at least one AVAILABLE private attachment before submission. Submission does not directly change Score facts.
       parameters:
         - name: applicationId
           in: path
@@ -3923,6 +4006,7 @@ paths:
         '200': { $ref: '#/components/responses/ExemptionApplicationSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /exemption-applications/{applicationId}/review:
     post:
@@ -4426,6 +4510,13 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/HealthEnvelope' }
+    AdminHealthSuccess:
+      description: Administrator dependency health projection
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestIdResponseHeader' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AdminHealthEnvelope' }
     SystemModeSuccess:
       description: Safe public SystemMode projection
       headers:
@@ -4595,6 +4686,11 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ExerciseRecordEnvelope' }
+    ExerciseRecordEvidenceContextSuccess:
+      description: Authorized server timing and private evidence references for an exercise record
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ExerciseRecordEvidenceContextEnvelope' }
     MediaSuccess:
       description: Media evidence metadata; storage keys are never projected
       content:
@@ -4745,6 +4841,13 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ExemptionApplicationListEnvelope' }
+    StructuredExemptionApplicationListSuccess:
+      description: Paged role-safe exemption application projections with structured details
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestIdResponseHeader' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/StructuredExemptionApplicationListEnvelope' }
     AppReleasePolicySuccess:
       description: Platform-specific release policy
       headers:
@@ -5470,6 +5573,48 @@ components:
         data: { $ref: '#/components/schemas/HealthStatus' }
         meta: { $ref: '#/components/schemas/SuccessMeta' }
       required: [data, meta]
+    AdminHealthDependencyStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN, NOT_CONFIGURED]
+          x-transport-constraint: true
+        latencyMs: { type: [integer, 'null'], minimum: 0 }
+        backlog: { type: integer, minimum: 0 }
+      required: [status, latencyMs]
+    AdminHealthDependencies:
+      type: object
+      additionalProperties: false
+      properties:
+        database: { $ref: '#/components/schemas/AdminHealthDependencyStatus' }
+        notificationQueue: { $ref: '#/components/schemas/AdminHealthDependencyStatus' }
+        objectStorage: { $ref: '#/components/schemas/AdminHealthDependencyStatus' }
+        mediaStorage: { $ref: '#/components/schemas/AdminHealthDependencyStatus' }
+      required: [database, notificationQueue, objectStorage, mediaStorage]
+    AdminHealthStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum: [ADMIN]
+          x-transport-constraint: true
+        status:
+          type: string
+          enum: [UP, DEGRADED, DOWN]
+          x-transport-constraint: true
+        checkedAt: { type: string, format: date-time }
+        dependencies: { $ref: '#/components/schemas/AdminHealthDependencies' }
+      required: [kind, status, checkedAt, dependencies]
+    AdminHealthEnvelope:
+      type: object
+      additionalProperties: false
+      properties:
+        data: { $ref: '#/components/schemas/AdminHealthStatus' }
+        meta: { $ref: '#/components/schemas/SuccessMeta' }
+      required: [data, meta]
     SystemModeProjection:
       type: object
       additionalProperties: false
@@ -5811,7 +5956,7 @@ components:
         creditType: { $ref: '#/components/schemas/CreditType' }
         sportType: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
         sportName: { type: [string, 'null'], maxLength: 100 }
-        description: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, 'null'], minLength: 1, maxLength: 200 }
         actualDurationSeconds: { $ref: '#/components/schemas/NonNegativeSeconds' }
         pausedDurationSeconds: { $ref: '#/components/schemas/NonNegativeSeconds' }
         creditedDurationSeconds: { $ref: '#/components/schemas/NonNegativeSeconds' }
@@ -5825,6 +5970,19 @@ components:
             - { type: 'null' }
         version: { $ref: '#/components/schemas/PositiveVersion' }
       required: [id, organizationId, semesterId, studentId, enrollmentId, classSectionId, courseId, teacherId, sessionId, businessDate, creditType, sportType, sportName, description, actualDurationSeconds, pausedDurationSeconds, creditedDurationSeconds, status, submittedAt, cancelledAt, clientRequestId, currentReview, version]
+    ExerciseRecordEvidenceContext:
+      type: object
+      additionalProperties: false
+      properties:
+        recordId: { $ref: '#/components/schemas/OpaqueId' }
+        sessionId: { $ref: '#/components/schemas/OpaqueId' }
+        startedAt: { type: string, format: date-time }
+        endedAt: { type: [string, 'null'], format: date-time }
+        mediaIds:
+          type: array
+          items: { $ref: '#/components/schemas/OpaqueId' }
+          description: Ordered private evidence identifiers. Each access still requires the role-scoped media access-url operation.
+      required: [recordId, sessionId, startedAt, endedAt, mediaIds]
     MediaEvidence:
       type: object
       additionalProperties: false
@@ -6359,14 +6517,27 @@ components:
     CreateExerciseRecordRequest:
       type: object
       additionalProperties: false
-      required: [sessionId, creditType, sportType, description, clientRequestId]
+      required: [sessionId, creditType, sportType, clientRequestId]
       properties:
         sessionId: { $ref: '#/components/schemas/OpaqueId' }
         creditType: { $ref: '#/components/schemas/CreditType' }
         sportType: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
         sportName: { type: [string, 'null'], maxLength: 100 }
-        description: { type: string, minLength: 1, maxLength: 200 }
+        description:
+          description: Student-authored explanation. Required and nonblank for GENERAL; optional for COURSE_RELATED, where omitted, null, or blank input is normalized to null.
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 200 }
+            - { type: 'null' }
         clientRequestId: { type: string, minLength: 1, maxLength: 64 }
+      allOf:
+        - if:
+            properties:
+              creditType: { const: GENERAL }
+            required: [creditType]
+          then:
+            properties:
+              description: { type: string, minLength: 1, maxLength: 200, pattern: '.*\S.*' }
+            required: [description]
     UpdateExerciseRecordRequest:
       type: object
       additionalProperties: false
@@ -6375,7 +6546,11 @@ components:
         creditType: { $ref: '#/components/schemas/CreditType' }
         sportType: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
         sportName: { type: [string, 'null'], maxLength: 100 }
-        description: { type: string, minLength: 1, maxLength: 200 }
+        description:
+          description: Omit to preserve the current value. Null or blank is accepted only when the resulting creditType is COURSE_RELATED.
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 200 }
+            - { type: 'null' }
         expectedVersion: { $ref: '#/components/schemas/PositiveVersion' }
     SubmitExerciseRecordRequest:
       type: object
@@ -6393,7 +6568,7 @@ components:
         enrollmentId: { $ref: '#/components/schemas/OpaqueId' }
         businessPurpose: { $ref: '#/components/schemas/MediaBusinessPurpose' }
         mediaType: { $ref: '#/components/schemas/MediaType' }
-        mimeType: { type: string, minLength: 1, maxLength: 127, description: Transport declaration. Exercise-record source-video format is device-defined and not a business restriction. }
+        mimeType: { type: string, minLength: 1, maxLength: 127, enum: [image/jpeg, image/png, video/mp4, video/quicktime, video/3gpp, video/webm], x-transport-constraint: true, description: Untrusted transport declaration. The server verifies the actual bytes and container; clients must not substitute video/mp4 when the browser reports an empty or different MIME. }
         fileSizeBytes: { type: integer, minimum: 1, description: Exact upload length used for transport integrity. No business maximum applies to EXERCISE_RECORD VIDEO. }
         captureSource: { $ref: '#/components/schemas/CaptureSource', x-runtime-enum: [IN_APP_CAMERA, FILE_PICKER], description: EXERCISE_RECORD requires IN_APP_CAMERA. EXEMPTION_APPLICATION permits IN_APP_CAMERA or FILE_PICKER; SYSTEM_IMPORT is not accepted by this student endpoint. }
         declaredContentSha256: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }], description: Optional and untrusted client declaration; it is not an integrity fact. }
@@ -6419,7 +6594,7 @@ components:
             properties:
               durationSeconds: { type: integer, minimum: 1, maximum: 15 }
             required: [durationSeconds]
-      description: EXERCISE_RECORD media is scoped to an owned ExerciseSession. EXEMPTION_APPLICATION media is scoped to an owned active Enrollment before atomic association with an application draft.
+      description: EXERCISE_RECORD media is scoped to an owned ExerciseSession. EXEMPTION_APPLICATION media is scoped to an owned active Enrollment before atomic association with an application draft. No location permission or GPS data is required; uploaded JPEG/PNG/ISO/WebM media containing recognized location metadata is rejected.
     ConfirmMediaUploadRequest:
       type: object
       additionalProperties: false
@@ -6596,6 +6771,7 @@ components:
     SessionEnvelope: { $ref: '#/components/schemas/SessionResponse' }
     NullableSessionEnvelope: { $ref: '#/components/schemas/NullableSessionResponse' }
     ExerciseRecordEnvelope: { $ref: '#/components/schemas/ExerciseRecordResponse' }
+    ExerciseRecordEvidenceContextEnvelope: { $ref: '#/components/schemas/ExerciseRecordEvidenceContextResponse' }
     ExerciseRecordListEnvelope: { $ref: '#/components/schemas/ExerciseRecordListResponse' }
     MediaUploadSessionEnvelope: { $ref: '#/components/schemas/MediaUploadSessionResponse' }
     MediaEnvelope: { $ref: '#/components/schemas/MediaResponse' }
@@ -6710,6 +6886,10 @@ components:
       type: object
       required: [data, meta]
       properties: { data: { $ref: '#/components/schemas/ExerciseRecord' }, meta: { $ref: '#/components/schemas/SuccessMeta' } }
+    ExerciseRecordEvidenceContextResponse:
+      type: object
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/ExerciseRecordEvidenceContext' }, meta: { $ref: '#/components/schemas/SuccessMeta' } }
     ExerciseRecordListResponse:
       type: object
       required: [data, meta]
@@ -6958,6 +7138,26 @@ components:
         decidedAt: { type: [string, 'null'], format: date-time }
         version: { $ref: '#/components/schemas/PositiveVersion' }
       description: Role-safe projection. Teacher identity, internalNote, medical details beyond the student's submitted reason, and signed media URLs are excluded.
+    StructuredExemptionApplication:
+      type: object
+      additionalProperties: false
+      required: [id, studentId, enrollmentId, classSectionId, applicationType, applicationSubtype, organizationName, reason, mediaIds, status, publicComment, submittedAt, decidedAt, version]
+      properties:
+        id: { $ref: '#/components/schemas/OpaqueId' }
+        studentId: { $ref: '#/components/schemas/OpaqueId' }
+        enrollmentId: { $ref: '#/components/schemas/OpaqueId' }
+        classSectionId: { $ref: '#/components/schemas/OpaqueId' }
+        applicationType: { type: string, enum: [PHYSICAL_TEST, EXERCISE_CHECK_IN, SPECIAL_CIRCUMSTANCE], x-transport-constraint: true }
+        applicationSubtype: { type: [string, 'null'], enum: [RUN_800M, RUN_1000M, SCHOOL_TEAM, STUDENT_CLUB, SPECIAL_CIRCUMSTANCE, null], x-transport-constraint: true, description: Null identifies a legacy application whose subtype cannot be inferred safely. }
+        organizationName: { type: [string, 'null'], minLength: 1, maxLength: 128, description: "Required for SCHOOL_TEAM and STUDENT_CLUB; null for endurance-run, special-circumstance, and legacy applications." }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+        mediaIds: { type: array, maxItems: 20, uniqueItems: true, items: { $ref: '#/components/schemas/OpaqueId' } }
+        status: { type: string, enum: [DRAFT, SUBMITTED, SUPPLEMENT_REQUIRED, APPROVED, REJECTED], x-transport-constraint: true }
+        publicComment: { type: [string, 'null'], maxLength: 1000 }
+        submittedAt: { type: [string, 'null'], format: date-time }
+        decidedAt: { type: [string, 'null'], format: date-time }
+        version: { $ref: '#/components/schemas/PositiveVersion' }
+      description: Additive role-safe projection for updated clients. It excludes teacher identity, internalNote, storageKey, and signed media URLs.
     CreateExemptionApplicationRequest:
       type: object
       additionalProperties: false
@@ -6965,6 +7165,8 @@ components:
       properties:
         enrollmentId: { $ref: '#/components/schemas/OpaqueId' }
         applicationType: { type: string, enum: [PHYSICAL_TEST, EXERCISE_CHECK_IN, SPECIAL_CIRCUMSTANCE], x-transport-constraint: true }
+        applicationSubtype: { type: string, enum: [RUN_800M, RUN_1000M, SCHOOL_TEAM, STUDENT_CLUB, SPECIAL_CIRCUMSTANCE], x-transport-constraint: true, description: Updated Contract 1.5 clients send this field. RUN_800M/RUN_1000M require PHYSICAL_TEST; SCHOOL_TEAM/STUDENT_CLUB require EXERCISE_CHECK_IN; SPECIAL_CIRCUMSTANCE requires the matching applicationType. Omission is accepted only for backward-compatible legacy clients and persists null. }
+        organizationName: { type: [string, 'null'], minLength: 1, maxLength: 128, description: Updated Contract 1.5 clients send a name for SCHOOL_TEAM and STUDENT_CLUB and null otherwise. Omission is accepted only with an omitted applicationSubtype for backward-compatible legacy clients. }
         reason: { type: string, minLength: 1, maxLength: 1000 }
         mediaIds: { type: array, maxItems: 20, uniqueItems: true, items: { $ref: '#/components/schemas/OpaqueId' } }
     UpdateExemptionApplicationRequest:
@@ -6972,6 +7174,8 @@ components:
       additionalProperties: false
       required: [expectedVersion]
       properties:
+        applicationSubtype: { type: string, enum: [RUN_800M, RUN_1000M, SCHOOL_TEAM, STUDENT_CLUB, SPECIAL_CIRCUMSTANCE], x-transport-constraint: true }
+        organizationName: { type: [string, 'null'], minLength: 1, maxLength: 128 }
         reason: { type: string, minLength: 1, maxLength: 1000 }
         mediaIds: { type: array, maxItems: 20, uniqueItems: true, items: { $ref: '#/components/schemas/OpaqueId' } }
         expectedVersion: { $ref: '#/components/schemas/PositiveVersion' }
@@ -7173,6 +7377,10 @@ components:
       type: object
       required: [data, meta]
       properties: { data: { type: array, items: { $ref: '#/components/schemas/ExemptionApplication' } }, meta: { $ref: '#/components/schemas/PagedMeta' } }
+    StructuredExemptionApplicationListEnvelope:
+      type: object
+      required: [data, meta]
+      properties: { data: { type: array, items: { $ref: '#/components/schemas/StructuredExemptionApplication' } }, meta: { $ref: '#/components/schemas/PagedMeta' } }
     AppReleasePolicyEnvelope:
       type: object
       required: [data, meta]

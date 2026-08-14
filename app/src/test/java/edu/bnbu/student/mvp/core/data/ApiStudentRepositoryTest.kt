@@ -53,6 +53,44 @@ class ApiStudentRepositoryTest {
     }
 
     @Test
+    fun helpArticlesUseTheNonPaginatedContractQuery() = runBlocking {
+        server.enqueue(
+            success(
+                "help-list",
+                """[{"id":"help-1","category":"check-in","locale":"zh-CN","title":"帮助","bodyMarkdown":"正文","publishedAt":"2026-08-11T00:00:00Z","version":1}]"""
+            )
+        )
+
+        val articles = repository().fetchHelpArticles()
+
+        assertEquals(1, articles.size)
+        assertEquals("help-1", articles.single().id)
+        val request = server.takeRequest(2, TimeUnit.SECONDS)!!
+        assertEquals("/api/v1/help-articles", request.requestUrl!!.encodedPath)
+        assertTrue(request.requestUrl!!.queryParameterNames.contains("locale"))
+        assertFalse(request.requestUrl!!.queryParameterNames.contains("limit"))
+        assertFalse(request.requestUrl!!.queryParameterNames.contains("cursor"))
+    }
+
+    @Test
+    fun checkInPolicyLoadsOnlyEnrollmentAndActiveClassSection() = runBlocking {
+        server.enqueue(paged("enrollments", "[${enrollmentJson()}]"))
+        server.enqueue(success("section", classSectionJson()))
+
+        val window = repository().fetchCheckInTimeWindow()
+
+        assertEquals("available", window.windowMode)
+        assertEquals("2026-08-01", window.dateRangeStart)
+        assertEquals("06:00", window.dailyStartTime)
+        assertEquals(2, server.requestCount)
+        assertTrue(server.takeRequest(2, TimeUnit.SECONDS)!!.path!!.startsWith("/api/v1/enrollments"))
+        assertEquals(
+            "/api/v1/class-sections/section-1",
+            server.takeRequest(2, TimeUnit.SECONDS)!!.path
+        )
+    }
+
+    @Test
     fun v1ExerciseMutationUsesAuthoritativeSessionRouteAndRunsOffCallerThread() = runBlocking {
         server.enqueue(success("session-start", sessionJson(), status = 201))
         val networkThreads = CopyOnWriteArrayList<String>()
@@ -149,8 +187,11 @@ class ApiStudentRepositoryTest {
         assertEquals("r***@bnbu.edu.cn", workspace.student.email)
         assertEquals("Remote College", workspace.student.college)
         assertEquals("Remote Class", workspace.student.className)
+        assertEquals("20260001", workspace.student.studentNumber)
         assertEquals(1, workspace.courses.size)
         assertEquals("PE101", workspace.courses.single().code)
+        assertEquals("2026-2027 秋季学期", workspace.courses.single().semester)
+        assertEquals("Teacher Chen", workspace.courses.single().teacher)
         assertEquals(14.0, workspace.progress.course, 0.0)
         assertEquals(22.0, workspace.progress.general, 0.0)
         assertEquals("80.0", workspace.grades.totalDisplay)
@@ -160,6 +201,7 @@ class ApiStudentRepositoryTest {
 
         server.enqueue(success("me-failure", currentUserJson()))
         server.enqueue(paged("enrollments-failure", "[]"))
+        server.enqueue(success("semester-failure", semesterJson()))
         server.enqueue(paged("records-failure", "[]"))
         server.enqueue(error(503, "SYSTEM_MODE_READ_ONLY", "scores-failure"))
         val failure = assertThrows(Exception::class.java) {
@@ -209,8 +251,8 @@ class ApiStudentRepositoryTest {
 
         assertTrue(result.isFailure)
         assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("does not match initiation"))
-        repeat(7) { server.takeRequest() }
-        assertEquals(10, server.requestCount)
+        repeat(9) { server.takeRequest() }
+        assertEquals(12, server.requestCount)
         assertEquals("/api/v1/media-uploads", server.takeRequest().path)
         assertEquals("/private-object/media-1", server.takeRequest().path)
         assertEquals("/api/v1/media-uploads/upload-1/confirm", server.takeRequest().path)
@@ -244,7 +286,7 @@ class ApiStudentRepositoryTest {
 
         assertEquals("exemption-1", response.id)
         val listRequest = server.takeRequest()
-        assertTrue(listRequest.path!!.startsWith("/api/v1/exemption-applications?"))
+        assertTrue(listRequest.path!!.startsWith("/api/v1/exemption-application-details?"))
         val request = server.takeRequest()
         assertEquals(
             "/api/v1/exemption-applications/exemption-1",
@@ -416,6 +458,21 @@ class ApiStudentRepositoryTest {
         "updatedAt":"2026-08-01T00:00:00Z","deletedAt":null,"version":1
     }""".trimIndent()
 
+    private fun teacherJson(): String = """{
+        "id":"teacher-1","organizationId":"org-1","userId":"teacher-user-1",
+        "employeeNumber":"T0001","fullName":"Teacher Chen","status":"ACTIVE",
+        "createdAt":"2026-08-01T00:00:00Z","updatedAt":"2026-08-01T00:00:00Z",
+        "deletedAt":null,"version":1,"collegeName":"Remote College",
+        "departmentName":"Physical Education","title":"Lecturer"
+    }""".trimIndent()
+
+    private fun semesterJson(): String = """{
+        "id":"semester-1","organizationId":"org-1","academicYear":"2026-2027",
+        "termCode":"FIRST","displayName":"2026-2027 秋季学期","startDate":"2026-08-01",
+        "endDate":"2026-12-31","status":"CURRENT","isCurrent":true,"createdBy":null,
+        "createdAt":"2026-08-01T00:00:00Z","updatedAt":"2026-08-01T00:00:00Z","version":1
+    }""".trimIndent()
+
     private fun scoreJson(): String = """{
         "id":"score-1","organizationId":"org-1","enrollmentId":"enrollment-1","scoreRuleId":"rule-1",
         "calculationRevision":1,"validCourseDurationSeconds":50400,"validGeneralDurationSeconds":79200,
@@ -447,6 +504,8 @@ class ApiStudentRepositoryTest {
         server.enqueue(paged("enrollments", "[${enrollmentJson()}]"))
         server.enqueue(success("section", classSectionJson()))
         server.enqueue(success("course", courseJson()))
+        server.enqueue(success("teacher", teacherJson()))
+        server.enqueue(success("semester", semesterJson()))
         server.enqueue(paged("records", "[]"))
         server.enqueue(paged("scores", "[${scoreJson()}]"))
         server.enqueue(paged("notifications", "[]"))

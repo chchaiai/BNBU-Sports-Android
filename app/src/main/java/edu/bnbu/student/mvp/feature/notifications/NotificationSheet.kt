@@ -49,6 +49,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -225,7 +226,17 @@ private fun NotificationSheetHeader(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                StatusBadge(text = if (unreadCount > 0) stringResource(R.string.notification_unread_count, unreadCount) else stringResource(R.string.notification_none_unread))
+                StatusBadge(
+                    text = if (unreadCount > 0) {
+                        pluralStringResource(
+                            R.plurals.notification_unread_count,
+                            unreadCount,
+                            unreadCount
+                        )
+                    } else {
+                        stringResource(R.string.notification_none_unread)
+                    }
+                )
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onMarkAllRead, enabled = unreadCount > 0) {
                     Text(stringResource(R.string.notification_mark_all))

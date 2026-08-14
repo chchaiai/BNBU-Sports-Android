@@ -56,6 +56,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
@@ -507,14 +508,17 @@ fun <T> SegmentedControl(
                     .then(
                         optionTestTag?.let { Modifier.testTag(it(value)) } ?: Modifier
                     )
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = 4.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = label(value),
+                    modifier = Modifier.fillMaxWidth(),
                     style = MaterialTheme.typography.labelLarge,
                     color = contentColor,
-                    maxLines = 1
+                    maxLines = 1,
+                    textAlign = TextAlign.Center,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
