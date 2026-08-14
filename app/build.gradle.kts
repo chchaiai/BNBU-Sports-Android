@@ -198,6 +198,7 @@ dependencies {
     implementation("com.google.android.play:app-update-ktx:2.1.0")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.core:core-splashscreen:1.0.1")
+    implementation("androidx.exifinterface:exifinterface:1.4.2")
     // Last stable lines compatible with this checkout's compileSdk 35 / AGP 8.7.
     implementation("androidx.camera:camera-core:1.5.3")
     implementation("androidx.camera:camera-camera2:1.5.3")
@@ -214,7 +215,7 @@ dependencies {
 
     // Networking & async (student backend integration)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
@@ -225,7 +226,7 @@ dependencies {
     // by older Espresso releases. 3.7.0 uses the supported system-service API.
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:runner:1.7.0")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 

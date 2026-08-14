@@ -39,14 +39,14 @@ class ExerciseSessionStateTest {
     }
 
     @Test
-    fun blankCourseDescriptionGetsAContractCompatibleSubmissionValue() {
+    fun blankCourseDescriptionRemainsOptionalForSubmission() {
         val courseDetails = ExerciseSessionDetails(
             creditType = CreditType.CourseRelated,
             sportType = "running",
             description = "   "
         )
 
-        assertTrue(courseDetails.descriptionForSubmission().isNotBlank())
+        assertEquals("", courseDetails.descriptionForSubmission())
     }
 
     @Test

@@ -18,14 +18,9 @@ internal val ExerciseTooShortMessage: String
 internal fun truncateExerciseDescription(value: String): String =
     value.take(MaxExerciseDescriptionLength)
 
-/** Keeps course descriptions optional in the UI while satisfying the current API contract. */
+/** Normalizes user input without inventing content for an optional course description. */
 internal fun ExerciseSessionDetails.descriptionForSubmission(): String {
-    val normalized = description.trim()
-    if (normalized.isNotEmpty()) return normalized
-    check(creditType == CreditType.CourseRelated) {
-        "Independent exercise description cannot be empty."
-    }
-    return interfaceText("课程相关运动", "Course-related exercise")
+    return description.trim()
 }
 
 internal data class CourseSportSelection(
