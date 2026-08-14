@@ -1,6 +1,7 @@
 package edu.bnbu.student.mvp.feature.checkin.session
 
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase
+import edu.bnbu.student.mvp.core.exercise.requiresExerciseDescription
 import edu.bnbu.student.mvp.core.model.CreditType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,6 +30,34 @@ class ExerciseSessionStateTest {
         val description = "a".repeat(MaxExerciseDescriptionLength + 1)
 
         assertEquals(MaxExerciseDescriptionLength, truncateExerciseDescription(description).length)
+    }
+
+    @Test
+    fun onlyIndependentExerciseRequiresAUserProvidedDescription() {
+        assertFalse(CreditType.CourseRelated.requiresExerciseDescription)
+        assertTrue(CreditType.General.requiresExerciseDescription)
+    }
+
+    @Test
+    fun blankCourseDescriptionGetsAContractCompatibleSubmissionValue() {
+        val courseDetails = ExerciseSessionDetails(
+            creditType = CreditType.CourseRelated,
+            sportType = "running",
+            description = "   "
+        )
+
+        assertTrue(courseDetails.descriptionForSubmission().isNotBlank())
+    }
+
+    @Test
+    fun providedDescriptionIsTrimmedForSubmission() {
+        val independentDetails = ExerciseSessionDetails(
+            creditType = CreditType.General,
+            sportType = "running",
+            description = "  five kilometre run  "
+        )
+
+        assertEquals("five kilometre run", independentDetails.descriptionForSubmission())
     }
 
     @Test

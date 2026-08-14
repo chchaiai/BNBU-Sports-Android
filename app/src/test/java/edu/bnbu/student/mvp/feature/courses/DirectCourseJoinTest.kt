@@ -1,7 +1,6 @@
 package edu.bnbu.student.mvp.feature.courses
 
 import edu.bnbu.student.mvp.core.network.ApiHttpException
-import edu.bnbu.student.mvp.core.network.CourseJoinRequestBody
 import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -26,24 +25,10 @@ class DirectCourseJoinTest {
     }
 
     @Test
-    fun demoResponseCreatesAnActiveQrMembership() {
-        val course = DemoStudentScanCourse
-        val response = buildDemoCourseJoinResponse(
-            course,
-            CourseJoinRequestBody(
-                studentName = "Student",
-                studentNumber = "20260001",
-                gender = "female",
-                grade = "2026",
-                inviteCode = DemoStudentScanInviteCode
-            )
-        )
-
-        assertEquals(course.id, response.resolvedCourse()?.id)
-        assertEquals("active", response.resolvedMembership()?.status)
-        assertEquals("qr", response.resolvedMembership()?.joinMethod)
-        assertEquals("20260001", response.resolvedStudent()?.studentNumber)
-        assertEquals("PENDING_CONTACT_BINDING", response.resolvedStudent()?.accountStatus)
+    fun enforcesContractFieldBoundaries() {
+        assertNull(validateDirectCourseJoin("S".repeat(64), "A".repeat(32), "male", "2026"))
+        assertNotNull(validateDirectCourseJoin("S".repeat(65), "20260001", "male", "2026"))
+        assertNotNull(validateDirectCourseJoin("Student", "A".repeat(33), "male", "2026"))
     }
 
     @Test

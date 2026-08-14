@@ -22,7 +22,7 @@ internal class HelpArticleCache(context: Context) {
 
     fun save(articles: List<HelpArticleResponse>) {
         try {
-            preferences.edit().putString(ArticlesKey, gson.toJson(articles)).commit()
+            preferences.edit().putString(ArticlesKey, gson.toJson(articles)).apply()
         } catch (_: RuntimeException) {
             // The online result remains usable even if its offline copy cannot be saved.
         }

@@ -5,7 +5,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -43,17 +42,15 @@ class BnbuFirebaseMessagingService : FirebaseMessagingService() {
         // Services are not Activity contexts. Resolve all notification copy
         // through the same app-scoped locale context used by the UI.
         val localizedResources = AppLanguagePreferences.localizedContext(this).resources
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    ChannelId,
-                    localizedResources.getString(R.string.push_channel_name),
-                    NotificationManager.IMPORTANCE_DEFAULT
-                ).apply {
-                    description = localizedResources.getString(R.string.push_channel_description)
-                }
-            )
-        }
+        manager.createNotificationChannel(
+            NotificationChannel(
+                ChannelId,
+                localizedResources.getString(R.string.push_channel_name),
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = localizedResources.getString(R.string.push_channel_description)
+            }
+        )
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }

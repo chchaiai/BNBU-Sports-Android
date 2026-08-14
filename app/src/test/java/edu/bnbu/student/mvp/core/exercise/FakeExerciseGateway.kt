@@ -19,11 +19,15 @@ internal class FakeExerciseGateway : ExerciseGateway {
     var onFinish: suspend (ExerciseSessionRecord) -> ExerciseSessionRecord = {
         error("finish was not expected")
     }
+    var onCancel: suspend (ExerciseSessionRecord) -> ExerciseSessionRecord = {
+        error("cancel was not expected")
+    }
     var onCreateRecordDraft: suspend (
         CreateExerciseRecordDraftCommand
     ) -> ExerciseRecordDraft = {
         error("createRecordDraft was not expected")
     }
+    var onFindRecordDraft: suspend (String) -> ExerciseRecordDraft? = { null }
     var onUpdateRecordDraft: suspend (
         UpdateExerciseRecordDraftCommand
     ) -> ExerciseRecordDraft = {
@@ -54,9 +58,15 @@ internal class FakeExerciseGateway : ExerciseGateway {
     override suspend fun finish(current: ExerciseSessionRecord): ExerciseSessionRecord =
         onFinish(current)
 
+    override suspend fun cancel(current: ExerciseSessionRecord): ExerciseSessionRecord =
+        onCancel(current)
+
     override suspend fun createRecordDraft(
         command: CreateExerciseRecordDraftCommand
     ): ExerciseRecordDraft = onCreateRecordDraft(command)
+
+    override suspend fun findRecordDraft(sessionId: String): ExerciseRecordDraft? =
+        onFindRecordDraft(sessionId)
 
     override suspend fun updateRecordDraft(
         command: UpdateExerciseRecordDraftCommand

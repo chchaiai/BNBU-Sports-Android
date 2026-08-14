@@ -163,6 +163,12 @@ android {
         buildConfig = true
     }
 
+    bundle {
+        language {
+            enableSplit = false
+        }
+    }
+
     sourceSets.getByName("main").java.srcDir(
         layout.buildDirectory.dir("generated/openapi/src/main/kotlin")
     )

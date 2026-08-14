@@ -136,6 +136,27 @@ class V1ExerciseSessionGatewayTest {
     }
 
     @Test
+    fun cancelUsesTheContractRouteAndCarriesConcurrencyState() = runBlocking {
+        server.enqueue(success(200, "req-cancel", sessionJson("CANCELLED", 5L, 600L)))
+
+        val result = gateway.cancel(localMirror(version = 4L))
+
+        assertEquals(ExerciseSessionPhase.CANCELLED, result.phase)
+        assertEquals(5L, result.version)
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/api/v1/exercise-sessions/session-1/cancel", request.path)
+        assertEquals("exercise-intent", request.getHeader("Idempotency-Key"))
+        val body = JsonParser.parseString(request.body.readUtf8()).asJsonObject
+        assertEquals(setOf("expectedVersion", "reason"), body.keySet())
+        assertEquals(4L, body["expectedVersion"].asLong)
+        assertEquals(
+            "Student ended exercise before the minimum valid duration.",
+            body["reason"].asString
+        )
+    }
+
+    @Test
     fun durationCapConflictRequestsAnAuthoritativeRefresh() {
         server.enqueue(error(409, "SESSION_DURATION_CAP_REACHED", "req-cap"))
 

@@ -65,6 +65,7 @@ import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.designsystem.pressScale
 import edu.bnbu.student.mvp.core.model.hourText
+import edu.bnbu.student.mvp.core.model.progressStatusLabel
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.checkin.canStartExercise
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
@@ -532,7 +533,9 @@ private fun DashboardHeader(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = appState.workspace.student.id,
+                text = appState.workspace.student.studentNumber.ifBlank {
+                    interfaceText("学号未提供", "Student number unavailable")
+                },
                 color = cs.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
@@ -624,7 +627,7 @@ private fun ProgressOverview(appState: StudentAppState) {
                 fontWeight = FontWeight.SemiBold
             )
             HomeStatusPill(
-                text = appState.workspace.progress.status,
+                text = progressStatusLabel(appState.workspace.progress.status),
                 emphasized = !appState.hasHourRisk
             )
         }

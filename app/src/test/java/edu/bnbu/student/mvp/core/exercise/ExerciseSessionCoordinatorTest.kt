@@ -95,6 +95,25 @@ class ExerciseSessionCoordinatorTest {
     }
 
     @Test
+    fun cancelUsesAuthoritativeCancelledStateForAnUnusedSession() = runBlocking {
+        val gateway = FakeExerciseGateway()
+        val active = session(ExerciseSessionPhase.ACTIVE, version = 2L, durationSeconds = 42L)
+        val cancelled = session(ExerciseSessionPhase.CANCELLED, version = 3L, durationSeconds = 42L)
+        gateway.onGetActive = { active }
+        gateway.onCancel = { current ->
+            assertEquals(2L, current.version)
+            cancelled
+        }
+        val coordinator = ExerciseSessionCoordinator(gateway)
+        coordinator.restore(null)
+
+        val result = coordinator.cancel()
+
+        assertTrue(result is ExerciseSessionOperationResult.Success)
+        assertEquals(cancelled, coordinator.state.session)
+    }
+
+    @Test
     fun expectedVersionConflictRefreshesTheServerMirrorWithoutRetryingMutation() = runBlocking {
         val gateway = FakeExerciseGateway()
         val stale = session(ExerciseSessionPhase.ACTIVE, version = 2L, durationSeconds = 600L)

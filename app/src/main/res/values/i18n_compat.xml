@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@string/i18n_*">
     <string name="i18n_00c5904a15f2750bc4653120e0620f96d5accfed99044a52b06c0c6f48cea01e" formatted="false"><![CDATA[用于回复和跟进此问题，不会公开展示。]]></string>
     <string name="i18n_00f9d9481f4d21ea66d085a0d90627265181084e38ae9efc339456391433b53b" formatted="false"><![CDATA[有效运动时长]]></string>
     <string name="i18n_0188a023fffd57e5ff89889e2b6a680a5acb5fab0db5b5773305901a3014c674" formatted="false"><![CDATA[本学期暂无课程]]></string>
@@ -43,7 +43,6 @@
     <string name="i18n_26de5e5aced94097797b5464f567cb52073ab231a8c789d58526fb60f38eafcc" formatted="false"><![CDATA[请输入有效的邮箱地址。]]></string>
     <string name="i18n_2846e24437694dba0659bdd568ddfebae1eb7cd91398f2e5d11ef70127e4f250" formatted="false"><![CDATA[输入邀请码]]></string>
     <string name="i18n_28cfc14c7f22b1f745fe70f761812c91b7d4f1037a7508f4344b9925772259f5" formatted="false"><![CDATA[提交时间：]]></string>
-    <string name="i18n_28f112c33143a3d81bb7727cf9ec3e2bd2ef59fe9add6f643bfa0074bd68f797" formatted="false"><![CDATA[演示或离线模式下暂时无法提交反馈，请连接服务器并使用正式账户后重试。]]></string>
     <string name="i18n_2973d90722b11098254c175da57f8b7ccda6f8c7139d31e4f8e051c80e134b28" formatted="false"><![CDATA[当前状态：]]></string>
     <string name="i18n_2ae35c14b7efd004bedaf9a513c4c1aa8cc544fbf1acc38561a0ff75c01e9deb" formatted="false"><![CDATA[请留下联系电话，便于跟进问题。]]></string>
     <string name="i18n_2bf5d2059b6efcd65fc970c08c1c8e78515926e5812d9e72548331b5e5da3ff7" formatted="false"><![CDATA[继续录制]]></string>
@@ -113,7 +112,6 @@
     <string name="i18n_65bff7ad17623ea376fbd4cacc2539ca44a06144b03a9cd98727d6aed5bcd8c3" formatted="false"><![CDATA[返回打卡记录]]></string>
     <string name="i18n_65fb5ae5e2dac100d0df10db7b539d78b49154daf5ec7e121b94a8bed911eb6a" formatted="false"><![CDATA[开始时间]]></string>
     <string name="i18n_6668469a394449629de0ea6c78e4c9dbe42376b6cd7df7a27331563b6546bac7" formatted="false"><![CDATA[结束运动]]></string>
-    <string name="i18n_67beb605e98bd8edc92db0965c6ef602a913623f9182a8a71a6172d6ee0e23f5" formatted="false"><![CDATA[演示或离线模式下暂时无法加载反馈记录。]]></string>
     <string name="i18n_67c5822fe169f3ab7660de48495fa38ae69b0e1e7d6a834ba7a04c22c776ae38" formatted="false"><![CDATA[请根据自身身体状况适量运动。如感不适应立即停止，必要时及时就医。]]></string>
     <string name="i18n_68f563da140e772e7fdce0e3260f6d267df442548ce07f9dc37660ed6eacc2f7" formatted="false"><![CDATA[取消]]></string>
     <string name="i18n_695a06ec8c2a70824188465c7fe1623cf129bc5b5b7ba0b6f8b783913222af98" formatted="false"><![CDATA[本学期完成情况]]></string>
@@ -141,7 +139,6 @@
     <string name="i18n_77e378e6a3d3fbd354bc91984c6b11c7236a94f8e273c5e373ba94dda47b3049" formatted="false"><![CDATA[请填写本次运动内容]]></string>
     <string name="i18n_7ab1579985c71d668e9a43e84983bd2aec972d7930b6df1cf65f7b9bde466bec" formatted="false"><![CDATA[尚无现场凭证]]></string>
     <string name="i18n_7b7a69179b3709dbbf0bfeed4b2a1e09f059e548a0874284da3f6d141f39b4a4" formatted="false"><![CDATA[提交打卡]]></string>
-    <string name="i18n_7bb7b49f7a64210e7d7602ea8341eae83ee88ebd29ba32e1fec513ce62f8240e" formatted="false"><![CDATA[当前为演示或离线模式。你仍可查看反馈表单，但连接服务器并使用正式账户后才能提交。]]></string>
     <string name="i18n_7cd0fe13ad51981bf346d31b48f8cc4ef7d8b51ebf1dfea2dbfa16b9f362dd25" formatted="false"><![CDATA[我的课程]]></string>
     <string name="i18n_7d1698ac26603d5f59efcb4d9e3670172e31c41dc6ce57196d52d808eaad552b" formatted="false"><![CDATA[如需补充说明，可在这里写下简短备注。]]></string>
     <string name="i18n_7d2d0d53915f5be395957339ec2c7ecbb23c6c2dc9897bf2aba06ddf2ee14d96" formatted="false"><![CDATA[打卡类别]]></string>

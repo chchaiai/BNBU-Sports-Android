@@ -12,6 +12,10 @@ internal enum class ExerciseMediaAvailability {
     FAILED
 }
 
+/** Course-related exercise descriptions are optional; independent exercise descriptions are required. */
+internal val CreditType.requiresExerciseDescription: Boolean
+    get() = this == CreditType.General
+
 internal data class ExerciseMediaReference(
     val mediaId: String,
     val sessionId: String,
@@ -30,12 +34,18 @@ internal data class ExerciseRecordForm(
     val otherSportName: String? = null,
     val media: List<ExerciseMediaReference> = emptyList()
 ) {
-    fun normalizedForDraft(): ExerciseRecordForm {
+    fun normalizedForDraft(creditType: CreditType = CreditType.General): ExerciseRecordForm {
         val normalizedDescription = description.trim()
         val normalizedSportType = sportType.trim()
         val normalizedOtherSportName = otherSportName?.trim()?.takeIf { it.isNotEmpty() }
-        require(normalizedDescription.length in 1..MaxExerciseRecordDescriptionLength) {
-            "Exercise description must contain 1 to $MaxExerciseRecordDescriptionLength characters."
+        if (creditType == CreditType.General) {
+            require(normalizedDescription.length in 1..MaxExerciseRecordDescriptionLength) {
+                "General exercise description must contain 1 to $MaxExerciseRecordDescriptionLength characters."
+            }
+        } else {
+            require(normalizedDescription.length <= MaxExerciseRecordDescriptionLength) {
+                "Course-related exercise description cannot exceed $MaxExerciseRecordDescriptionLength characters."
+            }
         }
         require(normalizedSportType.isNotEmpty()) { "Sport type cannot be empty." }
         if (normalizedSportType.equals(OtherSportType, ignoreCase = true)) {
@@ -57,8 +67,8 @@ internal data class ExerciseRecordForm(
         )
     }
 
-    fun normalizedForSubmission(): ExerciseRecordForm {
-        val normalized = normalizedForDraft()
+    fun normalizedForSubmission(creditType: CreditType = CreditType.General): ExerciseRecordForm {
+        val normalized = normalizedForDraft(creditType)
         require(media.isNotEmpty()) { "At least one AVAILABLE media item is required." }
         require(media.all { it.availability == ExerciseMediaAvailability.AVAILABLE }) {
             "Only AVAILABLE media can be attached to an exercise record."
@@ -94,19 +104,23 @@ internal data class CreateExerciseRecordDraftCommand(
         require(clientRequestId.length in 1..MaxClientRequestIdLength) {
             "Client request ID must contain 1 to $MaxClientRequestIdLength characters."
         }
-        form.normalizedForDraft()
+        form.normalizedForDraft(creditType)
     }
 }
 
 internal data class UpdateExerciseRecordDraftCommand(
     val recordId: String,
     val expectedVersion: Long,
+    val creditType: CreditType,
     val form: ExerciseRecordForm
 ) {
     init {
         require(recordId.isNotBlank()) { "Record ID cannot be empty." }
         require(expectedVersion >= 1L) { "Record version must be positive." }
-        form.normalizedForDraft()
+        require(creditType == CreditType.CourseRelated || creditType == CreditType.General) {
+            "Exercise record credit type is invalid."
+        }
+        form.normalizedForDraft(creditType)
     }
 }
 
@@ -290,7 +304,9 @@ internal class ExerciseRecordCoordinator(
     suspend fun updateDraft(): ExerciseRecordOperationResult {
         if (state.submittedRecord != null) return invalidState()
         val completedSession = state.completedSession ?: return invalidState()
-        val normalizedForm = runCatching { state.form.normalizedForDraft() }
+        val normalizedForm = runCatching {
+            state.form.normalizedForDraft(completedSession.creditType)
+        }
             .getOrElse {
                 return ExerciseRecordOperationResult.Rejected(
                     ExerciseRecordRejection.INVALID_FORM
@@ -300,14 +316,26 @@ internal class ExerciseRecordCoordinator(
         if (draft == null) {
             val clientRequestId = state.clientRequestId ?: return invalidState()
             return execute(ExerciseRecordAction.CREATE) {
-                val created = gateway.createRecordDraft(
-                    CreateExerciseRecordDraftCommand(
-                        sessionId = completedSession.sessionId,
-                        creditType = completedSession.creditType,
-                        clientRequestId = clientRequestId,
-                        form = normalizedForm
+                val recovered = gateway.findRecordDraft(completedSession.sessionId)
+                val created = if (recovered == null) {
+                    gateway.createRecordDraft(
+                        CreateExerciseRecordDraftCommand(
+                            sessionId = completedSession.sessionId,
+                            creditType = completedSession.creditType,
+                            clientRequestId = clientRequestId,
+                            form = normalizedForm
+                        )
                     )
-                )
+                } else {
+                    gateway.updateRecordDraft(
+                        UpdateExerciseRecordDraftCommand(
+                            recordId = recovered.recordId,
+                            expectedVersion = recovered.version,
+                            creditType = completedSession.creditType,
+                            form = normalizedForm
+                        )
+                    )
+                }
                 require(created.sessionId == completedSession.sessionId) {
                     "Record draft belongs to a different exercise session."
                 }
@@ -324,6 +352,7 @@ internal class ExerciseRecordCoordinator(
                 UpdateExerciseRecordDraftCommand(
                     recordId = draft.recordId,
                     expectedVersion = draft.version,
+                    creditType = completedSession.creditType,
                     form = normalizedForm
                 )
             )
@@ -345,8 +374,11 @@ internal class ExerciseRecordCoordinator(
     suspend fun submit(): ExerciseRecordOperationResult {
         val draft = state.remoteDraft ?: return invalidState()
         if (!state.isFormSynced || state.submittedRecord != null) return invalidState()
-        val sessionId = state.completedSession?.sessionId ?: return invalidState()
-        val normalizedForm = runCatching { state.form.normalizedForSubmission() }
+        val completedSession = state.completedSession ?: return invalidState()
+        val sessionId = completedSession.sessionId
+        val normalizedForm = runCatching {
+            state.form.normalizedForSubmission(completedSession.creditType)
+        }
             .getOrElse {
                 return ExerciseRecordOperationResult.Rejected(
                     ExerciseRecordRejection.INVALID_FORM

@@ -2,13 +2,13 @@ package edu.bnbu.student.mvp.core.state
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import edu.bnbu.student.mvp.core.data.ApiStudentRepository
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
-import edu.bnbu.student.mvp.core.mock.MockStudentWorkspace
 import edu.bnbu.student.mvp.core.model.CheckInRecord
 import edu.bnbu.student.mvp.core.model.CheckInTimeWindow
 import edu.bnbu.student.mvp.core.model.AppThemeMode
@@ -16,7 +16,6 @@ import edu.bnbu.student.mvp.core.model.AppLanguage
 import edu.bnbu.student.mvp.core.model.AccountStatus
 import edu.bnbu.student.mvp.core.model.Course
 import edu.bnbu.student.mvp.core.model.CreditType
-import edu.bnbu.student.mvp.core.model.Membership
 import edu.bnbu.student.mvp.core.model.NoticeCategory
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
@@ -42,7 +41,6 @@ import edu.bnbu.student.mvp.core.network.ProofFileReference
 import edu.bnbu.student.mvp.core.network.SubmitSportRecordRequest
 import edu.bnbu.student.mvp.core.network.UserDto
 import edu.bnbu.student.mvp.core.network.ContactStatusResponse
-import edu.bnbu.student.mvp.core.network.CourseJoinResponse
 import edu.bnbu.student.mvp.core.network.UploadProgress
 import edu.bnbu.student.mvp.core.network.StudentProfileResponse
 import edu.bnbu.student.mvp.core.network.ContactMethodResponse
@@ -129,10 +127,6 @@ class StudentAppState(
     var isAuthenticated by mutableStateOf(false)
         private set
 
-    /** True only for the explicit, local-only Mock-user login. */
-    var isUsingMockUser by mutableStateOf(false)
-        private set
-
     var workspace by mutableStateOf(
         StudentWorkspace.empty()
     )
@@ -143,7 +137,7 @@ class StudentAppState(
         private set
 
     /** Optimistic-lock version returned by the authoritative /me projection. */
-    var currentUserVersion by mutableStateOf(1L)
+    var currentUserVersion by mutableLongStateOf(1L)
         private set
 
     /** Keeps the activation screen visible until the newly active workspace is ready. */
@@ -222,7 +216,6 @@ class StudentAppState(
     fun refreshCheckInTimeWindow() {
         val repository = apiRepository ?: return
         val generation = sessionGeneration
-        updateCheckInTimeWindow(CheckInTimeWindow.unavailable())
         launchSessionRequest {
             try {
                 val window = repository.fetchCheckInTimeWindow()
@@ -393,26 +386,6 @@ class StudentAppState(
     // ── Authentication ────────────────────────────────────────────
 
     /**
-     * Opens a complete local Mock-user session. This deliberately does not
-     * create a token or pretend to be a backend login, so restarting the app
-     * returns to the login screen and keeps the mock shortcut explicit.
-     */
-    fun loginMockUser() {
-        if (isLoading) return
-        beginSessionGeneration()
-        localSessionInvalidated = false
-        apiRepository = null
-        isUsingMockUser = true
-        workspace = MockStudentWorkspace.create()
-        isPreparingActivatedWorkspace = false
-        contactActivationLoadError = null
-        isAuthenticated = true
-        isShowingCachedData = false
-        lastError = null
-        saveWorkspace(event = "Mock 用户数据已加载")
-    }
-
-    /**
      * Log in via the backend API. Returns true on success.
      * On success, sets up the [apiRepository] with the returned bearer token
      * and refreshes the workspace from the server.
@@ -445,7 +418,6 @@ class StudentAppState(
         if (isLoading) return
         isLoading = true
         lastError = null
-        isUsingMockUser = false
         val generation = beginSessionGeneration()
         launchSessionRequest {
             try {
@@ -512,7 +484,6 @@ class StudentAppState(
         invalidateSessionGeneration()
         val generation = beginSessionGeneration()
         localSessionInvalidated = false
-        isUsingMockUser = false
         applyV1CurrentUser(current, cachedWorkspace = null)
         val repository = createV1Repository(current.toLegacyUserDto())
         apiRepository = repository
@@ -555,7 +526,6 @@ class StudentAppState(
         invalidateSessionGeneration()
         val generation = beginSessionGeneration()
         localSessionInvalidated = false
-        isUsingMockUser = false
         isAuthenticated = true
         isPreparingActivatedWorkspace = true
         contactActivationLoadError = null
@@ -642,125 +612,6 @@ class StudentAppState(
 
     fun refreshWorkspace() {
         retryLoadWorkspace()
-    }
-
-    /**
-     * Installs the authoritative student, course, membership and session returned
-     * by the direct-join endpoint. This is the only client seam that turns a
-     * successful pre-login scan into an authenticated workspace.
-     *
-     * [allowLocalSession] is reserved for the explicitly labelled local demo.
-     * It never persists a fake bearer token or restores as a real account.
-     */
-    suspend fun acceptDirectCourseJoin(
-        response: CourseJoinResponse,
-        expectedCourseId: String,
-        allowLocalSession: Boolean = false
-    ) {
-        require(allowLocalSession) {
-            "Direct course join is available only in the explicitly labelled local demo."
-        }
-        val student = response.resolvedStudent()
-            ?: throw IllegalArgumentException("JOIN_RESPONSE_STUDENT_MISSING")
-        val joinedCourse = response.resolvedCourse()
-            ?: throw IllegalArgumentException("JOIN_RESPONSE_COURSE_MISSING")
-        val membership = response.resolvedMembership()
-            ?: throw IllegalArgumentException("JOIN_RESPONSE_MEMBERSHIP_MISSING")
-        val expectedId = expectedCourseId.trim()
-        require(expectedId.isNotEmpty() && joinedCourse.id == expectedId) {
-            "JOIN_RESPONSE_COURSE_MISMATCH"
-        }
-        require(membership.courseId == expectedId) { "JOIN_RESPONSE_MEMBERSHIP_MISMATCH" }
-        require(membership.status.trim().lowercase() == "active") {
-            "JOIN_RESPONSE_MEMBERSHIP_NOT_ACTIVE"
-        }
-        require(student.id.isNotBlank() && student.studentNumber.isNotBlank()) {
-            "JOIN_RESPONSE_STUDENT_INVALID"
-        }
-        require(membership.studentId.isBlank() || membership.studentId == student.id) {
-            "JOIN_RESPONSE_STUDENT_MISMATCH"
-        }
-        val authoritativeAccountStatus = AccountStatus.requireKnown(student.accountStatus)
-
-        val generation = if (isAuthenticated) sessionGeneration else beginSessionGeneration()
-        val profile = StudentProfile(
-            id = student.id,
-            name = student.name,
-            studentNumber = student.studentNumber,
-            email = student.email,
-            college = student.college,
-            className = student.className,
-            status = student.status,
-            gender = student.gender,
-            gradeLevel = student.grade,
-            accountStatus = authoritativeAccountStatus.name
-        )
-        val course = Course(
-            id = joinedCourse.id,
-            code = joinedCourse.code,
-            section = joinedCourse.section,
-            name = joinedCourse.name,
-            semester = joinedCourse.semester,
-            students = 0,
-            completion = 0,
-            missing = 0,
-            deadline = "",
-            teacher = joinedCourse.teacherName,
-            teacherId = joinedCourse.teacherId,
-            semesterId = joinedCourse.semesterId,
-            academicYear = joinedCourse.academicYear,
-            term = joinedCourse.term,
-            status = joinedCourse.status,
-            enrollmentStatus = "active",
-            isCurrent = true
-        )
-        val base = if (isAuthenticated) workspace else StudentWorkspace.empty()
-        val courses = (base.courses.filterNot { it.id == course.id } + course)
-        val joinedWorkspace = base.copy(
-            student = profile,
-            courses = courses,
-            progress = base.progress.copy(
-                id = profile.id,
-                name = profile.name,
-                college = profile.college,
-                className = profile.className
-            ),
-            grades = base.grades.copy(
-                studentId = profile.id,
-                studentName = profile.name
-            )
-        )
-        val user = UserDto(
-            id = profile.id,
-            name = profile.name,
-            studentNumber = profile.studentNumber,
-            email = profile.email,
-            role = "student",
-            college = profile.college,
-            status = profile.status,
-            gender = profile.gender,
-            gradeLevel = profile.gradeLevel,
-            className = profile.className,
-            accountStatus = profile.accountStatus,
-            contacts = student.contacts
-        )
-
-        awaitPendingSessionClear()
-        if (!isCurrentSession(generation)) throw CancellationException("Session changed during join")
-        localSessionInvalidated = false
-        workspace = joinedWorkspace
-        contactStatus = student.contacts
-        isUsingMockUser = allowLocalSession
-        isAuthenticated = true
-        isPreparingActivatedWorkspace = false
-        contactActivationLoadError = null
-        isShowingCachedData = false
-        lastError = null
-        apiRepository = null
-        val now = currentSyncTimestamp()
-        lastSyncTimestamp = now
-
-        saveWorkspace(event = "本地演示课程已直接加入")
     }
 
     /** Re-reads /me and retries workspace hydration, never the consumed verification code. */
@@ -854,7 +705,6 @@ class StudentAppState(
         }
         scheduleFinalSessionClear("clear local data on logout")
         isAuthenticated = false
-        isUsingMockUser = false
         apiRepository = null
         lastError = null
         isLoading = false
@@ -1009,17 +859,6 @@ class StudentAppState(
         onResult: (Result<Unit>) -> Unit = {}
     ) {
         if (!allowWrite("submitCheckIn", onResult)) return
-        if (!isUsingMockUser) {
-            failSubmission(
-                "submitExerciseCheckIn",
-                interfaceText(
-                    "正式环境打卡必须使用 V1 运动会话、媒体确认和结束会话流程。",
-                    "Formal check-in must use the V1 exercise-session, media-confirmation, and end-session flow."
-                ),
-                onResult
-            )
-            return
-        }
         if (isLoading) {
             failSubmission("submitExerciseCheckIn", interfaceText("正在处理上一项请求，请稍候", "The previous request is still being processed. Please wait."), onResult)
             return
@@ -1076,48 +915,6 @@ class StudentAppState(
 
         val submittedHours = normalizedCheckInHours(hours)
         val submittedDescription = normalizedDescription
-        if (isUsingMockUser) {
-            val submittedAt = Instant.ofEpochMilli(endedAtEpochMillis).toString()
-            val record = CheckInRecord(
-                id = "mock-${UUID.randomUUID()}",
-                courseId = associatedCourseId,
-                taskTitle = interfaceText("运动打卡", "Exercise check-in"),
-                creditType = creditType,
-                hours = submittedHours,
-                submittedAt = submittedAt,
-                proofSummary = proofSummary(proofAttachments),
-                proofPhotoCount = proofAttachments.count { it.type == ProofMediaType.Image },
-                proofVideoCount = proofAttachments.count { it.type == ProofMediaType.Video },
-                proofFiles = proofAttachments,
-                teacherPublicFeedback = null,
-                teacherInternalNote = null,
-                note = submittedDescription,
-                sportType = sportType,
-                startTime = Instant.ofEpochMilli(startedAtEpochMillis).toString(),
-                endTime = submittedAt,
-                actualDurationSeconds = actualDurationSeconds
-            )
-            workspace = workspace.copy(
-                records = listOf(record) + workspace.records,
-                progress = workspace.progress.withRecordedCheckIn(
-                    creditType = creditType,
-                    hours = submittedHours
-                )
-            )
-            enqueueSyncOperation(
-                type = SyncOperationType.SubmitRecord,
-                title = interfaceText("提交打卡记录", "Submit check-in record"),
-                detail = interfaceText(
-                    "Mock 本地记录 · ${creditType.label} · ${submittedHours.hourText()}",
-                    "Mock local record · ${creditType.label} · ${submittedHours.hourText()}"
-                ),
-                status = SyncOperationStatus.LocalOnly
-            )
-            saveWorkspace(event = "Mock 打卡记录已保存")
-            onResult(Result.success(Unit))
-            return
-        }
-
         val repo = apiRepository ?: run {
             failSubmission("submitExerciseCheckIn", interfaceText("尚未连接服务器，请重新登录", "The server is not connected. Sign in again."), onResult)
             return
@@ -1603,7 +1400,6 @@ class StudentAppState(
             localSessionInvalidated = true
             apiRepository = null
             isAuthenticated = false
-            isUsingMockUser = false
             isShowingCachedData = false
             isLoading = false
             workspace = StudentWorkspace.empty()

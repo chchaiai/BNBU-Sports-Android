@@ -32,7 +32,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
@@ -93,24 +92,8 @@ import java.net.URI
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-private val InviteCodePattern = Regex("^[A-Za-z0-9][A-Za-z0-9-]{2,127}$")
-
-/**
- * Preview data mirrors the active example course published in the Web teacher
- * workspace.  It is deliberately marked as a demo result so the confirmation
- * page can distinguish it from a live invitation returned by the server.
- */
-internal const val DemoStudentScanInviteCode = "PE01-7K2Q"
-
-internal val DemoStudentScanCourse = CourseJoinInfo(
-    id = "demo-course-pe101-01",
-    name = "大学体育（一）",
-    courseNumber = "PE101",
-    section = "01班",
-    teacher = "陈若宁",
-    semester = "2025–2026 第二学期",
-    isDemoScanResult = true
-)
+private const val InviteTokenMinLength = 16
+private const val InviteTokenMaxLength = 512
 
 /**
  * Scans a teacher-provided course QR code and resolves its public invite data.
@@ -183,13 +166,6 @@ fun ScanJoinScreen(
         resolveCode(code)
     }
 
-    fun showDemoScanSuccess() {
-        if (isResolving) return
-        message = null
-        retryInviteCode = null
-        onInviteResolved(DemoStudentScanInviteCode, DemoStudentScanCourse)
-    }
-
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -216,7 +192,7 @@ fun ScanJoinScreen(
         )
         runCatching { context.startActivity(intent) }
             .onFailure {
-                message = interfaceText("Unable to open Settings. Allow camera access in your device settings.", "Unable to open Settings. Allow camera access in your device settings.")
+                message = interfaceText("无法打开系统设置，请在设备设置中允许相机权限。", "Unable to open Settings. Allow camera access in your device settings.")
             }
     }
 
@@ -378,38 +354,6 @@ fun ScanJoinScreen(
                     )
                 }
 
-                Spacer(Modifier.height(20.dp))
-                Button(
-                    onClick = ::showDemoScanSuccess,
-                    enabled = !isResolving,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(54.dp)
-                        .testTag("courseJoin.scan.simulateSuccess")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.CheckCircle,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        text = interfaceText("模拟扫码成功", "Simulate a successful scan"),
-                        style = MaterialTheme.typography.labelLarge
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = interfaceText(
-                        "用于预览扫码后的直接入课界面，不读取相机或访问真实服务；确认后仅写入本地演示数据。",
-                        "Preview direct enrollment after scanning without using the camera or a real service. Confirming writes local demo data only."
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = { showManualInput = true },
@@ -719,7 +663,7 @@ private fun ManualInviteCodeDialog(
     onSubmit: (String) -> Unit
 ) {
     var code by remember { mutableStateOf("") }
-    val normalizedCode = code.trim().uppercase()
+    val normalizedCode = code.trim()
     val showFormatError = code.isNotBlank() && !isInviteCode(normalizedCode)
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -744,16 +688,18 @@ private fun ManualInviteCodeDialog(
                     value = code,
                     onValueChange = { code = it },
                     label = { Text(interfaceText("邀请码", "Invitation code")) },
-                    placeholder = { Text("例如 BNBU-7K3P9Q") },
+                    placeholder = {
+                        Text(interfaceText("粘贴或扫描教师提供的加入凭证", "Paste or scan the join credential from your teacher"))
+                    },
                     supportingText = if (showFormatError) {
-                        { Text(interfaceText("请输入有效的邀请码", "Enter a valid invitation code.")) }
+                        { Text(interfaceText("请输入完整的加入凭证", "Enter the complete join credential.")) }
                     } else {
                         null
                     },
                     isError = showFormatError,
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(
-                        capitalization = KeyboardCapitalization.Characters,
+                        capitalization = KeyboardCapitalization.None,
                         keyboardType = KeyboardType.Ascii,
                         imeAction = ImeAction.Done
                     ),
@@ -794,7 +740,8 @@ internal fun inviteCodeFromQr(rawValue: String): String? {
     return segments.last().takeIf(::isInviteCode)
 }
 
-internal fun isInviteCode(value: String): Boolean = InviteCodePattern.matches(value.trim())
+internal fun isInviteCode(value: String): Boolean =
+    value.trim().length in InviteTokenMinLength..InviteTokenMaxLength
 
 internal fun inviteLookupErrorMessage(error: Throwable): String = when {
         error.message?.contains("ENROLLMENT_CLOSED") == true -> interfaceText(

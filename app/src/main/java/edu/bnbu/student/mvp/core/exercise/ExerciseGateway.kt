@@ -27,9 +27,13 @@ internal interface ExerciseGateway {
 
     suspend fun finish(current: ExerciseSessionRecord): ExerciseSessionRecord
 
+    suspend fun cancel(current: ExerciseSessionRecord): ExerciseSessionRecord
+
     suspend fun createRecordDraft(
         command: CreateExerciseRecordDraftCommand
     ): ExerciseRecordDraft
+
+    suspend fun findRecordDraft(sessionId: String): ExerciseRecordDraft?
 
     suspend fun updateRecordDraft(
         command: UpdateExerciseRecordDraftCommand

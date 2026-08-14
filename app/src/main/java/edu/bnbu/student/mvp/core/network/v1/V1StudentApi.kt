@@ -386,10 +386,17 @@ class V1StudentApi private constructor(
         require(result.studentProfile.userId == result.authSession.user.id) {
             "Join result student profile does not match the authenticated user"
         }
+        require(
+            result.authSession.enrollmentId == null ||
+                result.authSession.enrollmentId == result.enrollment.id
+        ) {
+            "Join result AuthSession belongs to another enrollment"
+        }
         installSessionOrThrow(
             "joinClassSectionWithInvite",
             response.meta.requestId,
-            result.authSession
+            result.authSession,
+            fallbackEnrollmentId = result.enrollment.id
         )
         return V1StudentJoinCompleted(
             studentProfile = result.studentProfile,
@@ -573,9 +580,12 @@ class V1StudentApi private constructor(
     private fun installSessionOrThrow(
         operationId: String,
         requestId: String,
-        session: AuthSession
+        session: AuthSession,
+        fallbackEnrollmentId: String? = null
     ) {
-        if (!authorizedClient.installSession(session.toCredentials())) {
+        val credentials = session.toCredentials()
+            .withEnrollmentIdIfMissing(fallbackEnrollmentId)
+        if (!authorizedClient.installSession(credentials)) {
             throw V1CredentialPersistenceException(operationId, requestId)
         }
     }
@@ -606,7 +616,7 @@ class V1StudentApi private constructor(
     }
 
     private fun validateInviteToken(value: String) {
-        require(value.length >= 16) { "inviteToken is shorter than the contract" }
+        require(value.length in 16..512) { "inviteToken length is outside the contract" }
     }
 
     private fun requiredId(name: String, value: String): String {

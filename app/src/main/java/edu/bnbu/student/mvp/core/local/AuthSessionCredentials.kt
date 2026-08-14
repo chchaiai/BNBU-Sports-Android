@@ -45,6 +45,25 @@ class AuthSessionCredentials private constructor(
         return token.takeIf { now.isBefore(expiresAt) }
     }
 
+    /**
+     * Keeps the server-issued session intact while filling the optional course
+     * context from a contract response that owns the canonical Enrollment.
+     */
+    fun withEnrollmentIdIfMissing(fallbackEnrollmentId: String?): AuthSessionCredentials {
+        val normalizedFallback = fallbackEnrollmentId?.trim()?.takeIf(String::isNotEmpty)
+        if (enrollmentId != null || normalizedFallback == null) return this
+        return AuthSessionCredentials(
+            sessionId = sessionId,
+            enrollmentId = normalizedFallback,
+            principalUserId = principalUserId,
+            accessToken = accessToken,
+            refreshToken = refreshToken,
+            accessTokenExpiresAt = accessTokenExpiresAt,
+            refreshTokenExpiresAt = refreshTokenExpiresAt,
+            isLegacyAccessOnly = isLegacyAccessOnly
+        )
+    }
+
     override fun toString(): String =
         "AuthSessionCredentials(sessionId=<redacted>, enrollmentId=<redacted>, " +
             "accessToken=<redacted>, " +

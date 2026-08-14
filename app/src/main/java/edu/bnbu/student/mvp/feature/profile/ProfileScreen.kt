@@ -59,6 +59,7 @@ import edu.bnbu.student.mvp.core.model.Membership
 import edu.bnbu.student.mvp.core.model.AppThemeMode
 import edu.bnbu.student.mvp.core.model.AppLanguage
 import edu.bnbu.student.mvp.core.model.StudentProfile
+import edu.bnbu.student.mvp.core.model.studentStatusLabel
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.R
@@ -209,7 +210,7 @@ private fun ProfileHeader(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    StatusBadge(text = student.status, filled = true)
+                    StatusBadge(text = studentStatusLabel(student.status), filled = true)
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = null,
@@ -219,7 +220,7 @@ private fun ProfileHeader(
                 }
 
                 ProfileFacts(
-                    studentId = student.id,
+                    studentId = student.studentNumber,
                     className = student.className,
                     grade = student.localizedGradeLabel().ifBlank { pendingCalculation }
                 )

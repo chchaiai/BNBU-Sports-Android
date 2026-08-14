@@ -41,8 +41,6 @@ class V1AuthSessionCoordinator(
         IdempotencyKey.fromGenerated("android-refresh-${UUID.randomUUID()}")
     }
 ) {
-    private val refreshLock = Any()
-
     @Volatile
     private var session: AuthSessionCredentials? = credentialStore.loadAuthSession()
 
@@ -53,7 +51,7 @@ class V1AuthSessionCoordinator(
     fun currentAccountScope(): String? = session?.principalUserId ?: session?.sessionId
 
     fun install(session: AuthSessionCredentials): Boolean {
-        synchronized(refreshLock) {
+        synchronized(GlobalRefreshLock) {
             if (!credentialStore.saveAuthSession(session)) {
                 this.session = null
                 runCatching(credentialStore::clearAuth)
@@ -65,9 +63,22 @@ class V1AuthSessionCoordinator(
     }
 
     fun refreshAfterExpiredAccessToken(rejectedAccessToken: String): String {
-        synchronized(refreshLock) {
+        synchronized(GlobalRefreshLock) {
             val latest = session
                 ?: throw invalidated(requestId = null)
+
+            // Different API facades can hold coordinators for the same durable session.
+            // Observe a rotation completed by another facade before using the old
+            // single-use refresh token again.
+            val persisted = credentialStore.loadAuthSession()
+            if (
+                persisted != null &&
+                persisted.sessionId == latest.sessionId &&
+                persisted.accessToken != rejectedAccessToken
+            ) {
+                session = persisted
+                return persisted.accessToken
+            }
 
             // A concurrent request already rotated this token family.
             if (latest.accessToken != rejectedAccessToken) return latest.accessToken
@@ -78,7 +89,7 @@ class V1AuthSessionCoordinator(
                 refreshSession(refreshToken, idempotencyKeyProvider())
             } catch (error: Exception) {
                 throw invalidateAndBuildException(error.requestIdOrNull(), error)
-            }
+            }.withEnrollmentIdIfMissing(latest.enrollmentId)
             if (!credentialStore.saveAuthSession(rotated)) {
                 throw invalidateAndBuildException(requestId = null)
             }
@@ -88,7 +99,7 @@ class V1AuthSessionCoordinator(
     }
 
     fun invalidate(requestId: String?, cause: Throwable? = null): V1SessionInvalidatedException {
-        synchronized(refreshLock) {
+        synchronized(GlobalRefreshLock) {
             session = null
             runCatching(credentialStore::clearAuth)
         }
@@ -108,6 +119,10 @@ class V1AuthSessionCoordinator(
     private fun Throwable.requestIdOrNull(): String? =
         (this as? V1HttpException)?.error?.requestId
             ?: (this as? V1ProtocolException)?.requestId
+
+    private companion object {
+        val GlobalRefreshLock = Any()
+    }
 }
 
 /** Contract-specific refresh and logout calls. */

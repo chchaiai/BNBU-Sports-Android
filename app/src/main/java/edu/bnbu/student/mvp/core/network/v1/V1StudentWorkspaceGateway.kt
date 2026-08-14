@@ -16,6 +16,7 @@ import edu.bnbu.student.mvp.core.network.v1.generated.CurrentUserData
 import edu.bnbu.student.mvp.core.network.v1.generated.Enrollment
 import edu.bnbu.student.mvp.core.network.v1.generated.ExemptionApplication
 import edu.bnbu.student.mvp.core.network.v1.generated.ExerciseRecord
+import edu.bnbu.student.mvp.core.network.v1.generated.ExerciseRecordEvidenceContext
 import edu.bnbu.student.mvp.core.network.v1.generated.Feedback
 import edu.bnbu.student.mvp.core.network.v1.generated.HelpArticle
 import edu.bnbu.student.mvp.core.network.v1.generated.MediaEvidence
@@ -23,7 +24,10 @@ import edu.bnbu.student.mvp.core.network.v1.generated.MediaUploadSession
 import edu.bnbu.student.mvp.core.network.v1.generated.Notification
 import edu.bnbu.student.mvp.core.network.v1.generated.PushDevice
 import edu.bnbu.student.mvp.core.network.v1.generated.PushDeviceRegistrationRequest
+import edu.bnbu.student.mvp.core.network.v1.generated.Semester
 import edu.bnbu.student.mvp.core.network.v1.generated.StudentScore
+import edu.bnbu.student.mvp.core.network.v1.generated.StructuredExemptionApplication
+import edu.bnbu.student.mvp.core.network.v1.generated.TeacherProfile
 import edu.bnbu.student.mvp.core.network.v1.generated.UpdateExemptionApplicationRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.UpdateUserPreferencesRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.UserPreferences
@@ -49,8 +53,11 @@ data class V1StudentWorkspaceSnapshot(
     val classSections: Map<String, ClassSection>,
     val courses: Map<String, Course>,
     val records: List<ExerciseRecord>,
+    val recordEvidenceContexts: Map<String, ExerciseRecordEvidenceContext> = emptyMap(),
     val scores: List<StudentScore>,
-    val notifications: List<Notification>
+    val notifications: List<Notification>,
+    val teachers: Map<String, TeacherProfile> = emptyMap(),
+    val currentSemester: Semester? = null
 )
 
 data class V1UploadedExemptionMedia(
@@ -66,6 +73,7 @@ data class V1UploadedExemptionMedia(
 class V1StudentWorkspaceGateway private constructor(
     private val authorizedClient: V1AuthorizedApiClient,
     httpClient: OkHttpClient,
+    private val credentialStore: AuthSessionCredentialStore,
     private val sessionEnrollmentIdProvider: () -> String?,
     private val mutationRegistry: MutationIntentRegistry = MutationIntentRegistry(),
     private val clock: () -> Instant = Instant::now
@@ -83,10 +91,11 @@ class V1StudentWorkspaceGateway private constructor(
         val current = getOne("getCurrentUser", "me", CurrentUserData::class.java)
         val enrollments = listAll<Enrollment>(
             operationId = "listEnrollments",
-            path = "enrollments",
-            // Enrollment.studentId references StudentProfile.id, never User.id.
-            query = mapOf("studentId" to current.studentProfile?.id)
+            // Student collection scope is derived from the authenticated principal
+            // by ENROLLMENT_LIST_SCOPE. A student must never self-report studentId.
+            path = "enrollments"
         )
+        repairMissingSessionEnrollment(enrollments)
         val sections = enrollments.map(Enrollment::classSectionId).distinct().associateWith { id ->
             getOne(
                 operationId = "getClassSection",
@@ -103,15 +112,79 @@ class V1StudentWorkspaceGateway private constructor(
                 pathSegments = listOf("courses", id)
             )
         }
+        val teachers = sections.values.map(ClassSection::teacherId).distinct().associateWith { id ->
+            getOne(
+                operationId = "getTeacher",
+                path = "teachers/{teacherId}",
+                responseClass = TeacherProfile::class.java,
+                pathSegments = listOf("teachers", id)
+            )
+        }
+        val currentSemester = getOne(
+            operationId = "getCurrentSemester",
+            path = "semesters/current",
+            responseClass = Semester::class.java
+        )
+        val records = listAll<ExerciseRecord>("listExerciseRecords", "exercise-records")
+        val recordEvidenceContexts = records.associate { record ->
+            record.id to getOne(
+                operationId = "getExerciseRecordEvidenceContext",
+                path = "exercise-records/{recordId}/evidence-context",
+                responseClass = ExerciseRecordEvidenceContext::class.java,
+                pathSegments = listOf("exercise-records", record.id, "evidence-context")
+            )
+        }
         return V1StudentWorkspaceSnapshot(
             currentUser = current,
             enrollments = enrollments,
             classSections = sections,
             courses = courses,
-            records = listAll("listExerciseRecords", "exercise-records"),
+            records = records,
+            recordEvidenceContexts = recordEvidenceContexts,
             scores = listAll("listStudentScores", "student-scores"),
-            notifications = listAll("listNotifications", "notifications")
+            notifications = listAll("listNotifications", "notifications"),
+            teachers = teachers,
+            currentSemester = currentSemester
         )
+    }
+
+    /** Loads only the active enrollment and its class-section policy. */
+    suspend fun loadActiveClassSection(): ClassSection? {
+        val enrollments = listAll<Enrollment>(
+            operationId = "listEnrollments",
+            path = "enrollments"
+        )
+        repairMissingSessionEnrollment(enrollments)
+        val active = enrollments.filter { it.status.value == "ACTIVE" }
+        val enrollment = currentSessionEnrollmentId()?.let { sessionEnrollmentId ->
+            active.singleOrNull { it.id == sessionEnrollmentId }
+                ?: throw IllegalStateException("The authenticated session enrollment is not active.")
+        } ?: when (active.size) {
+            0 -> return null
+            1 -> active.single()
+            else -> throw IllegalStateException(
+                "The active enrollment is ambiguous. Sign in through the intended course."
+            )
+        }
+        return getOne(
+            operationId = "getClassSection",
+            path = "class-sections/{classSectionId}",
+            responseClass = ClassSection::class.java,
+            pathSegments = listOf("class-sections", enrollment.classSectionId)
+        )
+    }
+
+    private fun repairMissingSessionEnrollment(enrollments: List<Enrollment>) {
+        val current = credentialStore.loadAuthSession() ?: return
+        if (current.enrollmentId != null) return
+        val onlyActiveEnrollment = enrollments
+            .filter { it.status.value == "ACTIVE" }
+            .singleOrNull()
+            ?: return
+        val repaired = current.withEnrollmentIdIfMissing(onlyActiveEnrollment.id)
+        check(credentialStore.saveAuthSession(repaired)) {
+            "Could not persist the active enrollment context."
+        }
     }
 
     suspend fun markNotificationRead(notificationId: String): Notification = mutation(
@@ -192,11 +265,21 @@ class V1StudentWorkspaceGateway private constructor(
         )
     }
 
-    suspend fun listHelpArticles(locale: String): List<HelpArticle> = listAll(
-        operationId = "listHelpArticles",
-        path = "help-articles",
-        query = mapOf("locale" to locale)
-    )
+    suspend fun listHelpArticles(locale: String): List<HelpArticle> {
+        val response = authorizedClient.executeCancellable<List<HelpArticle>>(
+            V1ApiRequest(
+                operationId = "listHelpArticles",
+                method = V1HttpMethod.GET,
+                relativePath = "help-articles",
+                query = mapOf("locale" to locale)
+            ),
+            object : TypeToken<List<HelpArticle>>() {}.type
+        )
+        require(response.statusCode == 200) {
+            "listHelpArticles returned ${response.statusCode}."
+        }
+        return response.data.orEmpty()
+    }
 
     suspend fun listFeedback(): List<Feedback> = listAll("listFeedback", "feedback")
 
@@ -215,12 +298,14 @@ class V1StudentWorkspaceGateway private constructor(
         expectedStatus = 201
     )
 
-    suspend fun listExemptions(): List<ExemptionApplication> =
-        listAll("listExemptionApplications", "exemption-applications")
+    suspend fun listExemptions(): List<StructuredExemptionApplication> =
+        listAll("listStructuredExemptionApplications", "exemption-application-details")
 
     suspend fun createExemption(
         enrollmentId: String,
         applicationType: CreateExemptionApplicationRequest.ApplicationType,
+        applicationSubtype: CreateExemptionApplicationRequest.ApplicationSubtype,
+        organizationName: String?,
         reason: String,
         mediaIds: Set<String>,
         intentId: String
@@ -228,13 +313,22 @@ class V1StudentWorkspaceGateway private constructor(
         operationId = "createExemptionApplication",
         actionSlot = "exemption:$intentId:create",
         canonicalInput = "intentId=$intentId\nenrollmentId=$enrollmentId" +
-            "\napplicationType=${applicationType.value}\nreason=$reason" +
+            "\napplicationType=${applicationType.value}" +
+            "\napplicationSubtype=${applicationSubtype.value}" +
+            "\norganizationName=${organizationName.orEmpty()}\nreason=$reason" +
             "\nmediaIds=${mediaIds.sorted().joinToString(",")}",
         request = V1ApiRequest(
             operationId = "createExemptionApplication",
             method = V1HttpMethod.POST,
             relativePath = "exemption-applications",
-            body = CreateExemptionApplicationRequest(enrollmentId, applicationType, reason, mediaIds)
+            body = CreateExemptionApplicationRequest(
+                enrollmentId = enrollmentId,
+                applicationType = applicationType,
+                applicationSubtype = applicationSubtype,
+                organizationName = organizationName,
+                reason = reason,
+                mediaIds = mediaIds
+            )
         ),
         responseClass = ExemptionApplication::class.java,
         expectedStatus = 201
@@ -256,7 +350,11 @@ class V1StudentWorkspaceGateway private constructor(
             method = V1HttpMethod.PATCH,
             relativePath = "exemption-applications/{applicationId}",
             pathSegments = listOf("exemption-applications", applicationId),
-            body = UpdateExemptionApplicationRequest(expectedVersion, reason, mediaIds)
+            body = UpdateExemptionApplicationRequest(
+                expectedVersion = expectedVersion,
+                reason = reason,
+                mediaIds = mediaIds
+            )
         ),
         responseClass = ExemptionApplication::class.java,
         expectedStatus = 200
@@ -340,7 +438,7 @@ class V1StudentWorkspaceGateway private constructor(
                 method = V1HttpMethod.POST,
                 relativePath = "media-uploads/{uploadSessionId}/confirm",
                 pathSegments = listOf("media-uploads", initiated.uploadSessionId, "confirm"),
-                body = ConfirmMediaUploadRequest(entityTag)
+                body = ConfirmMediaUploadRequest(entityTag.normalizedForMediaConfirmation())
             ),
             responseClass = MediaEvidence::class.java,
             expectedStatus = 200
@@ -475,6 +573,7 @@ class V1StudentWorkspaceGateway private constructor(
             return V1StudentWorkspaceGateway(
                 authorizedClient = authorized,
                 httpClient = httpClient,
+                credentialStore = credentialStore,
                 sessionEnrollmentIdProvider = { credentialStore.loadAuthSession()?.enrollmentId }
             )
         }

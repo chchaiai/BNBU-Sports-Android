@@ -1,5 +1,6 @@
 package edu.bnbu.student.mvp.core.data
 
+import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.model.CheckInRecord
 import edu.bnbu.student.mvp.core.model.CheckInTimeWindow
 import edu.bnbu.student.mvp.core.model.Course
@@ -63,6 +64,7 @@ import edu.bnbu.student.mvp.core.exercise.SubmitExerciseRecordCommand
 import edu.bnbu.student.mvp.core.network.v1.generated.CreateExemptionApplicationRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.CreateFeedbackRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.ExemptionApplication as ContractExemptionApplication
+import edu.bnbu.student.mvp.core.network.v1.generated.StructuredExemptionApplication as ContractStructuredExemptionApplication
 import edu.bnbu.student.mvp.core.network.v1.generated.Feedback as ContractFeedback
 import edu.bnbu.student.mvp.core.network.v1.generated.HelpArticle as ContractHelpArticle
 import edu.bnbu.student.mvp.core.network.v1.generated.UpdateUserPreferencesRequest
@@ -113,8 +115,8 @@ class ApiStudentRepository(
 
     /** Fetches only the current server-authoritative check-in admission policy. */
     suspend fun fetchCheckInTimeWindow(): CheckInTimeWindow = withContext(Dispatchers.IO) {
-        val snapshot = requireV1Gateway().loadWorkspace().also { lastV1Snapshot = it }
-        snapshot.toCheckInTimeWindow()
+        requireV1Gateway().loadActiveClassSection()?.toCheckInTimeWindow()
+            ?: CheckInTimeWindow.unavailable()
     }
 
     /**
@@ -148,25 +150,27 @@ class ApiStudentRepository(
         return withContext(Dispatchers.IO) {
             runCatching {
                 val gateway = requireNotNull(exerciseGateway) {
-                    "The V1 ExerciseRecord gateway is not configured."
+                    interfaceText("运动打卡服务尚未连接，请重新登录。", "The exercise check-in service is not connected. Sign in again.")
                 }
                 val sessionId = requireNotNull(payload.sessionId?.trim()?.takeIf(String::isNotEmpty)) {
-                    "A completed V1 exercise session ID is required."
+                    interfaceText("未找到已完成的运动会话，请重新开始打卡。", "A completed exercise session was not found. Start the check-in again.")
                 }
                 val clientRequestId = requireNotNull(
                     payload.clientRequestId?.trim()?.takeIf(String::isNotEmpty)
-                ) { "A V1 client request ID is required." }
+                ) { interfaceText("打卡请求标识缺失，请重新提交。", "The check-in request ID is missing. Submit again.") }
                 val mediaIds = payload.proofFiles.map { it.cosKey.trim() }
                     .filter(String::isNotEmpty)
                     .distinct()
-                require(mediaIds.isNotEmpty()) { "At least one confirmed V1 media ID is required." }
+                require(mediaIds.isNotEmpty()) {
+                    interfaceText("至少需要 1 个已确认上传的凭证。", "At least one confirmed evidence upload is required.")
+                }
                 val creditType = when (payload.creditType.trim().uppercase()) {
                     "COURSE_RELATED", "课程相关" -> CreditType.CourseRelated
                     "GENERAL", "其他运动" -> CreditType.General
-                    else -> error("Unsupported V1 credit type.")
+                    else -> error(interfaceText("不支持该打卡类别。", "This check-in category is not supported."))
                 }
                 val sportType = payload.sportType?.trim()?.uppercase()?.takeIf(String::isNotEmpty)
-                    ?: error("A V1 sport type is required.")
+                    ?: error(interfaceText("请选择运动项目。", "Choose an exercise type."))
                 val draft = gateway.createRecordDraft(
                     CreateExerciseRecordDraftCommand(
                         sessionId = sessionId,
@@ -579,6 +583,8 @@ class ApiStudentRepository(
             val created = gateway.createExemption(
                 enrollmentId = activeEnrollmentId(),
                 applicationType = payload.toContractApplicationType(),
+                applicationSubtype = payload.toContractApplicationSubtype(),
+                organizationName = payload.organization,
                 reason = payload.reason,
                 mediaIds = payload.proofFiles.filter(String::isNotBlank).toSet(),
                 intentId = java.util.UUID.randomUUID().toString()
@@ -875,6 +881,8 @@ class ApiStudentRepository(
         val contractProfile = requireNotNull(currentUser.studentProfile) {
             "The authenticated student projection is missing."
         }
+        val activeSection = enrollments.firstOrNull { it.status.value == "ACTIVE" }
+            ?.let { classSections[it.classSectionId] }
         val student = StudentProfile(
             // Android's student identity key follows StudentProfile.id; User.id
             // remains the authentication principal and is never substituted.
@@ -883,7 +891,10 @@ class ApiStudentRepository(
             studentNumber = contractProfile.studentNumber,
             email = currentUser.user.primaryEmailMasked.orEmpty(),
             college = contractProfile.collegeName.orEmpty(),
-            className = contractProfile.administrativeClassName.orEmpty(),
+            className = contractProfile.administrativeClassName
+                ?.takeIf(String::isNotBlank)
+                ?: activeSection?.displayName
+                ?: activeSection?.classCode.orEmpty(),
             status = contractProfile.status,
             gender = contractProfile.gender.value.lowercase(),
             gradeLevel = contractProfile.gradeYear.toString(),
@@ -900,12 +911,15 @@ class ApiStudentRepository(
                 code = contractCourse.courseCode,
                 section = section.classCode,
                 name = contractCourse.courseName,
-                semester = section.semesterId,
+                semester = currentSemester
+                    ?.takeIf { it.id == section.semesterId }
+                    ?.displayName
+                    ?: section.semesterId,
                 students = 0,
                 completion = 0,
                 missing = 0,
                 deadline = section.submissionDeadlineAt?.toLocalDate()?.toString().orEmpty(),
-                teacher = section.teacherId,
+                teacher = teachers[section.teacherId]?.fullName ?: section.teacherId,
                 teacherId = section.teacherId,
                 semesterId = section.semesterId,
                 status = section.status.value.lowercase(),
@@ -913,8 +927,19 @@ class ApiStudentRepository(
                 isCurrent = enrollment.status.value == "ACTIVE"
             )
         }
-        val courseSeconds = scores.sumOf { it.validCourseDurationSeconds }
-        val generalSeconds = scores.sumOf { it.validGeneralDurationSeconds }
+        val validRecords = records.filter { it.currentReview?.result?.value == "VALID" }
+        val courseSeconds = if (scores.isNotEmpty()) {
+            scores.sumOf { it.validCourseDurationSeconds }
+        } else {
+            validRecords.filter { it.creditType.value == "COURSE_RELATED" }
+                .sumOf { it.creditedDurationSeconds }
+        }
+        val generalSeconds = if (scores.isNotEmpty()) {
+            scores.sumOf { it.validGeneralDurationSeconds }
+        } else {
+            validRecords.filter { it.creditType.value == "GENERAL" }
+                .sumOf { it.creditedDurationSeconds }
+        }
         val qualified = scores.any { it.qualificationStatus.value == "QUALIFIED" }
         val progress = StudentProgress(
             id = student.id,
@@ -929,7 +954,7 @@ class ApiStudentRepository(
             attendance = 0,
             physical = 0,
             status = if (qualified) "completed" else "in_progress",
-            source = "v1:student-scores",
+            source = if (scores.isNotEmpty()) "v1:student-scores" else "v1:valid-exercise-records",
             organizationCredit = null
         )
         val primaryScore = scores.firstOrNull { score ->
@@ -942,14 +967,14 @@ class ApiStudentRepository(
             listOf(
                 GradeBlock(
                     id = score.id,
-                    name = "Sports score",
+                    name = "体育成绩",
                     weight = 1.0,
                     score = publishedScore?.toInt(),
-                    scoreDisplay = publishedScore?.toPlainString() ?: "Not published",
+                    scoreDisplay = publishedScore?.toPlainString() ?: "未发布",
                     isVisible = true,
                     displayOrder = 10,
                     blockType = "student_score",
-                    description = "Server-authoritative score and qualification projection",
+                    description = "服务端权威成绩与合格状态",
                     subItems = null
                 )
             )
@@ -959,7 +984,7 @@ class ApiStudentRepository(
             studentName = student.name,
             visibleBlocks = gradeBlocks,
             totalScore = publishedScore?.toInt(),
-            totalDisplay = publishedScore?.toPlainString() ?: "Not published",
+            totalDisplay = publishedScore?.toPlainString() ?: "未发布",
             isPassed = primaryScore?.qualificationStatus?.value?.let { it == "QUALIFIED" },
             courseGradeStatus = primaryScore?.status?.value?.lowercase() ?: "not_calculated",
             displayConfigVersion = primaryScore?.calculationRevision?.toInt() ?: 0,
@@ -973,6 +998,8 @@ class ApiStudentRepository(
             // student role cannot read ScoreRule targets. Never invent targets.
             hourRule = SportHourRule.Unavailable,
             records = records.map { record ->
+                val evidenceContext = recordEvidenceContexts[record.id]
+                val evidenceCount = evidenceContext?.mediaIds?.size ?: 0
                 CheckInRecord(
                     id = record.id,
                     courseId = record.courseId,
@@ -984,15 +1011,22 @@ class ApiStudentRepository(
                     },
                     hours = record.creditedDurationSeconds / 3600.0,
                     submittedAt = record.submittedAt?.toString().orEmpty(),
-                    proofSummary = "Server-managed private evidence",
+                    proofSummary = if (evidenceCount == 0) {
+                        "暂无服务端凭证"
+                    } else {
+                        "服务端已管理 $evidenceCount 项凭证"
+                    },
                     proofPhotoCount = 0,
                     proofVideoCount = 0,
                     proofFiles = emptyList(),
                     teacherPublicFeedback = record.currentReview?.publicComment,
                     teacherInternalNote = null,
-                    note = record.description,
+                    note = record.description ?: "",
                     sportType = record.sportType,
-                    actualDurationSeconds = record.actualDurationSeconds
+                    startTime = evidenceContext?.startedAt?.toString(),
+                    endTime = evidenceContext?.endedAt?.toString(),
+                    actualDurationSeconds = record.actualDurationSeconds,
+                    reviewStatus = record.currentReview?.result?.value
                 )
             },
             grades = gradeRow,
@@ -1009,8 +1043,11 @@ class ApiStudentRepository(
                     targetId = notification.targetId
                 )
             },
-            teachers = classSections.values.map { it.teacherId }.distinct().map {
-                TeacherInfo(teacherId = it, teacherName = it)
+            teachers = classSections.values.map { it.teacherId }.distinct().map { teacherId ->
+                TeacherInfo(
+                    teacherId = teacherId,
+                    teacherName = teachers[teacherId]?.fullName ?: "任课教师"
+                )
             },
             checkInTimeWindow = toCheckInTimeWindow()
         )
@@ -1020,14 +1057,18 @@ class ApiStudentRepository(
         val activeSection = enrollments.firstOrNull { it.status.value == "ACTIVE" }
             ?.let { classSections[it.classSectionId] }
             ?: return CheckInTimeWindow.unavailable()
+        return activeSection.toCheckInTimeWindow()
+    }
+
+    private fun edu.bnbu.student.mvp.core.network.v1.generated.ClassSection.toCheckInTimeWindow(): CheckInTimeWindow {
         return CheckInTimeWindow(
-            windowMode = activeSection.checkInWindowMode.value.lowercase(),
-            dateRangeStart = activeSection.checkInStartDate?.toString(),
-            dateRangeEnd = activeSection.checkInEndDate?.toString(),
-            dailyStartTime = activeSection.dailyStartTime?.toString().orEmpty(),
-            dailyEndTime = activeSection.dailyEndTime?.toString().orEmpty(),
-            excludedDates = activeSection.excludedDates.map { it.toString() },
-            semesterDeadline = activeSection.submissionDeadlineAt?.toLocalDate()?.toString()
+            windowMode = checkInWindowMode.value.lowercase(),
+            dateRangeStart = checkInStartDate?.toString(),
+            dateRangeEnd = checkInEndDate?.toString(),
+            dailyStartTime = dailyStartTime?.toString().orEmpty(),
+            dailyEndTime = dailyEndTime?.toString().orEmpty(),
+            excludedDates = excludedDates.map { it.toString() },
+            semesterDeadline = submissionDeadlineAt?.toLocalDate()?.toString()
         )
     }
 
@@ -1058,16 +1099,13 @@ class ApiStudentRepository(
         )
     }
 
-    private fun ContractExemptionApplication.toLegacyResponse(): ExemptionResponse =
+    private fun ContractStructuredExemptionApplication.toLegacyResponse(): ExemptionResponse =
         ExemptionResponse(
             id = id,
             studentId = studentId,
-            type = when (applicationType.value) {
-                "EXERCISE_CHECK_IN" -> "exercise_check_in"
-                "PHYSICAL_TEST" -> "physical_test"
-                else -> "special_circumstance"
-            },
+            type = applicationSubtype?.value?.lowercase() ?: applicationType.value.lowercase(),
             category = applicationType.value.lowercase(),
+            organization = organizationName,
             reason = reason,
             status = status.value.lowercase(),
             proofFiles = mediaIds.map { mediaId ->
@@ -1087,9 +1125,20 @@ class ApiStudentRepository(
 
     private fun ExemptionApplication.toContractApplicationType():
         CreateExemptionApplicationRequest.ApplicationType = when (type.lowercase()) {
-        "exercise_check_in" -> CreateExemptionApplicationRequest.ApplicationType.EXERCISE_CHECK_IN
-        "physical_test" -> CreateExemptionApplicationRequest.ApplicationType.PHYSICAL_TEST
+        "school_team", "student_club" ->
+            CreateExemptionApplicationRequest.ApplicationType.EXERCISE_CHECK_IN
+        "run_800m", "run_1000m" ->
+            CreateExemptionApplicationRequest.ApplicationType.PHYSICAL_TEST
         else -> CreateExemptionApplicationRequest.ApplicationType.SPECIAL_CIRCUMSTANCE
+    }
+
+    private fun ExemptionApplication.toContractApplicationSubtype():
+        CreateExemptionApplicationRequest.ApplicationSubtype = when (type.lowercase()) {
+        "run_800m" -> CreateExemptionApplicationRequest.ApplicationSubtype.RUN_800M
+        "run_1000m" -> CreateExemptionApplicationRequest.ApplicationSubtype.RUN_1000M
+        "school_team" -> CreateExemptionApplicationRequest.ApplicationSubtype.SCHOOL_TEAM
+        "student_club" -> CreateExemptionApplicationRequest.ApplicationSubtype.STUDENT_CLUB
+        else -> CreateExemptionApplicationRequest.ApplicationSubtype.SPECIAL_CIRCUMSTANCE
     }
 
     private fun ProofAttachment.mimeTypeForV1(): String = when {

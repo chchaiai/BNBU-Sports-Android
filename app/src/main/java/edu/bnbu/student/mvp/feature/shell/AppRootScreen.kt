@@ -76,6 +76,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import edu.bnbu.student.mvp.BuildConfig
 import edu.bnbu.student.mvp.R
 import edu.bnbu.student.mvp.core.designsystem.BNBULayout
@@ -96,7 +97,6 @@ import edu.bnbu.student.mvp.feature.courses.CourseJoinInfo
 import edu.bnbu.student.mvp.feature.courses.CoursesScreen
 import edu.bnbu.student.mvp.feature.courses.EnterInviteCodeScreen
 import edu.bnbu.student.mvp.feature.courses.ScanJoinScreen
-import edu.bnbu.student.mvp.feature.courses.buildDemoCourseJoinResponse
 import edu.bnbu.student.mvp.feature.courses.toCourseJoinInfo
 import edu.bnbu.student.mvp.feature.dashboard.DashboardScreen
 import edu.bnbu.student.mvp.feature.grades.GradesScreen
@@ -420,30 +420,17 @@ private fun AppRootContent(
                             when (completion) {
                                 is CourseJoinCompletion.Authoritative ->
                                     appState.acceptV1Authentication(completion.currentUser)
-                                is CourseJoinCompletion.Demo -> appState.acceptDirectCourseJoin(
-                                    response = completion.response,
-                                    expectedCourseId = inviteCourse.id,
-                                    allowLocalSession = true
-                                )
                             }
                             pendingInviteCode = null
                             pendingInviteCourse = null
                             showScanJoin = false
                         },
-                        submitCourseJoin = if (inviteCourse.isDemoScanResult) {
-                            { body ->
-                                CourseJoinCompletion.Demo(
-                                    buildDemoCourseJoinResponse(inviteCourse, body)
-                                )
-                            }
-                        } else {
-                            { body ->
-                                courseJoinCoordinator.submitCourseJoin(
-                                    inviteCode = inviteCode,
-                                    expectedClassSectionId = inviteCourse.id,
-                                    body = body
-                                )
-                            }
+                        submitCourseJoin = { body ->
+                            courseJoinCoordinator.submitCourseJoin(
+                                inviteCode = inviteCode,
+                                expectedClassSectionId = inviteCourse.id,
+                                body = body
+                            )
                         }
                     )
                 } else if (showScanJoin) {
@@ -486,7 +473,6 @@ private fun AppRootContent(
                             showScanJoin = true
                         },
                         onRecoveryRequest = { showRecoveryRequest = true },
-                        onMockUserLogin = appState::loginMockUser,
                         onOpenPrivacy = { showLoginPrivacy = true },
                         privacyAccepted = loginPrivacyAccepted,
                         onPrivacyAcceptedChange = { loginPrivacyAccepted = it }
@@ -1027,28 +1013,15 @@ private fun SubScreenOverlay(
                             when (completion) {
                                 is CourseJoinCompletion.Authoritative ->
                                     appState.acceptV1Authentication(completion.currentUser)
-                                is CourseJoinCompletion.Demo -> appState.acceptDirectCourseJoin(
-                                    response = completion.response,
-                                    expectedCourseId = inviteCourse.id,
-                                    allowLocalSession = true
-                                )
                             }
                             onClose()
                         },
-                        submitCourseJoin = if (inviteCourse.isDemoScanResult) {
-                            { body ->
-                                CourseJoinCompletion.Demo(
-                                    buildDemoCourseJoinResponse(inviteCourse, body)
-                                )
-                            }
-                        } else {
-                            { body ->
-                                courseJoinCoordinator.submitCourseJoin(
-                                    inviteCode = inviteCode,
-                                    expectedClassSectionId = inviteCourse.id,
-                                    body = body
-                                )
-                            }
+                        submitCourseJoin = { body ->
+                            courseJoinCoordinator.submitCourseJoin(
+                                inviteCode = inviteCode,
+                                expectedClassSectionId = inviteCourse.id,
+                                body = body
+                            )
                         }
                     )
                 } else {
@@ -1248,7 +1221,7 @@ private fun FloatingBottomNavigationItem(
     ) {
         Box(
             modifier = Modifier
-                .offset(y = iconOffset)
+                .offset { IntOffset(x = 0, y = iconOffset.roundToPx()) }
                 .widthIn(max = 60.dp)
                 .fillMaxWidth()
                 .height(40.dp)

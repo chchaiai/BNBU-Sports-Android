@@ -581,6 +581,25 @@ internal fun CheckInRecordDetail(
         item {
             RecordResultCard(record = record)
         }
+        if (!record.teacherPublicFeedback.isNullOrBlank()) {
+            item {
+                DetailSectionHeader(title = interfaceText("教师公开意见", "Teacher comment"))
+            }
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = cs.surface,
+                    shape = MaterialTheme.shapes.large
+                ) {
+                    Text(
+                        text = record.teacherPublicFeedback,
+                        modifier = Modifier.padding(18.dp),
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        }
         item {
             DetailSectionHeader(title = interfaceText("记录信息", "Record information"))
         }
@@ -775,10 +794,20 @@ private fun RecordResultCard(record: CheckInRecord) {
                 fontWeight = FontWeight.SemiBold
             )
             Spacer(Modifier.height(4.dp))
+            val subtitle = record.taskTitle.localizedCheckInTaskTitle()
+            if (!subtitle.equals(record.sportDisplayName(), ignoreCase = true) &&
+                !record.taskTitle.equals(record.sportType, ignoreCase = true)
+            ) {
+                Text(
+                    text = subtitle,
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
             Text(
-                text = record.taskTitle.localizedCheckInTaskTitle(),
+                text = record.reviewStatus.recordReviewStatusText(),
                 color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.labelMedium
             )
             Spacer(Modifier.height(20.dp))
             HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.55f))
@@ -796,6 +825,13 @@ private fun RecordResultCard(record: CheckInRecord) {
             )
         }
     }
+}
+
+private fun String?.recordReviewStatusText(): String = when (this?.uppercase()) {
+    "VALID" -> interfaceText("复核有效", "Reviewed as valid")
+    "INVALID" -> interfaceText("复核无效", "Reviewed as invalid")
+    "PENDING" -> interfaceText("等待教师复核", "Waiting for teacher review")
+    else -> interfaceText("尚无复核结果", "No review result")
 }
 
 private fun String?.recordDetailTimeText(): String {

@@ -23,6 +23,7 @@ import edu.bnbu.student.mvp.core.exercise.ExerciseSessionCoordinator
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionOperationResult
 import edu.bnbu.student.mvp.core.exercise.ExerciseVersionConflictException
 import edu.bnbu.student.mvp.core.exercise.StartExerciseCommand
+import edu.bnbu.student.mvp.core.exercise.requiresExerciseDescription
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.local.LocalStoreReadStatus
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
@@ -295,7 +296,10 @@ internal class ExerciseSessionController(
     fun requestFinish() {
         val coordinator = serverCoordinator
         if (coordinator != null) {
-            runServerSessionOperation(coordinator::finish)
+            val duration = state.effectiveDurationMillis(clock.nowEpochMillis())
+            runServerSessionOperation(
+                if (duration < MinimumValidExerciseMillis) coordinator::cancel else coordinator::finish
+            )
             return
         }
         applyTransition(machine.requestFinish(state))
@@ -766,7 +770,10 @@ internal class ExerciseSessionController(
                 )
             )
         }
-        if (finished.details.description.isBlank()) {
+        if (
+            finished.details.creditType.requiresExerciseDescription &&
+            finished.details.description.isBlank()
+        ) {
             return Result.failure(IllegalArgumentException(interfaceText("请填写运动说明", "Enter exercise details.")))
         }
         if (finished.details.description.length > MaxExerciseDescriptionLength) {
@@ -894,7 +901,7 @@ internal class ExerciseSessionController(
                 record.begin(completedSession).requireRecordSuccess("begin")
                 record.edit(
                     ExerciseRecordForm(
-                        description = finished.details.description,
+                        description = finished.details.descriptionForSubmission(),
                         sportType = finished.details.sportType,
                         otherSportName = finished.details.customSportName
                     )

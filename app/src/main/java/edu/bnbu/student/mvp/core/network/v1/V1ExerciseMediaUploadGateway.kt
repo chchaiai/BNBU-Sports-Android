@@ -74,6 +74,7 @@ internal class V1ExerciseMediaUploadGateway(
     override suspend fun confirmUpload(
         command: ConfirmExerciseMediaUploadCommand
     ): ExerciseMediaEvidence {
+        val contractEntityTag = command.entityTag.normalizedForMediaConfirmation()
         val operationId = "confirmMediaUpload"
         val scope = mutationScope(operationId, "upload-session:${command.uploadSessionId}")
         val intent = mutationRegistry.acquire(
@@ -81,7 +82,7 @@ internal class V1ExerciseMediaUploadGateway(
             IntentFingerprint.fromCanonicalInput(
                 operationId,
                 "uploadSessionId=${command.uploadSessionId}\nmediaId=${command.mediaId}" +
-                    "\netag=${command.entityTag}"
+                    "\netag=$contractEntityTag"
             )
         )
         val response = authorizedClient.executeCancellable<ContractMediaEvidence>(
@@ -90,7 +91,7 @@ internal class V1ExerciseMediaUploadGateway(
                 method = V1HttpMethod.POST,
                 relativePath = "media-uploads/{uploadSessionId}/confirm",
                 pathSegments = listOf("media-uploads", command.uploadSessionId, "confirm"),
-                body = ConfirmMediaUploadRequest(command.entityTag)
+                body = ConfirmMediaUploadRequest(contractEntityTag)
             ).withMutationIntent(intent),
             ContractMediaEvidence::class.java
         )
@@ -288,4 +289,15 @@ internal class V1ExerciseMediaUploadGateway(
     private companion object {
         const val ExpiredUploadSessionMessage = "Media upload session is already expired."
     }
+}
+
+/**
+ * S3-compatible object stores return ETag response headers surrounded by quotes. The
+ * confirmation endpoint compares the normalized opaque value and its request validator
+ * accepts only the unquoted representation, so quotes must not cross the API boundary.
+ */
+internal fun String.normalizedForMediaConfirmation(): String {
+    val normalized = trim().removeSurrounding("\"")
+    require(normalized.isNotEmpty()) { "Media ETag cannot be blank." }
+    return normalized
 }
