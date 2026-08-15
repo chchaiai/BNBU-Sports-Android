@@ -41,11 +41,31 @@ class GradeDisplayPolicyTest {
         assertNull(unopened.total)
     }
 
+    @Test
+    fun exposesOnlyServerPublishedTotalToStudentUi() {
+        val calculated = gradeRow(
+            totalScore = 5,
+            totalDisplay = "5.00",
+            isPassed = false,
+            courseGradeStatus = "calculated"
+        )
+        val published = gradeRow(
+            totalScore = 5,
+            totalDisplay = "5.00",
+            isPassed = false,
+            courseGradeStatus = "published"
+        )
+
+        assertNull(calculated.publishedTotalGrade())
+        assertEquals("5.00", published.publishedTotalGrade()?.display)
+    }
+
     private fun gradeRow(
         vararg blocks: GradeBlock,
         totalScore: Int? = null,
         totalDisplay: String = "Not published",
-        isPassed: Boolean? = null
+        isPassed: Boolean? = null,
+        courseGradeStatus: String = "in_progress"
     ) = GradeRow(
         studentId = "student-1",
         studentName = "Student",
@@ -53,7 +73,7 @@ class GradeDisplayPolicyTest {
         totalScore = totalScore,
         totalDisplay = totalDisplay,
         isPassed = isPassed,
-        courseGradeStatus = "in_progress",
+        courseGradeStatus = courseGradeStatus,
         displayConfigVersion = 1,
         sourceTrace = "test"
     )

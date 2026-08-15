@@ -4,6 +4,7 @@ import edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionRecord
 import edu.bnbu.student.mvp.core.model.CreditType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -67,5 +68,25 @@ class ExerciseSessionContractMapperTest {
         assertEquals(ExerciseSessionPhase.ACTIVE, mirror?.phase)
         assertEquals(610L, mirror?.activeDurationSeconds)
         assertEquals(0L, mirror?.version)
+    }
+
+    @Test
+    fun serverActiveStateRemainsPersistableWhenDeviceClockLagsServer() {
+        val server = ExerciseSessionRecord(
+            sessionId = "session-clock-skew",
+            phase = ExerciseSessionPhase.ACTIVE,
+            version = 1L,
+            creditType = CreditType.General,
+            sportType = "running",
+            startedAtEpochMillis = 10_000L,
+            activeDurationSeconds = 0L
+        )
+
+        val local = server.toLocalState(nowEpochMillis = 9_000L)
+
+        assertTrue(local is ExerciseSessionState.Active)
+        local as ExerciseSessionState.Active
+        assertEquals(10_000L, local.activeSegmentStartedAtEpochMillis)
+        assertNotNull(local.toSnapshot().toExerciseSessionStateOrNull())
     }
 }

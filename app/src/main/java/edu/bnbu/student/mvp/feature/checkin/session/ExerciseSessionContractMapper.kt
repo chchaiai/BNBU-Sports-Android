@@ -49,7 +49,11 @@ internal fun ExerciseSessionRecord.toLocalState(
             sessionId = sessionId,
             details = details,
             startedAtEpochMillis = startedAtEpochMillis,
-            activeSegmentStartedAtEpochMillis = nowEpochMillis,
+            // The backend start time is authoritative. A device clock can lag
+            // behind it briefly, especially immediately after an emulator
+            // boots or resynchronizes. Never create a local segment that
+            // appears to start before the server-owned session.
+            activeSegmentStartedAtEpochMillis = maxOf(nowEpochMillis, startedAtEpochMillis),
             accumulatedActiveMillis = durationMillis
         )
 
@@ -57,7 +61,7 @@ internal fun ExerciseSessionRecord.toLocalState(
             sessionId = sessionId,
             details = details,
             startedAtEpochMillis = startedAtEpochMillis,
-            pausedAtEpochMillis = nowEpochMillis,
+            pausedAtEpochMillis = maxOf(nowEpochMillis, startedAtEpochMillis),
             accumulatedActiveMillis = durationMillis
         )
 

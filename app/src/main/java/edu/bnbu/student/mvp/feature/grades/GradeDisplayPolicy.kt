@@ -42,4 +42,10 @@ internal fun GradeRow.gradeDisplayContent(): GradeDisplayContent = GradeDisplayC
         .toList()
 )
 
+/** Only a server-published revision may expose a numeric student score. */
+internal fun GradeRow.publishedTotalGrade(): TotalGrade? {
+    if (courseGradeStatus.lowercase() !in setOf("published", "locked")) return null
+    return gradeDisplayContent().total
+}
+
 private const val PASSING_SCORE = 60

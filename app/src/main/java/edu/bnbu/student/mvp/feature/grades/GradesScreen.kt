@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -39,6 +40,7 @@ import edu.bnbu.student.mvp.core.state.StudentAppState
 @Composable
 fun GradesScreen(appState: StudentAppState) {
     val workspace = appState.workspace
+    val publishedGrade = workspace.grades.publishedTotalGrade()
 
     LazyColumn(
         modifier = Modifier
@@ -56,11 +58,62 @@ fun GradesScreen(appState: StudentAppState) {
                 score = workspace.grades.enduranceRunScore
             )
         }
+        if (publishedGrade != null) {
+            item { PublishedGradeCard(publishedGrade) }
+        }
         item {
             CheckInHoursCard(
                 progress = workspace.progress,
                 rule = workspace.hourRule
             )
+        }
+    }
+}
+
+@Composable
+private fun PublishedGradeCard(grade: TotalGrade) {
+    val cs = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = cs.surface
+    ) {
+        Column(
+            modifier = Modifier.padding(BNBULayout.CardPadding),
+            verticalArrangement = Arrangement.spacedBy(BNBULayout.Space16)
+        ) {
+            CardTitle(
+                icon = {
+                    Icon(
+                        imageVector = Icons.Filled.Star,
+                        contentDescription = null,
+                        tint = cs.primary,
+                        modifier = Modifier.size(21.dp)
+                    )
+                },
+                title = interfaceText("已发布成绩", "Published grade"),
+                supportingText = interfaceText(
+                    "仅显示服务端正式发布的最终成绩",
+                    "Only the server-published final grade is shown"
+                )
+            )
+            Text(
+                text = interfaceText("${grade.display} 分", "${grade.display} points"),
+                color = cs.onSurface,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            grade.isPassed?.let { passed ->
+                Text(
+                    text = if (passed) {
+                        interfaceText("已达标", "Qualified")
+                    } else {
+                        interfaceText("未达标", "Not qualified")
+                    },
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
         }
     }
 }
