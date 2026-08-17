@@ -1803,6 +1803,11 @@ private fun ExerciseFinishedContent(
                                         proofCount = proofCount
                                     )
                                 )
+                                // The record list and score projection are
+                                // server-owned. Refresh immediately so the
+                                // successful submission is visible without an
+                                // app restart or a misleading retry attempt.
+                                appState.refreshWorkspace()
                             },
                             onFailure = { error ->
                                 localMessage = error.message ?: interfaceText("打卡提交失败，请重试", "Check-in submission failed. Try again.")

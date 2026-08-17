@@ -3,12 +3,12 @@ package edu.bnbu.student.mvp.feature.checkin.session
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.media.ExifInterface
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
+import androidx.exifinterface.media.ExifInterface
 import edu.bnbu.student.mvp.core.exercise.ExerciseMediaPolicy
 import java.io.File
 import java.io.FileOutputStream
