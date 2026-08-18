@@ -124,7 +124,7 @@ class ApiStudentRepositoryTest {
     @Test
     fun repositoryV1MutationsRunBlockingHttpOnIoDispatcher() = runBlocking {
         server.enqueue(success("record-create", recordJson("DRAFT", 1), status = 201))
-        server.enqueue(success("record-submit", recordJson("SUBMITTED", 2)))
+        server.enqueue(success("record-submit", recordJson("REVIEWED", 2)))
         server.enqueue(success("notice-read", notificationJson(readAt = "2026-08-11T00:01:00Z")))
 
         val networkThreads = CopyOnWriteArrayList<String>()
@@ -399,7 +399,12 @@ class ApiStudentRepositoryTest {
     }""".trimIndent()
 
     private fun recordJson(status: String, version: Long): String {
-        val submittedAt = if (status == "SUBMITTED") "\"2026-08-11T00:10:00Z\"" else "null"
+        val submittedAt = if (status == "DRAFT") "null" else "\"2026-08-11T00:10:00Z\""
+        val currentReview = if (status == "REVIEWED") {
+            """{"result":"VALID","reasonCode":null,"publicComment":null}"""
+        } else {
+            "null"
+        }
         return """{
             "id":"record-1","organizationId":"org-1","semesterId":"semester-1",
             "studentId":"student-remote","enrollmentId":"enrollment-1","classSectionId":"section-1",
@@ -408,7 +413,7 @@ class ApiStudentRepositoryTest {
             "sportName":null,"description":"run","actualDurationSeconds":3600,
             "pausedDurationSeconds":0,"creditedDurationSeconds":3600,"status":"$status",
             "submittedAt":$submittedAt,"cancelledAt":null,"clientRequestId":"android-record-1",
-            "currentReview":null,"version":$version
+            "currentReview":$currentReview,"version":$version
         }""".trimIndent()
     }
 
