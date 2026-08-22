@@ -10,6 +10,7 @@ import edu.bnbu.student.mvp.core.network.v1.V1HttpException
 import edu.bnbu.student.mvp.core.network.v1.V1HttpMethod
 import edu.bnbu.student.mvp.core.network.v1.V1NetworkException
 import edu.bnbu.student.mvp.core.network.v1.withMutationIntent
+import edu.bnbu.student.mvp.testing.TestHttps
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -37,7 +38,7 @@ class StudentApiClientTest {
 
     @Before
     fun setUp() {
-        server = MockWebServer()
+        server = TestHttps.newServer()
         server.start()
     }
 
@@ -168,7 +169,9 @@ class StudentApiClientTest {
                 "{\"id\":\"record-2\",\"status\":\"待审核\",\"submittedAt\":\"2026-07-14T00:00:00Z\"}"
             )
         )
-        val transport = transport(httpClient = SharedHttpClient.instance)
+        val transport = transport(
+            httpClient = TestHttps.clientBuilder(SharedHttpClient.instance).build()
+        )
         val request = V1ApiRequest(
             "createExerciseRecordDraft",
             V1HttpMethod.POST,
@@ -191,7 +194,7 @@ class StudentApiClientTest {
             MockResponse()
                 .setSocketPolicy(SocketPolicy.NO_RESPONSE)
         )
-        val httpClient = okhttp3.OkHttpClient.Builder()
+        val httpClient = TestHttps.clientBuilder()
             .retryOnConnectionFailure(false)
             .build()
         val transport = transport(httpClient = httpClient)
@@ -226,7 +229,7 @@ class StudentApiClientTest {
             .put(body)
             .build()
 
-        OkHttpClient.Builder().retryOnConnectionFailure(false).build()
+        TestHttps.clientBuilder().retryOnConnectionFailure(false).build()
             .newCall(request).execute().use { response -> assertTrue(response.isSuccessful) }
 
         val recorded = server.takeRequest(2, TimeUnit.SECONDS)!!
@@ -245,7 +248,7 @@ class StudentApiClientTest {
 
     private fun transport(
         accessToken: String? = null,
-        httpClient: OkHttpClient = OkHttpClient.Builder()
+        httpClient: OkHttpClient = TestHttps.clientBuilder()
             .retryOnConnectionFailure(false)
             .build()
     ): V1ApiTransport {

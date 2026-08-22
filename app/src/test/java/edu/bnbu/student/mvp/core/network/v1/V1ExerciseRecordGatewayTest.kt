@@ -12,6 +12,7 @@ import edu.bnbu.student.mvp.core.local.AuthSessionCredentialStore
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentials
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.ProofMediaType
+import edu.bnbu.student.mvp.testing.TestHttps
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
@@ -32,13 +33,13 @@ class V1ExerciseRecordGatewayTest {
 
     @Before
     fun setUp() {
-        server = MockWebServer()
+        server = TestHttps.newServer()
         server.start()
         val store = RecordCredentialStore(authSession())
         val client = V1AuthorizedApiClient.create(
             credentialStore = store,
             baseUrl = server.url("/api/v1").toString().trimEnd('/'),
-            httpClient = OkHttpClient.Builder()
+            httpClient = TestHttps.clientBuilder()
                 .retryOnConnectionFailure(false)
                 .connectTimeout(2, TimeUnit.SECONDS)
                 .readTimeout(2, TimeUnit.SECONDS)
@@ -126,7 +127,7 @@ class V1ExerciseRecordGatewayTest {
 
     @Test
     fun submitBindsOnlyUniqueAvailableMediaIdsAtTheCurrentVersion() = runBlocking {
-        server.enqueue(success(200, "req-submit", recordJson("SUBMITTED", 3L)))
+        server.enqueue(success(200, "req-submit", recordJson("REVIEWED", 3L)))
 
         val result = gateway.submitRecord(
             SubmitExerciseRecordCommand(
@@ -225,7 +226,12 @@ class V1ExerciseRecordGatewayTest {
             )
 
     private fun recordJson(status: String, version: Long): String {
-        val submittedAt = if (status == "SUBMITTED") "\"2026-08-07T12:00:00Z\"" else "null"
+        val submittedAt = if (status == "DRAFT") "null" else "\"2026-08-07T12:00:00Z\""
+        val currentReview = if (status == "REVIEWED") {
+            """{"result":"VALID","reasonCode":null,"publicComment":null}"""
+        } else {
+            "null"
+        }
         return """{
             "id":"record-1",
             "organizationId":"org-1",
@@ -248,7 +254,7 @@ class V1ExerciseRecordGatewayTest {
             "submittedAt":$submittedAt,
             "cancelledAt":null,
             "clientRequestId":"android-record-1",
-            "currentReview":null,
+            "currentReview":$currentReview,
             "version":$version
         }""".trimIndent()
     }

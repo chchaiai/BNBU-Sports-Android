@@ -11,6 +11,7 @@ import edu.bnbu.student.mvp.core.exercise.InitiateExerciseMediaUploadCommand
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentialStore
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentials
 import edu.bnbu.student.mvp.core.model.ProofMediaType
+import edu.bnbu.student.mvp.testing.TestHttps
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
@@ -33,13 +34,13 @@ class V1ExerciseMediaUploadGatewayTest {
 
     @Before
     fun setUp() {
-        server = MockWebServer()
+        server = TestHttps.newServer()
         server.start()
         val store = MediaCredentialStore(authSession())
         client = V1AuthorizedApiClient.create(
             credentialStore = store,
             baseUrl = server.url("/api/v1").toString().trimEnd('/'),
-            httpClient = OkHttpClient.Builder()
+            httpClient = TestHttps.clientBuilder()
                 .retryOnConnectionFailure(false)
                 .connectTimeout(2, TimeUnit.SECONDS)
                 .readTimeout(2, TimeUnit.SECONDS)

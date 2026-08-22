@@ -1,6 +1,7 @@
 package edu.bnbu.student.mvp.core.network.v1
 
 import edu.bnbu.student.mvp.core.network.SharedHttpClient
+import edu.bnbu.student.mvp.testing.TestHttps
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
@@ -20,7 +21,7 @@ class V1ApiTransportTest {
 
     @Before
     fun setUp() {
-        server = MockWebServer()
+        server = TestHttps.newServer()
         server.start()
     }
 
@@ -116,7 +117,9 @@ class V1ApiTransportTest {
                 .setHeader("X-Request-ID", "req-unexpected-second")
                 .setBody("""{"data":{},"meta":{"requestId":"req-unexpected-second"}}""")
         )
-        val transport = transport(httpClient = SharedHttpClient.instance)
+        val transport = transport(
+            httpClient = TestHttps.clientBuilder(SharedHttpClient.instance).build()
+        )
 
         assertThrows(V1NetworkException::class.java) {
             transport.execute<Map<String, String>>(
@@ -141,7 +144,9 @@ class V1ApiTransportTest {
                 .setBody("""{"data":{"value":"ok"},"meta":{"requestId":"req-retried"}}""")
         )
 
-        val result = transport(httpClient = SharedHttpClient.instance)
+        val result = transport(
+            httpClient = TestHttps.clientBuilder(SharedHttpClient.instance).build()
+        )
             .execute<Map<String, String>>(
                 V1ApiRequest("getHealth", V1HttpMethod.GET, "health/live"),
                 Map::class.java
@@ -210,7 +215,7 @@ class V1ApiTransportTest {
     private fun transport(
         requestId: String = "req-client",
         accessToken: String? = null,
-        httpClient: OkHttpClient = OkHttpClient.Builder()
+        httpClient: OkHttpClient = TestHttps.clientBuilder()
             .retryOnConnectionFailure(false)
             .connectTimeout(2, TimeUnit.SECONDS)
             .readTimeout(2, TimeUnit.SECONDS)

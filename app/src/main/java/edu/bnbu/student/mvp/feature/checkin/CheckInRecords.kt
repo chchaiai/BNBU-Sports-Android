@@ -828,9 +828,9 @@ private fun RecordResultCard(record: CheckInRecord) {
 }
 
 private fun String?.recordReviewStatusText(): String = when (this?.uppercase()) {
-    "VALID" -> interfaceText("复核有效", "Reviewed as valid")
-    "INVALID" -> interfaceText("复核无效", "Reviewed as invalid")
-    "PENDING" -> interfaceText("等待教师复核", "Waiting for teacher review")
+    "VALID" -> interfaceText("有效", "Valid")
+    "INVALID" -> interfaceText("教师标记无效", "Marked invalid by teacher")
+    "PENDING" -> interfaceText("历史记录待处理", "Legacy record pending review")
     else -> interfaceText("尚无复核结果", "No review result")
 }
 

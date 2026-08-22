@@ -9,6 +9,7 @@ import edu.bnbu.student.mvp.core.exercise.StartExerciseCommand
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentialStore
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentials
 import edu.bnbu.student.mvp.core.model.CreditType
+import edu.bnbu.student.mvp.testing.TestHttps
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
@@ -30,13 +31,13 @@ class V1ExerciseSessionGatewayTest {
 
     @Before
     fun setUp() {
-        server = MockWebServer()
+        server = TestHttps.newServer()
         server.start()
         store = ExerciseCredentialStore(authSession())
         val client = V1AuthorizedApiClient.create(
             credentialStore = store,
             baseUrl = server.url("/api/v1").toString().trimEnd('/'),
-            httpClient = OkHttpClient.Builder()
+            httpClient = TestHttps.clientBuilder()
                 .retryOnConnectionFailure(false)
                 .connectTimeout(2, TimeUnit.SECONDS)
                 .readTimeout(2, TimeUnit.SECONDS)

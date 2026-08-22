@@ -21,6 +21,7 @@ import edu.bnbu.student.mvp.core.network.v1.generated.ExerciseRecord as Contract
 import edu.bnbu.student.mvp.core.network.v1.generated.ExerciseRecordStatus
 import edu.bnbu.student.mvp.core.network.v1.generated.ExerciseSession
 import edu.bnbu.student.mvp.core.network.v1.generated.ExerciseSessionStatus
+import edu.bnbu.student.mvp.core.network.v1.generated.ReviewResult
 import edu.bnbu.student.mvp.core.network.v1.generated.SessionControlRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.VersionedReasonRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.StartSessionRequest
@@ -534,8 +535,11 @@ internal class V1ExerciseSessionGateway(
         id.requireOpaqueId("recordId")
         sessionId.requireOpaqueId("sessionId")
         require(id == expectedRecordId) { "Server returned a different exercise record." }
-        require(status == ExerciseRecordStatus.SUBMITTED) {
-            "Submit must return a SUBMITTED exercise record."
+        require(status == ExerciseRecordStatus.REVIEWED) {
+            "Submit must return a REVIEWED exercise record."
+        }
+        require(currentReview?.result == ReviewResult.VALID) {
+            "Submit must return a system-valid current review."
         }
         require(version >= 1L) { "Server exercise record version must be positive." }
         val submitted = requireNotNull(submittedAt) {

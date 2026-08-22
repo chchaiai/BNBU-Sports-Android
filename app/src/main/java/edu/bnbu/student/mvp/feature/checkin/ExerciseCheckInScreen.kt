@@ -1438,7 +1438,7 @@ private fun ExerciseRunningContent(
                 Text(interfaceText("结束运动", "End exercise"))
             }
 
-            if (BuildConfig.DEBUG) {
+            if (BuildConfig.BNBU_ENVIRONMENT == "local") {
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(onClick = {
                     controller.debugAddActiveDuration(60L * 60L * 1_000L)
