@@ -219,6 +219,7 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
 
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.12.01"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4-android")
@@ -486,7 +487,12 @@ tasks.named("preBuild") {
     dependsOn(verifyGeneratedOpenApiModels)
 }
 
-fun validateRemoteApiBaseUrl(environment: String, propertyName: String, value: String?) {
+fun validateRemoteApiBaseUrl(
+    environment: String,
+    propertyName: String,
+    value: String?,
+    expectedHost: String? = null
+) {
     val resolved = value
         ?: throw GradleException(
             "$environment builds require -P$propertyName=https://your-$environment-domain/api/v1 " +
@@ -503,6 +509,14 @@ fun validateRemoteApiBaseUrl(environment: String, propertyName: String, value: S
     }
     if (!(uri.path ?: "").trimEnd('/').equals("/api/v1", ignoreCase = false)) {
         throw GradleException("$environment $propertyName must end with /api/v1: $resolved")
+    }
+    if (
+        expectedHost != null &&
+        (!uri.host.equals(expectedHost, ignoreCase = true) || uri.port != -1 || uri.path != "/api/v1")
+    ) {
+        throw GradleException(
+            "$environment $propertyName must be exactly https://$expectedHost/api/v1: $resolved"
+        )
     }
     if (
         uri.host.equals("localhost", ignoreCase = true) ||
@@ -522,7 +536,8 @@ val validateStagingApiBaseUrl by tasks.registering {
         validateRemoteApiBaseUrl(
             environment = "Staging",
             propertyName = "BNBU_STAGING_API_BASE_URL",
-            value = configuredStagingApiBaseUrl
+            value = configuredStagingApiBaseUrl,
+            expectedHost = "api.verityai.cn"
         )
     }
 }
@@ -540,7 +555,7 @@ val validateReleaseApiBaseUrl by tasks.registering {
     }
 }
 
-fun validateOrganizationCode(environment: String) {
+fun validateOrganizationCode(environment: String, expectedValue: String? = null) {
     val value = configuredOrganizationCode
     if (value == null || !value.matches(Regex("^[A-Z0-9][A-Z0-9_-]{1,31}$"))) {
         throw GradleException(
@@ -548,13 +563,16 @@ fun validateOrganizationCode(environment: String) {
                 "^[A-Z0-9][A-Z0-9_-]{1,31}$"
         )
     }
+    if (expectedValue != null && value != expectedValue) {
+        throw GradleException("$environment builds require BNBU_ORGANIZATION_CODE=$expectedValue")
+    }
 }
 
 val validateStagingOrganizationCode by tasks.registering {
     group = "verification"
     description = "Requires an explicit organization code for staging builds."
     inputs.property("BNBU_ORGANIZATION_CODE", configuredOrganizationCode ?: "")
-    doLast { validateOrganizationCode("Staging") }
+    doLast { validateOrganizationCode("Staging", expectedValue = "BNBU") }
 }
 
 val validateReleaseOrganizationCode by tasks.registering {

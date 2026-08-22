@@ -2,6 +2,7 @@ package edu.bnbu.student.mvp.core.network.v1
 
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentialStore
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentials
+import edu.bnbu.student.mvp.testing.TestHttps
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
@@ -18,7 +19,7 @@ class V1StudentWorkspaceGatewayTest {
 
     @Before
     fun setUp() {
-        server = MockWebServer()
+        server = TestHttps.newServer()
         server.start()
     }
 
@@ -36,7 +37,7 @@ class V1StudentWorkspaceGatewayTest {
         val gateway = V1StudentWorkspaceGateway.create(
             credentialStore = FakeStore(credentials()),
             baseUrl = server.url("/api/v1").toString(),
-            httpClient = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
+            httpClient = TestHttps.clientBuilder().retryOnConnectionFailure(false).build()
         )
 
         val snapshot = gateway.loadWorkspace()
@@ -71,7 +72,7 @@ class V1StudentWorkspaceGatewayTest {
         val gateway = V1StudentWorkspaceGateway.create(
             credentialStore = FakeStore(credentials()),
             baseUrl = server.url("/api/v1").toString(),
-            httpClient = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
+            httpClient = TestHttps.clientBuilder().retryOnConnectionFailure(false).build()
         )
 
         gateway.loadWorkspace()

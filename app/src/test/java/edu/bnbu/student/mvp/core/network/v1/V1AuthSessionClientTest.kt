@@ -2,6 +2,7 @@ package edu.bnbu.student.mvp.core.network.v1
 
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentialStore
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentials
+import edu.bnbu.student.mvp.testing.TestHttps
 import java.time.Instant
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -26,7 +27,7 @@ class V1AuthSessionClientTest {
 
     @Before
     fun setUp() {
-        server = MockWebServer()
+        server = TestHttps.newServer()
         server.start()
     }
 
@@ -263,7 +264,7 @@ class V1AuthSessionClientTest {
         V1AuthorizedApiClient.create(
             credentialStore = store,
             baseUrl = server.url("/api/v1").toString().trimEnd('/'),
-            httpClient = OkHttpClient.Builder()
+            httpClient = TestHttps.clientBuilder()
                 .retryOnConnectionFailure(false)
                 .connectTimeout(2, TimeUnit.SECONDS)
                 .readTimeout(2, TimeUnit.SECONDS)

@@ -4,6 +4,7 @@ import edu.bnbu.student.mvp.core.local.AuthSessionCredentialStore
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentials
 import edu.bnbu.student.mvp.core.network.v1.generated.Gender
 import edu.bnbu.student.mvp.core.network.v1.generated.StudentSignInCodeRequest
+import edu.bnbu.student.mvp.testing.TestHttps
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
@@ -24,7 +25,7 @@ class V1StudentApiTest {
 
     @Before
     fun setUp() {
-        server = MockWebServer()
+        server = TestHttps.newServer()
         server.start()
     }
 
@@ -356,7 +357,7 @@ class V1StudentApiTest {
     private fun api(store: FakeStore): V1StudentApi = V1StudentApi.create(
         credentialStore = store,
         baseUrl = server.url("/api/v1").toString().trimEnd('/'),
-        httpClient = OkHttpClient.Builder()
+        httpClient = TestHttps.clientBuilder()
             .retryOnConnectionFailure(false)
             .connectTimeout(2, TimeUnit.SECONDS)
             .readTimeout(2, TimeUnit.SECONDS)
