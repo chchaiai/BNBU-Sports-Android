@@ -8,6 +8,7 @@ internal enum class ExerciseSessionAction {
     START,
     PAUSE,
     RESUME,
+    ADD_SIXTY_MINUTES,
     FINISH,
     CANCEL
 }
@@ -24,6 +25,7 @@ internal data class ExerciseRecoverableFailure(
 
 internal data class ExerciseSessionCoordinatorState(
     val session: ExerciseSessionRecord? = null,
+    val existingRemoteSession: ExistingRemoteExerciseSession? = null,
     val inFlightAction: ExerciseSessionAction? = null,
     val recoverableFailure: ExerciseRecoverableFailure? = null
 )
@@ -38,6 +40,10 @@ internal sealed interface ExerciseSessionOperationResult {
     data class Failed(
         val retainedSession: ExerciseSessionRecord?,
         val cause: Throwable
+    ) : ExerciseSessionOperationResult
+
+    data class AlreadyActive(
+        val existingRemoteSession: ExistingRemoteExerciseSession
     ) : ExerciseSessionOperationResult
 }
 
@@ -64,8 +70,12 @@ internal class ExerciseSessionCoordinator(
     suspend fun restore(
         localMirror: ExerciseSessionRecord?
     ): ExerciseSessionOperationResult = execute(ExerciseSessionAction.RESTORE) {
-        state = state.copy(session = localMirror)
-        val serverActive = gateway.getActive(localMirror)
+        state = state.copy(session = localMirror, existingRemoteSession = null)
+        val serverActive = try {
+            gateway.getActive(localMirror)
+        } catch (conflict: ExerciseSessionAlreadyActiveOnAnotherDeviceException) {
+            return@execute completeRemoteConflict(conflict.existing)
+        }
         val authoritative = serverActive ?: localMirror?.takeIf {
             it.phase == ExerciseSessionPhase.COMPLETED
         }
@@ -73,9 +83,13 @@ internal class ExerciseSessionCoordinator(
     }
 
     suspend fun start(command: StartExerciseCommand): ExerciseSessionOperationResult {
-        if (state.session != null) return invalidState()
+        if (state.session != null || state.existingRemoteSession != null) return invalidState()
         return execute(ExerciseSessionAction.START) {
-            val started = gateway.start(command)
+            val started = try {
+                gateway.start(command)
+            } catch (conflict: ExerciseSessionAlreadyActiveOnAnotherDeviceException) {
+                return@execute completeRemoteConflict(conflict.existing)
+            }
             require(started.phase == ExerciseSessionPhase.ACTIVE) {
                 "Start must return an ACTIVE session."
             }
@@ -99,6 +113,15 @@ internal class ExerciseSessionCoordinator(
         }
     }
 
+    suspend fun addSixtyMinutes(): ExerciseSessionOperationResult {
+        val current = state.session?.takeIf {
+            it.phase == ExerciseSessionPhase.ACTIVE || it.phase == ExerciseSessionPhase.PAUSED
+        } ?: return invalidState()
+        return mutate(ExerciseSessionAction.ADD_SIXTY_MINUTES, current) {
+            gateway.addSixtyMinutes(current)
+        }
+    }
+
     suspend fun finish(): ExerciseSessionOperationResult {
         val current = state.session?.takeIf {
             it.phase == ExerciseSessionPhase.ACTIVE || it.phase == ExerciseSessionPhase.PAUSED
@@ -114,6 +137,18 @@ internal class ExerciseSessionCoordinator(
         } ?: return invalidState()
         return mutate(ExerciseSessionAction.CANCEL, current) {
             gateway.cancel(current)
+        }
+    }
+
+    /** Re-reads the current Session by id after an out-of-band local/test tool. */
+    suspend fun refreshCurrent(): ExerciseSessionOperationResult {
+        val current = state.session ?: return invalidState()
+        return execute(ExerciseSessionAction.RESTORE) {
+            val refreshed = gateway.get(current.sessionId, current)
+            require(refreshed.sessionId == current.sessionId) {
+                "Server returned a different exercise session."
+            }
+            complete(refreshed)
         }
     }
 
@@ -160,6 +195,7 @@ internal class ExerciseSessionCoordinator(
             )
         }
         val previous = state.session
+        val previousRemoteConflict = state.existingRemoteSession
         state = state.copy(inFlightAction = action, recoverableFailure = null)
         return try {
             operation()
@@ -176,6 +212,7 @@ internal class ExerciseSessionCoordinator(
             }
             state = ExerciseSessionCoordinatorState(
                 session = retained,
+                existingRemoteSession = previousRemoteConflict,
                 recoverableFailure = ExerciseRecoverableFailure(action, error)
             )
             ExerciseSessionOperationResult.Failed(retained, error)
@@ -192,6 +229,14 @@ internal class ExerciseSessionCoordinator(
     ): ExerciseSessionOperationResult.Success {
         state = ExerciseSessionCoordinatorState(session = session)
         return ExerciseSessionOperationResult.Success(session)
+    }
+
+    private fun completeRemoteConflict(
+        existing: ExistingRemoteExerciseSession
+    ): ExerciseSessionOperationResult.AlreadyActive {
+        // Never install another device's Session as a controllable local mirror.
+        state = ExerciseSessionCoordinatorState(existingRemoteSession = existing)
+        return ExerciseSessionOperationResult.AlreadyActive(existing)
     }
 
     private fun invalidState() = ExerciseSessionOperationResult.Rejected(

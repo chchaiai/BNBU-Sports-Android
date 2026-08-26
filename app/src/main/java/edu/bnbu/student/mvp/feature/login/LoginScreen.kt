@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
@@ -60,6 +61,7 @@ fun LoginScreen(
     onOpenPrivacy: () -> Unit = {},
     privacyAccepted: Boolean = false,
     onPrivacyAcceptedChange: (Boolean) -> Unit = {},
+    onLocalReview: (() -> Unit)? = null,
 ) {
     val colors = MaterialTheme.colorScheme
 
@@ -138,6 +140,29 @@ fun LoginScreen(
                     modifier = Modifier.testTag("login.scanJoin"),
                     onClick = onScanJoin
                 )
+
+                if (onLocalReview != null) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(top = 24.dp),
+                        color = colors.outlineVariant.copy(alpha = 0.6f)
+                    )
+                    SectionLabel(label = stringResource(R.string.login_local_review_section))
+                    Text(
+                        text = stringResource(R.string.login_local_review_description),
+                        color = colors.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    LoginMethodButton(
+                        title = stringResource(R.string.login_local_review_button),
+                        subtitle = stringResource(R.string.login_local_review_hint),
+                        icon = Icons.Filled.Person,
+                        primary = false,
+                        enabled = privacyAccepted,
+                        modifier = Modifier.testTag("login.localReview"),
+                        onClick = onLocalReview
+                    )
+                }
 
             }
 

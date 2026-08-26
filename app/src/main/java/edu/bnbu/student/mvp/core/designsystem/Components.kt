@@ -621,7 +621,8 @@ fun StatusMessagePanel(
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  ValidationPanel — error / warning card
+//  ValidationPanel — local, reviewed validation copy only.
+//  Backend/repository failures must use BNBUErrorPanel(UserFacingError).
 // ═══════════════════════════════════════════════════════════════
 
 @Composable

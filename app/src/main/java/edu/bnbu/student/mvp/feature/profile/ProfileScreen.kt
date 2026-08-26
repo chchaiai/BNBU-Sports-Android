@@ -21,11 +21,13 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -60,6 +62,7 @@ import edu.bnbu.student.mvp.core.model.AppThemeMode
 import edu.bnbu.student.mvp.core.model.AppLanguage
 import edu.bnbu.student.mvp.core.model.StudentProfile
 import edu.bnbu.student.mvp.core.model.studentStatusLabel
+import edu.bnbu.student.mvp.core.model.studentNumberForDisplay
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.R
@@ -68,7 +71,8 @@ import java.time.format.DateTimeFormatter
 
 @Composable
 private fun ApplicationPanel(
-    onOpenExemption: (String?) -> Unit
+    onOpenExemption: (String?) -> Unit,
+    onOpenEnduranceScoring: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionTitle(
@@ -82,6 +86,13 @@ private fun ApplicationPanel(
                 icon = Icons.Filled.FitnessCenter,
                 modifier = Modifier.weight(1f),
                 onClick = { onOpenExemption(null) }
+            )
+            ServiceShortcut(
+                title = stringResource(R.string.profile_endurance),
+                description = stringResource(R.string.profile_endurance_short_hint),
+                icon = Icons.Filled.Timer,
+                modifier = Modifier.weight(1f),
+                onClick = onOpenEnduranceScoring
             )
         }
     }
@@ -143,7 +154,8 @@ fun ProfileScreen(
     appState: StudentAppState,
     onOpenAccountDetails: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
-    onOpenExemption: (String?) -> Unit = {}
+    onOpenExemption: (String?) -> Unit = {},
+    onOpenEnduranceScoring: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -151,7 +163,7 @@ fun ProfileScreen(
     ) {
         item { ProfileHeader(appState, onOpenAccountDetails, onOpenSettings) }
 
-        item { ApplicationPanel(onOpenExemption) }
+        item { ApplicationPanel(onOpenExemption, onOpenEnduranceScoring) }
         item { TeacherPanel(appState) }
         item { IdentityPanel(appState) }
         item { Spacer(Modifier.height(40.dp)) }
@@ -220,7 +232,7 @@ private fun ProfileHeader(
                 }
 
                 ProfileFacts(
-                    studentId = student.studentNumber,
+                    studentId = student.studentNumberForDisplay(),
                     className = student.className,
                     grade = student.localizedGradeLabel().ifBlank { pendingCalculation }
                 )
@@ -232,21 +244,42 @@ private fun ProfileHeader(
 @Composable
 private fun ProfileFacts(studentId: String, className: String, grade: String) {
     val cs = MaterialTheme.colorScheme
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(cs.surfaceVariant, MaterialTheme.shapes.medium)
             .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        ProfileFact(label = stringResource(R.string.profile_student_id_short), value = studentId, modifier = Modifier.weight(1f))
-        ProfileFact(label = stringResource(R.string.profile_class_short), value = className.ifBlank { "—" }, modifier = Modifier.weight(1f))
-        ProfileFact(label = stringResource(R.string.profile_grade_short), value = grade, modifier = Modifier.weight(1f))
+        ProfileFact(
+            label = stringResource(R.string.profile_student_id_short),
+            value = studentId,
+            maxLines = 2
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ProfileFact(
+                label = stringResource(R.string.profile_class_short),
+                value = className.ifBlank { "—" },
+                modifier = Modifier.weight(1f),
+                maxLines = 2
+            )
+            ProfileFact(
+                label = stringResource(R.string.profile_grade_short),
+                value = grade,
+                modifier = Modifier.weight(1f),
+                maxLines = 2
+            )
+        }
     }
 }
 
 @Composable
-private fun ProfileFact(label: String, value: String, modifier: Modifier = Modifier) {
+private fun ProfileFact(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    maxLines: Int = 1
+) {
     val cs = MaterialTheme.colorScheme
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(text = label, color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
@@ -254,7 +287,7 @@ private fun ProfileFact(label: String, value: String, modifier: Modifier = Modif
             text = value,
             color = cs.onSurface,
             style = MaterialTheme.typography.labelMedium,
-            maxLines = 1,
+            maxLines = maxLines,
             overflow = TextOverflow.Ellipsis
         )
     }
@@ -410,6 +443,7 @@ fun ProfileSettingsScreen(
     appState: StudentAppState,
     onBack: () -> Unit,
     onOpenContactBinding: () -> Unit = {},
+    onOpenAccountDeletion: () -> Unit = {},
     onOpenPrivacy: () -> Unit = {},
     onOpenHelpCenter: () -> Unit = {},
     onOpenFeedback: () -> Unit = {},
@@ -453,6 +487,7 @@ fun ProfileSettingsScreen(
             SettingsPanel(
                 appState = appState,
                 onOpenContactBinding = onOpenContactBinding,
+                onOpenAccountDeletion = onOpenAccountDeletion,
                 onOpenPrivacy = onOpenPrivacy,
                 onOpenHelpCenter = onOpenHelpCenter,
                 onOpenFeedback = onOpenFeedback,
@@ -467,6 +502,7 @@ fun ProfileSettingsScreen(
 private fun SettingsPanel(
     appState: StudentAppState,
     onOpenContactBinding: () -> Unit = {},
+    onOpenAccountDeletion: () -> Unit = {},
     onOpenPrivacy: () -> Unit = {},
     onOpenHelpCenter: () -> Unit = {},
     onOpenFeedback: () -> Unit = {},
@@ -485,6 +521,12 @@ private fun SettingsPanel(
                     title = stringResource(R.string.profile_login_contacts),
                     icon = Icons.Filled.Email,
                     onClick = onOpenContactBinding
+                )
+                HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                NavigationSettingRow(
+                    title = interfaceText("注销账户", "Delete account"),
+                    icon = Icons.Filled.DeleteForever,
+                    onClick = onOpenAccountDeletion
                 )
             }
         }

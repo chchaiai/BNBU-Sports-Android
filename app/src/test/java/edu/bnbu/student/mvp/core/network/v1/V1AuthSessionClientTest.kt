@@ -2,6 +2,7 @@ package edu.bnbu.student.mvp.core.network.v1
 
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentialStore
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentials
+import edu.bnbu.student.mvp.core.local.PendingRefreshIntent
 import edu.bnbu.student.mvp.testing.TestHttps
 import java.time.Instant
 import java.util.concurrent.Executors
@@ -207,7 +208,47 @@ class V1AuthSessionClientTest {
 
         assertEquals("req-refresh-revoked", error.requestId)
         assertEquals(null, store.session)
+        assertEquals(null, store.pendingRefreshIntent)
         assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun transientRefreshFailureKeepsSessionAndReusesDurableIntentOnRetry() {
+        server.enqueue(authError("AUTH_TOKEN_EXPIRED", "req-expired-first"))
+        server.enqueue(authError("SYSTEM_SERVICE_UNAVAILABLE", "req-refresh-temporary", 503))
+        server.enqueue(authError("AUTH_TOKEN_EXPIRED", "req-expired-second"))
+        server.enqueue(authSuccess("req-refresh-replayed"))
+        server.enqueue(success("req-me-replayed", """{"value":"ok"}"""))
+        val store = FakeCredentialStore(oldSession())
+        val keySequence = AtomicInteger()
+        val keyProvider = {
+            IdempotencyKey.fromGenerated("refresh-intent-${keySequence.incrementAndGet()}")
+        }
+
+        val firstError = assertThrows(V1HttpException::class.java) {
+            client(store, keyProvider).execute<Map<String, String>>(meRequest(), Map::class.java)
+        }
+
+        assertEquals(503, firstError.statusCode)
+        assertEquals("access-old", store.session?.accessToken)
+        assertNotNull(store.pendingRefreshIntent)
+        assertEquals(0, store.clearCount)
+
+        val result = client(store, keyProvider)
+            .execute<Map<String, String>>(meRequest(), Map::class.java)
+
+        assertEquals("ok", result.data?.get("value"))
+        assertEquals("access-new", store.session?.accessToken)
+        assertEquals(null, store.pendingRefreshIntent)
+        val requests = (1..5).map { server.takeRequest(1, TimeUnit.SECONDS)!! }
+        val refreshRequests = requests.filter { it.path == "/api/v1/auth/refresh" }
+        assertEquals(2, refreshRequests.size)
+        assertEquals(
+            refreshRequests[0].getHeader("Idempotency-Key"),
+            refreshRequests[1].getHeader("Idempotency-Key")
+        )
+        assertEquals("refresh-intent-1", refreshRequests[0].getHeader("Idempotency-Key"))
+        assertEquals(1, keySequence.get())
     }
 
     @Test
@@ -230,7 +271,7 @@ class V1AuthSessionClientTest {
     @Test
     fun logoutSuccessRevokesServerThenClearsBothLocalTokens() {
         server.enqueue(success("req-logout", "null"))
-        val store = FakeCredentialStore(oldSession())
+        val store = FakeCredentialStore(activeSession())
         val client = client(store)
 
         val outcome = client.logoutSafely()
@@ -249,7 +290,7 @@ class V1AuthSessionClientTest {
     @Test
     fun logoutNetworkOrServerFailureStillClearsLocalTokens() {
         server.enqueue(authError("SYSTEM_INTERNAL_ERROR", "req-logout-failed", status = 500))
-        val store = FakeCredentialStore(oldSession())
+        val store = FakeCredentialStore(activeSession())
         val client = client(store)
 
         val outcome = client.logoutSafely()
@@ -260,7 +301,33 @@ class V1AuthSessionClientTest {
         assertEquals(1, store.clearCount)
     }
 
-    private fun client(store: FakeCredentialStore): V1AuthorizedApiClient =
+    @Test
+    fun logoutRefreshesLocallyExpiredAccessBeforeRemoteRevocation() {
+        server.enqueue(authSuccess("req-refresh-for-logout"))
+        server.enqueue(success("req-logout-after-refresh", "null"))
+        val store = FakeCredentialStore(oldSession())
+        val client = client(store)
+
+        val outcome = client.logoutSafely()
+
+        assertTrue(outcome.serverRevoked)
+        assertEquals("req-logout-after-refresh", outcome.requestId)
+        assertEquals(null, store.session)
+        val refresh = server.takeRequest(1, TimeUnit.SECONDS)!!
+        val logout = server.takeRequest(1, TimeUnit.SECONDS)!!
+        assertEquals("/api/v1/auth/refresh", refresh.path)
+        assertEquals(null, refresh.getHeader("Authorization"))
+        assertEquals("/api/v1/auth/logout", logout.path)
+        assertEquals("Bearer access-new", logout.getHeader("Authorization"))
+        assertTrue(logout.body.readUtf8().contains("refresh-new"))
+    }
+
+    private fun client(
+        store: FakeCredentialStore,
+        keyProvider: () -> IdempotencyKey = {
+            IdempotencyKey.fromGenerated("auth-intent")
+        }
+    ): V1AuthorizedApiClient =
         V1AuthorizedApiClient.create(
             credentialStore = store,
             baseUrl = server.url("/api/v1").toString().trimEnd('/'),
@@ -272,7 +339,7 @@ class V1AuthSessionClientTest {
                 .build(),
             clock = { Instant.parse("2026-08-06T12:00:00Z") },
             requestIdProvider = { "req-client" },
-            idempotencyKeyProvider = { IdempotencyKey.fromGenerated("auth-intent") }
+            idempotencyKeyProvider = keyProvider
         )
 
     private fun meRequest(): V1ApiRequest =
@@ -286,6 +353,17 @@ class V1AuthSessionClientTest {
             refreshToken = "refresh-old",
             tokenType = "Bearer",
             accessTokenExpiresAt = "2026-08-06T11:59:00Z",
+            refreshTokenExpiresAt = "2026-08-13T12:00:00Z"
+        )
+
+    private fun activeSession(): AuthSessionCredentials =
+        AuthSessionCredentials.fromContract(
+            sessionId = "session-old",
+            enrollmentId = "enrollment-1",
+            accessToken = "access-old",
+            refreshToken = "refresh-old",
+            tokenType = "Bearer",
+            accessTokenExpiresAt = "2026-08-06T13:00:00Z",
             refreshTokenExpiresAt = "2026-08-13T12:00:00Z"
         )
 
@@ -337,6 +415,9 @@ class V1AuthSessionClientTest {
         @Volatile
         var clearCount: Int = 0
 
+        @Volatile
+        var pendingRefreshIntent: PendingRefreshIntent? = null
+
         override fun saveAuthSession(session: AuthSessionCredentials): Boolean {
             this.session = session
             return true
@@ -344,8 +425,20 @@ class V1AuthSessionClientTest {
 
         override fun loadAuthSession(): AuthSessionCredentials? = session
 
+        override fun savePendingRefreshIntent(intent: PendingRefreshIntent): Boolean {
+            pendingRefreshIntent = intent
+            return true
+        }
+
+        override fun loadPendingRefreshIntent(): PendingRefreshIntent? = pendingRefreshIntent
+
+        override fun clearPendingRefreshIntent() {
+            pendingRefreshIntent = null
+        }
+
         override fun clearAuth() {
             session = null
+            pendingRefreshIntent = null
             clearCount += 1
         }
     }

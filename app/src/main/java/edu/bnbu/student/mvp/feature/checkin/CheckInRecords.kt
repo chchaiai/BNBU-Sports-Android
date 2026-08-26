@@ -39,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +59,8 @@ import coil3.compose.SubcomposeAsyncImage
 import coil3.request.ImageRequest
 import coil3.video.VideoFrameDecoder
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
+import edu.bnbu.student.mvp.core.designsystem.BNBUErrorPanel
+import edu.bnbu.student.mvp.core.designsystem.BNBUPrimaryButton
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
 import edu.bnbu.student.mvp.core.designsystem.ValidationPanel
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
@@ -68,9 +71,15 @@ import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.ProofAttachment
 import edu.bnbu.student.mvp.core.model.ProofMediaType
 import edu.bnbu.student.mvp.core.model.hourText
+import edu.bnbu.student.mvp.core.error.ClientErrorContext
+import edu.bnbu.student.mvp.core.error.ClientErrorMapper
+import edu.bnbu.student.mvp.core.error.SafeClientLogger
+import edu.bnbu.student.mvp.core.error.UserFacingError
+import edu.bnbu.student.mvp.core.exercise.ExerciseRecordAttemptContext
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.core.time.studentLocalRecordDateText
 import edu.bnbu.student.mvp.core.time.studentLocalRecordDateTimeText
+import kotlinx.coroutines.CancellationException
 
 @Composable
 internal fun RecordListIntro(records: List<CheckInRecord>) {
@@ -543,11 +552,40 @@ internal fun CheckInRecordDetail(
     appState: StudentAppState,
     record: CheckInRecord,
     imageLoader: ImageLoader,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onStartResubmission: () -> Unit
 ) {
     val context = LocalContext.current
     val cs = MaterialTheme.colorScheme
     var openError by remember { mutableStateOf<String?>(null) }
+    var attemptContext by remember(record.id) {
+        mutableStateOf<ExerciseRecordAttemptContext?>(null)
+    }
+    var attemptContextError by remember(record.id) {
+        mutableStateOf<UserFacingError?>(null)
+    }
+    var isAttemptContextLoading by remember(record.id) { mutableStateOf(false) }
+
+    LaunchedEffect(record.id, record.reviewStatus, appState.apiRepository) {
+        if (!record.reviewStatus.equals("INVALID", ignoreCase = true)) return@LaunchedEffect
+        val repository = appState.apiRepository ?: run {
+            attemptContextError = ClientErrorMapper.protocolMismatch(ClientErrorContext.RECORD)
+            return@LaunchedEffect
+        }
+        isAttemptContextLoading = true
+        attemptContextError = null
+        try {
+            attemptContext = repository.fetchExerciseRecordAttemptContext(record.id)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            val mapped = ClientErrorMapper.map(failure, ClientErrorContext.RECORD)
+            SafeClientLogger.log(mapped, ClientErrorContext.RECORD)
+            attemptContextError = mapped
+        } finally {
+            isAttemptContextLoading = false
+        }
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -580,6 +618,24 @@ internal fun CheckInRecordDetail(
         }
         item {
             RecordResultCard(record = record)
+        }
+        if (record.reviewStatus.equals("INVALID", ignoreCase = true)) {
+            item {
+                RejectedAttemptPanel(
+                    record = record,
+                    attemptContext = attemptContext,
+                    loading = isAttemptContextLoading,
+                    onStartResubmission = onStartResubmission
+                )
+            }
+            attemptContextError?.let { error ->
+                item {
+                    BNBUErrorPanel(
+                        error = error,
+                        onDismiss = { attemptContextError = null }
+                    )
+                }
+            }
         }
         if (!record.teacherPublicFeedback.isNullOrBlank()) {
             item {
@@ -701,6 +757,83 @@ internal fun CheckInRecordDetail(
             }
         }
         item { Spacer(Modifier.height(28.dp)) }
+    }
+}
+
+@Composable
+private fun RejectedAttemptPanel(
+    record: CheckInRecord,
+    attemptContext: ExerciseRecordAttemptContext?,
+    loading: Boolean,
+    onStartResubmission: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = colors.errorContainer.copy(alpha = 0.42f),
+        shape = MaterialTheme.shapes.large
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = interfaceText("上一次提交已被拒绝", "The previous submission was rejected"),
+                color = colors.onErrorContainer,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            when {
+                loading -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = interfaceText("正在读取提交次数…", "Loading attempt number…"),
+                        color = colors.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                attemptContext != null -> Text(
+                    text = interfaceText(
+                        "当前是第 ${attemptContext.attemptNumber} 次提交",
+                        "This is attempt ${attemptContext.attemptNumber}"
+                    ),
+                    color = colors.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
+            Text(
+                text = interfaceText("拒绝原因", "Reason for rejection"),
+                color = colors.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = record.teacherPublicFeedback?.takeIf(String::isNotBlank)
+                    ?: interfaceText("教师未提供公开拒绝原因。", "The teacher did not provide a public reason."),
+                color = colors.onSurface,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = interfaceText("可重新补交", "You can submit a new attempt"),
+                color = colors.onSurface,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = interfaceText(
+                    "补交会创建新的正式尝试。请先开始并完成一条新的运动及现场凭证；这条已拒绝记录会继续保留，不能改回草稿。",
+                    "A resubmission creates a new formal attempt. First complete a new exercise with on-site evidence. This rejected record stays in history and is never reopened as a draft."
+                ),
+                color = colors.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
+            )
+            BNBUPrimaryButton(
+                title = interfaceText("开始新的运动以补交", "Start a new exercise to resubmit"),
+                onClick = onStartResubmission,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
     }
 }
 
@@ -830,8 +963,7 @@ private fun RecordResultCard(record: CheckInRecord) {
 private fun String?.recordReviewStatusText(): String = when (this?.uppercase()) {
     "VALID" -> interfaceText("有效", "Valid")
     "INVALID" -> interfaceText("教师标记无效", "Marked invalid by teacher")
-    "PENDING" -> interfaceText("历史记录待处理", "Legacy record pending review")
-    else -> interfaceText("尚无复核结果", "No review result")
+    else -> interfaceText("记录状态异常", "Invalid review state")
 }
 
 private fun String?.recordDetailTimeText(): String {

@@ -33,6 +33,7 @@ import edu.bnbu.student.mvp.core.network.SharedHttpClient
 import edu.bnbu.student.mvp.core.model.SystemMode
 import edu.bnbu.student.mvp.core.model.SystemModeStatus
 import edu.bnbu.student.mvp.core.state.StudentAppState
+import edu.bnbu.student.mvp.core.review.LocalReviewWorkspaceProvider
 import edu.bnbu.student.mvp.feature.shell.AppRootScreen
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
 import edu.bnbu.student.mvp.feature.checkin.session.SessionMediaUploadCoordinator
@@ -42,6 +43,7 @@ import edu.bnbu.student.mvp.core.network.v1.V1AuthorizedApiClient
 import edu.bnbu.student.mvp.core.network.v1.V1ExerciseMediaUploadGateway
 import edu.bnbu.student.mvp.core.network.v1.V1PublicStatusClient
 import edu.bnbu.student.mvp.core.network.v1.createV1ExerciseGateway
+import edu.bnbu.student.mvp.core.config.ClientTestToolsPolicy
 import edu.bnbu.student.mvp.R
 import com.google.android.play.core.appupdate.AppUpdateManager
 import com.google.android.play.core.appupdate.AppUpdateManagerFactory
@@ -112,7 +114,8 @@ class MainActivity : ComponentActivity() {
                         onPrivacyConsentAccepted =
                             appStateViewModel::markPrivacyConsentAccepted,
                         onInitialTargetReady = { isInitialTargetReady = true },
-                        onRequestNotificationPermission = ::requestNotificationPermissionIfNeeded
+                        onRequestNotificationPermission = ::requestNotificationPermissionIfNeeded,
+                        localReviewWorkspaceFactory = LocalReviewWorkspaceProvider.workspaceFactory
                     )
 
                     updateRequirement?.let { requirement ->
@@ -327,7 +330,8 @@ class StudentAppStateViewModel(application: Application) : AndroidViewModel(appl
                 objectUploader = PrivateExerciseMediaObjectUploader(SharedHttpClient.instance)
             )
         },
-        videoCompressor = SessionVideoCompressor(application)
+        videoCompressor = SessionVideoCompressor(application),
+        testToolsEnabled = ClientTestToolsPolicy.isEnabled
     )
 
     var isRestoringSession by mutableStateOf(true)

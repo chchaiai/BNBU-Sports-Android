@@ -2,6 +2,7 @@ package edu.bnbu.student.mvp.core.network.v1
 
 import com.google.gson.JsonParser
 import edu.bnbu.student.mvp.core.exercise.CreateExerciseRecordDraftCommand
+import edu.bnbu.student.mvp.core.exercise.CreateExerciseRecordResubmissionCommand
 import edu.bnbu.student.mvp.core.exercise.ExerciseMediaAvailability
 import edu.bnbu.student.mvp.core.exercise.ExerciseMediaReference
 import edu.bnbu.student.mvp.core.exercise.ExerciseRecordForm
@@ -186,6 +187,120 @@ class V1ExerciseRecordGatewayTest {
         assertTrue(body["description"].isJsonNull)
     }
 
+    @Test
+    fun attemptContextUsesExactReadOnlyRouteAndPreservesHistoryLink() = runBlocking {
+        server.enqueue(
+            success(
+                200,
+                "req-attempt-context",
+                """{
+                    "recordId":"record-invalid-1",
+                    "previousAttemptId":null,
+                    "rootAttemptId":"record-invalid-1",
+                    "attemptNumber":1
+                }""".trimIndent()
+            )
+        )
+
+        val context = gateway.getRecordAttemptContext("record-invalid-1")
+
+        assertEquals("record-invalid-1", context.recordId)
+        assertEquals(null, context.previousAttemptId)
+        assertEquals("record-invalid-1", context.rootAttemptId)
+        assertEquals(1, context.attemptNumber)
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals(
+            "/api/v1/exercise-records/record-invalid-1/attempt-context",
+            request.path
+        )
+        assertEquals(null, request.getHeader("Idempotency-Key"))
+    }
+
+    @Test
+    fun resubmissionCreatesLinkedDraftWithExactBodyAndIdempotency() = runBlocking {
+        val newRecord = recordJson(
+            status = "DRAFT",
+            version = 1L,
+            recordId = "record-attempt-2",
+            sessionId = "session-new-2"
+        )
+        server.enqueue(
+            success(
+                201,
+                "req-resubmit",
+                """{
+                    "record":$newRecord,
+                    "attemptContext":{
+                        "recordId":"record-attempt-2",
+                        "previousAttemptId":"record-invalid-1",
+                        "rootAttemptId":"record-invalid-1",
+                        "attemptNumber":2
+                    }
+                }""".trimIndent()
+            )
+        )
+
+        val result = gateway.createRecordResubmission(
+            CreateExerciseRecordResubmissionCommand(
+                previousRecordId = "record-invalid-1",
+                sessionId = "session-new-2",
+                expectedVersion = 7L,
+                creditType = CreditType.General,
+                clientRequestId = "android-resubmit-2",
+                form = form().copy(media = emptyList())
+            )
+        )
+
+        assertEquals("record-attempt-2", result.draft.recordId)
+        assertEquals("session-new-2", result.draft.sessionId)
+        assertEquals("record-invalid-1", result.attemptContext.previousAttemptId)
+        assertEquals(2, result.attemptContext.attemptNumber)
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals(
+            "/api/v1/exercise-records/record-invalid-1/resubmissions",
+            request.path
+        )
+        assertEquals("record-intent", request.getHeader("Idempotency-Key"))
+        val body = JsonParser.parseString(request.body.readUtf8()).asJsonObject
+        assertEquals(
+            setOf(
+                "sessionId",
+                "creditType",
+                "sportType",
+                "sportName",
+                "description",
+                "clientRequestId",
+                "expectedVersion"
+            ),
+            body.keySet()
+        )
+        assertEquals("session-new-2", body["sessionId"].asString)
+        assertEquals("GENERAL", body["creditType"].asString)
+        assertEquals("OTHER", body["sportType"].asString)
+        assertEquals("Climbing", body["sportName"].asString)
+        assertEquals("Morning climbing", body["description"].asString)
+        assertEquals("android-resubmit-2", body["clientRequestId"].asString)
+        assertEquals(7L, body["expectedVersion"].asLong)
+        assertFalse(body.has("mediaIds"))
+    }
+
+    @Test
+    fun resubmissionRejectsBlankGeneralDescriptionBeforeNetwork() {
+        assertThrows(IllegalArgumentException::class.java) {
+            CreateExerciseRecordResubmissionCommand(
+                previousRecordId = "record-invalid-1",
+                sessionId = "session-new-2",
+                expectedVersion = 7L,
+                creditType = CreditType.General,
+                clientRequestId = "android-resubmit-2",
+                form = form().copy(description = "   ", media = emptyList())
+            )
+        }
+        assertEquals(0, server.requestCount)
+    }
+
     private fun form(): ExerciseRecordForm = ExerciseRecordForm(
         description = " Morning climbing ",
         sportType = "other",
@@ -225,7 +340,12 @@ class V1ExerciseRecordGatewayTest {
                 """{"code":"$code","message":"safe message","details":{},"requestId":"$requestId","timestamp":"2026-08-07T12:00:00Z"}"""
             )
 
-    private fun recordJson(status: String, version: Long): String {
+    private fun recordJson(
+        status: String,
+        version: Long,
+        recordId: String = "record-1",
+        sessionId: String = "session-1"
+    ): String {
         val submittedAt = if (status == "DRAFT") "null" else "\"2026-08-07T12:00:00Z\""
         val currentReview = if (status == "REVIEWED") {
             """{"result":"VALID","reasonCode":null,"publicComment":null}"""
@@ -233,7 +353,7 @@ class V1ExerciseRecordGatewayTest {
             "null"
         }
         return """{
-            "id":"record-1",
+            "id":"$recordId",
             "organizationId":"org-1",
             "semesterId":"semester-1",
             "studentId":"student-1",
@@ -241,7 +361,7 @@ class V1ExerciseRecordGatewayTest {
             "classSectionId":"section-1",
             "courseId":"course-1",
             "teacherId":"teacher-1",
-            "sessionId":"session-1",
+            "sessionId":"$sessionId",
             "businessDate":"2026-08-07",
             "creditType":"GENERAL",
             "sportType":"OTHER",

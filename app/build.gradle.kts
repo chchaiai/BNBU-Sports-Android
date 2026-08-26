@@ -30,6 +30,8 @@ val configuredStagingApiBaseUrl = configuredValue("BNBU_STAGING_API_BASE_URL")
 val configuredProductionApiBaseUrl =
     configuredValue("BNBU_PRODUCTION_API_BASE_URL") ?: configuredValue("BNBU_API_BASE_URL")
 val configuredOrganizationCode = configuredValue("BNBU_ORGANIZATION_CODE")
+val configuredTestToolsEnabled = configuredValue("BNBU_TEST_TOOLS_ENABLED")
+    ?.equals("true", ignoreCase = true) == true
 
 // Release signing material is deliberately external to source control.  CI must
 // supply these values as environment variables; a locally ignored
@@ -71,6 +73,9 @@ android {
         versionName = "0.1.0-mvp"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "PRIVACY_POLICY_VERSION", "\"2.2\"")
+        // Fail closed for every variant unless a build type explicitly
+        // tightens both the flag and environment checks below.
+        buildConfigField("boolean", "BNBU_TEST_TOOLS_ENABLED", "false")
 
     }
 
@@ -96,6 +101,11 @@ android {
             buildConfigField("String", "BNBU_ENVIRONMENT", "local".asBuildConfigString())
             buildConfigField("boolean", "BNBU_ALLOW_CLEARTEXT_API", "true")
             buildConfigField(
+                "boolean",
+                "BNBU_TEST_TOOLS_ENABLED",
+                configuredTestToolsEnabled.toString()
+            )
+            buildConfigField(
                 "String",
                 "BNBU_ORGANIZATION_CODE",
                 (configuredOrganizationCode ?: "BNBU").asBuildConfigString()
@@ -103,7 +113,7 @@ android {
             buildConfigField(
                 "String",
                 "BNBU_API_BASE_URL",
-                (configuredLocalApiBaseUrl ?: "http://10.0.2.2:3000/api/v1")
+                (configuredLocalApiBaseUrl ?: "http://10.0.2.2:13000/api/v1")
                     .asBuildConfigString()
             )
         }
@@ -114,6 +124,11 @@ android {
             matchingFallbacks += listOf("debug")
             buildConfigField("String", "BNBU_ENVIRONMENT", "staging".asBuildConfigString())
             buildConfigField("boolean", "BNBU_ALLOW_CLEARTEXT_API", "false")
+            buildConfigField(
+                "boolean",
+                "BNBU_TEST_TOOLS_ENABLED",
+                configuredTestToolsEnabled.toString()
+            )
             buildConfigField(
                 "String",
                 "BNBU_ORGANIZATION_CODE",
@@ -132,6 +147,7 @@ android {
             signingConfig = signingConfigs.getByName("release")
             buildConfigField("String", "BNBU_ENVIRONMENT", "production".asBuildConfigString())
             buildConfigField("boolean", "BNBU_ALLOW_CLEARTEXT_API", "false")
+            buildConfigField("boolean", "BNBU_TEST_TOOLS_ENABLED", "false")
             buildConfigField(
                 "String",
                 "BNBU_ORGANIZATION_CODE",
@@ -194,7 +210,6 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.4")
     implementation("io.coil-kt.coil3:coil-video:3.0.4")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
-    implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("com.google.android.play:app-update-ktx:2.1.0")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.core:core-splashscreen:1.0.1")

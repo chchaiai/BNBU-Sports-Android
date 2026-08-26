@@ -69,6 +69,38 @@ class V1StudentApiTest {
     }
 
     @Test
+    fun studentCodeRequestKeepsTypedRequestCorrelationWithoutRenderingServerSecrets() {
+        val serverSecret = "OTP 123456 challengeId=challenge-secret"
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(429)
+                .setHeader("X-Request-ID", "req-email-rate-limit")
+                .setBody(
+                    """{"code":"AUTH_RATE_LIMITED","message":"$serverSecret","details":{"resourceId":"challenge-secret","migrationReference":"OTP 123456"},"requestId":"req-email-rate-limit","timestamp":"2026-08-24T00:00:00Z"}"""
+                )
+        )
+        val api = api(FakeStore(null))
+
+        val error = assertThrows(V1HttpException::class.java) {
+            runBlocking {
+                api.requestSignInCode(
+                    organizationCode = "BNBU",
+                    account = "student@example.edu",
+                    locale = StudentSignInCodeRequest.Locale.zhMinusCN,
+                    intent = intent("requestStudentSignInCode", "rate-limited")
+                )
+            }
+        }
+
+        assertEquals(429, error.statusCode)
+        assertEquals("AUTH_RATE_LIMITED", error.error.code.value)
+        assertEquals("req-email-rate-limit", error.error.requestId)
+        assertFalse(error.message.orEmpty().contains(serverSecret))
+        assertFalse(error.message.orEmpty().contains("challenge-secret"))
+        assertFalse(error.message.orEmpty().contains("123456"))
+    }
+
+    @Test
     fun invalidOrganizationCodeFailsBeforeNetworkRequest() {
         val api = api(FakeStore(null))
 

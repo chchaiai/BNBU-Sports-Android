@@ -4,12 +4,19 @@ import com.google.gson.JsonNull
 import com.google.gson.JsonPrimitive
 import com.google.gson.reflect.TypeToken
 import edu.bnbu.student.mvp.core.exercise.CreateExerciseRecordDraftCommand
+import edu.bnbu.student.mvp.core.exercise.CreateExerciseRecordResubmissionCommand
 import edu.bnbu.student.mvp.core.exercise.ExerciseGateway
 import edu.bnbu.student.mvp.core.exercise.ExerciseRecord
+import edu.bnbu.student.mvp.core.exercise.ExerciseRecordAttemptContext
 import edu.bnbu.student.mvp.core.exercise.ExerciseRecordDraft
+import edu.bnbu.student.mvp.core.exercise.ExerciseRecordResubmissionDraft
+import edu.bnbu.student.mvp.core.exercise.ExerciseRecordResubmissionGateway
 import edu.bnbu.student.mvp.core.exercise.ExerciseRecordVersionConflictException
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionRecord
+import edu.bnbu.student.mvp.core.exercise.ExerciseSessionAlreadyActiveOnAnotherDeviceException
+import edu.bnbu.student.mvp.core.exercise.ExistingRemoteExerciseSession
+import edu.bnbu.student.mvp.core.exercise.ExerciseTestToolsGateway
 import edu.bnbu.student.mvp.core.exercise.ExerciseCheckInNotRequiredException
 import edu.bnbu.student.mvp.core.exercise.ExerciseVersionConflictException
 import edu.bnbu.student.mvp.core.exercise.StartExerciseCommand
@@ -27,14 +34,19 @@ import edu.bnbu.student.mvp.core.network.v1.generated.VersionedReasonRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.StartSessionRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.SubmitExerciseRecordRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.UpdateExerciseRecordRequest
+import edu.bnbu.student.mvp.core.network.v1.generated.VersionedRequest
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 
+private val SAFE_REMOTE_SESSION_REQUEST_ID = Regex("^[A-Za-z0-9._:-]{1,64}$")
+
 internal class ExerciseSessionClientContextMissingException(
-    sessionId: String
+    sessionId: String,
+    val requestId: String
 ) : IllegalStateException(
-    "Exercise selection is unavailable for server session ${sessionId.take(12)}."
+    "Exercise selection is unavailable for server session ${sessionId.take(12)} " +
+        "(requestId=$requestId)."
 )
 
 internal class ExerciseEnrollmentMissingException : IllegalStateException(
@@ -47,7 +59,7 @@ internal class V1ExerciseSessionGateway(
     private val enrollmentIdProvider: () -> String?,
     private val clock: () -> Instant = Instant::now,
     private val mutationRegistry: MutationIntentRegistry = MutationIntentRegistry()
-) : ExerciseGateway {
+) : ExerciseGateway, ExerciseTestToolsGateway, ExerciseRecordResubmissionGateway {
     private val pendingObservedAt = mutableMapOf<MutationIntentScope, OffsetDateTime>()
 
     override suspend fun start(command: StartExerciseCommand): ExerciseSessionRecord {
@@ -104,7 +116,12 @@ internal class V1ExerciseSessionGateway(
         )
         requireStatus(operationId, response, setOf(200))
         val remote = response.data ?: return null
-        val context = localMirror.requireMatchingContext(remote.id)
+        if (localMirror?.sessionId != remote.id) {
+            throw ExerciseSessionAlreadyActiveOnAnotherDeviceException(
+                remote.toExistingRemoteSession(response.meta.requestId)
+            )
+        }
+        val context = localMirror.requireMatchingContext(remote.id, response.meta.requestId)
         return remote.toDomain(
             creditType = context.creditType,
             sportType = context.sportType,
@@ -132,7 +149,7 @@ internal class V1ExerciseSessionGateway(
         require(remote.id == normalizedSessionId) {
             "Server returned a different exercise session."
         }
-        val context = localMirror.requireMatchingContext(remote.id)
+        val context = localMirror.requireMatchingContext(remote.id, response.meta.requestId)
         return remote.toDomain(
             creditType = context.creditType,
             sportType = context.sportType,
@@ -141,11 +158,77 @@ internal class V1ExerciseSessionGateway(
         )
     }
 
+    override suspend fun capabilities(): Set<String> {
+        val operationId = "getInternalTestToolCapabilities"
+        return try {
+            val response = authorizedClient.executeCancellable<V1TestToolCapabilitiesPayload>(
+                V1ApiRequest(
+                    operationId = operationId,
+                    method = V1HttpMethod.GET,
+                    relativePath = "internal/test-tools/capabilities",
+                    pathSegments = listOf("internal", "test-tools", "capabilities")
+                ),
+                V1TestToolCapabilitiesPayload::class.java
+            )
+            response.requireStatusAndData(operationId, setOf(200))
+                .capabilities
+                .asSequence()
+                .map(String::trim)
+                .filter(String::isNotEmpty)
+                .toSet()
+        } catch (error: V1HttpException) {
+            if (error.statusCode == 404) emptySet() else throw error
+        }
+    }
+
+    override suspend fun advanceDurationOneHour(sessionId: String, expectedVersion: Long) {
+        val normalizedSessionId = sessionId.requireOpaqueId("sessionId")
+        require(expectedVersion >= 1L) { "expectedVersion must be positive" }
+        val operationId = "advanceSyntheticExerciseSessionDuration"
+        val scope = mutationScope(
+            operationId,
+            "session:$normalizedSessionId:version:$expectedVersion"
+        )
+        val intent = mutationRegistry.acquire(
+            scope,
+            IntentFingerprint.fromCanonicalInput(
+                operationId,
+                "sessionId=$normalizedSessionId\nexpectedVersion=$expectedVersion" +
+                    "\nadvanceSeconds=3600"
+            )
+        )
+        executeMutation(operationId, scope, intent) {
+            val response = authorizedClient.executeCancellable<ExerciseSession>(
+                V1ApiRequest(
+                    operationId = operationId,
+                    method = V1HttpMethod.POST,
+                    relativePath = "internal/test-tools/exercise-sessions/{sessionId}/advance-duration",
+                    pathSegments = listOf(
+                        "internal",
+                        "test-tools",
+                        "exercise-sessions",
+                        normalizedSessionId,
+                        "advance-duration"
+                    ),
+                    body = VersionedRequest(expectedVersion)
+                ).withMutationIntent(intent),
+                ExerciseSession::class.java
+            )
+            val advanced = response.requireStatusAndData(operationId, setOf(200))
+            require(advanced.id == normalizedSessionId) {
+                "Test tools returned a different exercise session."
+            }
+        }
+    }
+
     override suspend fun pause(current: ExerciseSessionRecord): ExerciseSessionRecord =
         control("pauseExerciseSession", "pause", current)
 
     override suspend fun resume(current: ExerciseSessionRecord): ExerciseSessionRecord =
         control("resumeExerciseSession", "resume", current)
+
+    override suspend fun addSixtyMinutes(current: ExerciseSessionRecord): ExerciseSessionRecord =
+        control("addSixtyMinutesToExerciseSession", "add-sixty-minutes", current)
 
     override suspend fun finish(current: ExerciseSessionRecord): ExerciseSessionRecord =
         control("finishExerciseSession", "finish", current)
@@ -246,6 +329,7 @@ internal class V1ExerciseSessionGateway(
         val normalizedSessionId = sessionId.requireOpaqueId("sessionId")
         val operationId = "listExerciseRecords"
         val matches = mutableListOf<ContractExerciseRecord>()
+        val seenCursors = mutableSetOf<String>()
         var cursor: String? = null
         do {
             val response = authorizedClient.executeCancellable<List<ContractExerciseRecord>>(
@@ -262,19 +346,24 @@ internal class V1ExerciseSessionGateway(
                 object : TypeToken<List<ContractExerciseRecord>>() {}.type
             )
             requireStatus(operationId, response, setOf(200))
-            matches += response.data.orEmpty().filter { it.sessionId == normalizedSessionId }
-            val pagination = response.meta.pagination?.takeIf { it.isJsonObject }?.asJsonObject
-            val hasMore = pagination?.get("hasMore")?.asBoolean == true
-            cursor = pagination?.get("nextCursor")
-                ?.takeUnless { it.isJsonNull }
-                ?.asString
-                ?.takeIf(String::isNotBlank)
-            if (hasMore && cursor == null) {
+            val data = response.data ?: throw V1ProtocolException(
+                operationId,
+                response.statusCode,
+                response.meta.requestId,
+                "paged success data is null"
+            )
+            matches += data.filter { it.sessionId == normalizedSessionId }
+            val pagination = response.meta.requireContractPagination(
+                operationId,
+                response.statusCode
+            )
+            cursor = pagination.nextCursor.takeIf { pagination.hasMore }
+            if (cursor != null && !seenCursors.add(cursor)) {
                 throw V1ProtocolException(
                     operationId,
                     response.statusCode,
                     response.meta.requestId,
-                    "pagination says hasMore without nextCursor"
+                    "meta.pagination.nextCursor repeats a previous page"
                 )
             }
         } while (cursor != null)
@@ -366,6 +455,73 @@ internal class V1ExerciseSessionGateway(
         }
     }
 
+    override suspend fun getRecordAttemptContext(
+        recordId: String
+    ): ExerciseRecordAttemptContext {
+        val normalizedRecordId = recordId.requireOpaqueId("recordId")
+        val operationId = "getExerciseRecordAttemptContext"
+        val response = authorizedClient.executeCancellable<V1ExerciseRecordAttemptContextPayload>(
+            V1ApiRequest(
+                operationId = operationId,
+                method = V1HttpMethod.GET,
+                relativePath = "exercise-records/{recordId}/attempt-context",
+                pathSegments = listOf("exercise-records", normalizedRecordId, "attempt-context")
+            ),
+            V1ExerciseRecordAttemptContextPayload::class.java
+        )
+        return response.requireStatusAndData(operationId, setOf(200))
+            .toDomain(expectedRecordId = normalizedRecordId)
+    }
+
+    override suspend fun createRecordResubmission(
+        command: CreateExerciseRecordResubmissionCommand
+    ): ExerciseRecordResubmissionDraft {
+        val previousRecordId = command.previousRecordId.requireOpaqueId("previousRecordId")
+        val sessionId = command.sessionId.requireOpaqueId("sessionId")
+        val normalized = command.form.normalizedForDraft(command.creditType)
+        val operationId = "createExerciseRecordResubmission"
+        val body = com.google.gson.JsonObject().apply {
+            addProperty("sessionId", sessionId)
+            addProperty("creditType", command.creditType.toContractCreditType().value)
+            addProperty("sportType", normalized.sportType.toContractSportType())
+            normalized.otherSportName?.let { addProperty("sportName", it) }
+            normalized.description.takeIf(String::isNotEmpty)?.let { addProperty("description", it) }
+            addProperty("clientRequestId", command.clientRequestId)
+            addProperty("expectedVersion", command.expectedVersion)
+        }
+        val scope = mutationScope(
+            operationId,
+            "record:$previousRecordId:version:${command.expectedVersion}:session:$sessionId"
+        )
+        val intent = mutationRegistry.acquire(
+            scope,
+            IntentFingerprint.fromCanonicalInput(operationId, V1Json.gson.toJson(body))
+        )
+        return executeRecordMutation(operationId, intent) {
+            val response = authorizedClient.executeCancellable<V1ExerciseRecordResubmissionPayload>(
+                V1ApiRequest(
+                    operationId = operationId,
+                    method = V1HttpMethod.POST,
+                    relativePath = "exercise-records/{recordId}/resubmissions",
+                    pathSegments = listOf("exercise-records", previousRecordId, "resubmissions"),
+                    body = V1ExplicitJsonBody(body)
+                ).withMutationIntent(intent),
+                V1ExerciseRecordResubmissionPayload::class.java
+            )
+            val payload = response.requireStatusAndData(operationId, setOf(201))
+            val context = payload.attemptContext.toDomain(
+                expectedRecordId = payload.record.id
+            )
+            require(context.previousAttemptId == previousRecordId) {
+                "Resubmission must link to the preceding INVALID record."
+            }
+            ExerciseRecordResubmissionDraft(
+                draft = payload.record.toDraft(expectedSessionId = sessionId),
+                attemptContext = context
+            )
+        }
+    }
+
     private suspend fun control(
         operationId: String,
         action: String,
@@ -427,6 +583,19 @@ internal class V1ExerciseSessionGateway(
             clearObservedAt(scope)
         }
     } catch (error: V1HttpException) {
+        if (
+            operationId == "startExerciseSession" &&
+            error.error.code.value == "SESSION_ALREADY_ACTIVE"
+        ) {
+            mutationRegistry.complete(intent)
+            clearObservedAt(scope)
+            val authoritativeConflict = runCatching { getActive(localMirror = null) }
+                .exceptionOrNull()
+            if (authoritativeConflict is ExerciseSessionAlreadyActiveOnAnotherDeviceException) {
+                throw authoritativeConflict
+            }
+            throw error
+        }
         if (
             operationId == "startExerciseSession" &&
             error.error.code.value == "SESSION_ALREADY_COMPLETED"
@@ -512,6 +681,16 @@ internal class V1ExerciseSessionGateway(
         ExerciseSessionStatus.EXPIRED -> ExerciseSessionPhase.EXPIRED
     }
 
+    private fun ExerciseSession.toExistingRemoteSession(
+        requestId: String
+    ): ExistingRemoteExerciseSession = ExistingRemoteExerciseSession(
+        sessionId = id,
+        phase = status.toDomainPhase(),
+        startedAtEpochMillis = startedAt.toInstant().toEpochMilli(),
+        requestId = requestId.trim().takeIf(SAFE_REMOTE_SESSION_REQUEST_ID::matches)
+            ?: "unavailable"
+    )
+
     private fun ContractExerciseRecord.toDraft(
         expectedSessionId: String? = null,
         expectedRecordId: String? = null
@@ -549,7 +728,27 @@ internal class V1ExerciseSessionGateway(
             recordId = id,
             sessionId = sessionId,
             version = version,
-            submittedAtEpochMillis = submitted.toInstant().toEpochMilli()
+            submittedAtEpochMillis = submitted.toInstant().toEpochMilli(),
+            businessDate = businessDate,
+            creditedDurationSeconds = creditedDurationSeconds,
+            reviewStatus = requireNotNull(currentReview).result.value
+        )
+    }
+
+    private fun V1ExerciseRecordAttemptContextPayload.toDomain(
+        expectedRecordId: String
+    ): ExerciseRecordAttemptContext {
+        recordId.requireOpaqueId("recordId")
+        rootAttemptId.requireOpaqueId("rootAttemptId")
+        previousAttemptId?.requireOpaqueId("previousAttemptId")
+        require(recordId == expectedRecordId) {
+            "Server returned attempt context for a different exercise record."
+        }
+        return ExerciseRecordAttemptContext(
+            recordId = recordId,
+            previousAttemptId = previousAttemptId,
+            rootAttemptId = rootAttemptId,
+            attemptNumber = attemptNumber
         )
     }
 
@@ -579,9 +778,10 @@ internal class V1ExerciseSessionGateway(
     }
 
     private fun ExerciseSessionRecord?.requireMatchingContext(
-        sessionId: String
+        sessionId: String,
+        requestId: String
     ): ExerciseSessionRecord = this?.takeIf { it.sessionId == sessionId }
-        ?: throw ExerciseSessionClientContextMissingException(sessionId)
+        ?: throw ExerciseSessionClientContextMissingException(sessionId, requestId)
 
     private fun String?.normalizedId(): String? = this?.trim()?.takeIf(String::isNotEmpty)
 
@@ -625,3 +825,19 @@ internal class V1ExerciseSessionGateway(
         val ContractSportType = Regex("^[A-Z][A-Z0-9_]*$")
     }
 }
+
+private data class V1ExerciseRecordAttemptContextPayload(
+    val recordId: String,
+    val previousAttemptId: String?,
+    val rootAttemptId: String,
+    val attemptNumber: Int
+)
+
+private data class V1TestToolCapabilitiesPayload(
+    val capabilities: List<String> = emptyList()
+)
+
+private data class V1ExerciseRecordResubmissionPayload(
+    val record: ContractExerciseRecord,
+    val attemptContext: V1ExerciseRecordAttemptContextPayload
+)

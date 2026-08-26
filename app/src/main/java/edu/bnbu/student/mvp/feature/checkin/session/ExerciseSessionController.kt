@@ -1,15 +1,13 @@
 package edu.bnbu.student.mvp.feature.checkin.session
 
-import android.Manifest
-import android.content.Context
-import android.content.pm.PackageManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.core.content.ContextCompat
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
-import com.google.android.gms.tasks.CancellationTokenSource
+import edu.bnbu.student.mvp.core.config.ClientTestToolsPolicy
+import edu.bnbu.student.mvp.core.error.ClientErrorContext
+import edu.bnbu.student.mvp.core.error.ClientErrorMapper
+import edu.bnbu.student.mvp.core.error.SafeClientLogger
+import edu.bnbu.student.mvp.core.error.UserFacingError
 import edu.bnbu.student.mvp.core.exercise.ExerciseGateway
 import edu.bnbu.student.mvp.core.exercise.ExerciseCheckInNotRequiredException
 import edu.bnbu.student.mvp.core.exercise.ExerciseMediaEvidence
@@ -21,6 +19,8 @@ import edu.bnbu.student.mvp.core.exercise.ExerciseRecordOperationResult
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionCoordinator
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionOperationResult
+import edu.bnbu.student.mvp.core.exercise.ExistingRemoteExerciseSession
+import edu.bnbu.student.mvp.core.exercise.ExerciseTestToolsGateway
 import edu.bnbu.student.mvp.core.exercise.ExerciseVersionConflictException
 import edu.bnbu.student.mvp.core.exercise.StartExerciseCommand
 import edu.bnbu.student.mvp.core.exercise.requiresExerciseDescription
@@ -30,6 +30,7 @@ import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.ProofMediaType
 import edu.bnbu.student.mvp.core.network.UploadProgress
+import edu.bnbu.student.mvp.core.network.v1.V1HttpException
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CoroutineDispatcher
@@ -39,18 +40,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-internal sealed interface LocationStatus {
-    data object Unknown : LocationStatus
-    data object Acquiring : LocationStatus
-    data class Acquired(val latitude: Double, val longitude: Double) : LocationStatus
-    data object Unavailable : LocationStatus
-}
 
 internal class ExerciseSessionController(
     private val localStore: AndroidAppLocalStore,
@@ -61,7 +52,8 @@ internal class ExerciseSessionController(
     private val exerciseGatewayProvider: (() -> ExerciseGateway?)? = null,
     private val mediaUploadCoordinatorProvider: (() -> SessionMediaUploadCoordinator?)? = null,
     private val videoCompressor: SessionVideoCompressor? = null,
-    private val mediaPollDelayMillis: Long = DefaultMediaPollDelayMillis
+    private val mediaPollDelayMillis: Long = DefaultMediaPollDelayMillis,
+    private val testToolsEnabled: Boolean = false
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val machine = ExerciseSessionMachine(clock)
@@ -70,14 +62,9 @@ internal class ExerciseSessionController(
     private var boundAccountId: String? = null
     private var bindingGeneration = 0L
     private var persistenceJob: Job? = null
-    private var locationRequestGeneration = 0L
-    private var locationCancellationSource: CancellationTokenSource? = null
     private var serverCoordinator = resolveExerciseGateway()?.let(::ExerciseSessionCoordinator)
     private var serverMediaUploadCoordinator = mediaUploadCoordinatorProvider?.invoke()
     private var automaticFinishSessionId: String? = null
-    private val _locationStatus = MutableStateFlow<LocationStatus>(LocationStatus.Unknown)
-
-    val locationStatus: StateFlow<LocationStatus> = _locationStatus.asStateFlow()
     var state: ExerciseSessionState by mutableStateOf(ExerciseSessionState.Idle)
         private set
 
@@ -96,8 +83,22 @@ internal class ExerciseSessionController(
     var message: String? by mutableStateOf(null)
         private set
 
+    var userFacingError: UserFacingError? by mutableStateOf(null)
+        private set
+
+    var existingRemoteSession: ExistingRemoteExerciseSession? by mutableStateOf(null)
+        private set
+
     var shouldShowHealthReminder: Boolean by mutableStateOf(false)
         private set
+
+    var hasTestDurationAdvanceCapability: Boolean by mutableStateOf(false)
+        private set
+
+    val isTestDurationToolVisible: Boolean
+        get() = testToolsEnabled &&
+            hasTestDurationAdvanceCapability &&
+            serverCoordinator != null
 
     /**
      * Binds the controller to an active account.  A pending contact-activation
@@ -117,10 +118,12 @@ internal class ExerciseSessionController(
             isRestoring = false
             isSessionBusy = false
             shouldShowHealthReminder = false
+            hasTestDurationAdvanceCapability = false
+            existingRemoteSession = null
+            userFacingError = null
             serverCoordinator = null
             serverMediaUploadCoordinator = null
             automaticFinishSessionId = null
-            resetLocationStatus()
             if (previousAccountId != null && !preserveExistingDrafts) {
                 scope.launch(ioDispatcher) {
                     runCatching { mediaStore.clearAccount(previousAccountId) }
@@ -146,10 +149,22 @@ internal class ExerciseSessionController(
         val generation = bindingGeneration
         state = ExerciseSessionState.Idle
         drafts = emptyList()
+        existingRemoteSession = null
+        userFacingError = null
+        hasTestDurationAdvanceCapability = false
         isRestoring = true
         isSessionBusy = false
-        resetLocationStatus()
         scope.launch {
+            if (testToolsEnabled) {
+                val capabilities = withContext(ioDispatcher) {
+                    runCatching {
+                        (resolvedGateway as? ExerciseTestToolsGateway)?.capabilities().orEmpty()
+                    }.getOrDefault(emptySet())
+                }
+                if (generation != bindingGeneration || boundAccountId != normalized) return@launch
+                hasTestDurationAdvanceCapability =
+                    ClientTestToolsPolicy.TestDurationAdvanceCapability in capabilities
+            }
             if (previousAccountId != null && previousAccountId != normalized) {
                 withContext(ioDispatcher) {
                     runCatching { mediaStore.clearAccount(previousAccountId) }
@@ -159,6 +174,7 @@ internal class ExerciseSessionController(
             if (generation != bindingGeneration || boundAccountId != normalized) return@launch
             val normalizedTransition = machine.autoFinishIfNeeded(restored.state)
             state = normalizedTransition.state
+            var remoteConflictDetected = false
             val coordinator = serverCoordinator
             if (coordinator != null) {
                 val localMirror = state.toContractMirrorOrNull(
@@ -169,6 +185,7 @@ internal class ExerciseSessionController(
                     coordinator.restore(localMirror)
                 }) {
                     is ExerciseSessionOperationResult.Success -> {
+                        existingRemoteSession = null
                         val mapped = runCatching {
                             serverResult.session?.toLocalState(clock.nowEpochMillis())
                                 ?: ExerciseSessionState.Idle
@@ -176,12 +193,18 @@ internal class ExerciseSessionController(
                         if (mapped.isSuccess) {
                             state = mapped.getOrThrow()
                         } else {
-                            message = serverStateFailureMessage()
+                            presentProtocolMismatch()
                         }
                     }
 
                     is ExerciseSessionOperationResult.Failed -> {
-                        message = recoverableServerFailureMessage()
+                        presentUserFacingError(serverResult.cause)
+                    }
+
+                    is ExerciseSessionOperationResult.AlreadyActive -> {
+                        state = ExerciseSessionState.Idle
+                        existingRemoteSession = serverResult.existingRemoteSession
+                        remoteConflictDetected = true
                     }
 
                     is ExerciseSessionOperationResult.Rejected -> Unit
@@ -197,7 +220,7 @@ internal class ExerciseSessionController(
             if (restoredDrafts.isFailure && restored.status != LocalStoreReadStatus.Discarded) {
                 message = interfaceText("媒体草稿恢复失败，原始文件未被修改。", "Could not restore media drafts. Original files were not changed.")
             }
-            if (state != restored.state) persistCurrentState()
+            if (!remoteConflictDetected && state != restored.state) persistCurrentState()
             if (restored.status == LocalStoreReadStatus.Discarded) {
                 message = interfaceText("无法恢复旧运动会话，已安全清理本地状态。", "Could not restore the previous exercise session. Local state was safely cleared.")
             }
@@ -206,6 +229,7 @@ internal class ExerciseSessionController(
     }
 
     fun start(details: ExerciseSessionDetails) {
+        if (existingRemoteSession != null) return
         val coordinator = serverCoordinator
         if (coordinator != null) {
             runServerSessionOperation {
@@ -231,63 +255,16 @@ internal class ExerciseSessionController(
     fun pause() {
         val coordinator = serverCoordinator
         if (coordinator != null) {
-            runServerSessionOperation(coordinator::pause)
+            runServerSessionOperation(operation = coordinator::pause)
             return
         }
         applyTransition(machine.pause(state))
     }
 
-    /** Attempts to obtain a one-off location for the active exercise session. */
-    fun requestLocation(context: Context) {
-        val hasFineLocation = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-        val hasCoarseLocation = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_COARSE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-        if (!hasFineLocation && !hasCoarseLocation) {
-            _locationStatus.value = LocationStatus.Unavailable
-            return
-        }
-
-        locationCancellationSource?.cancel()
-        val requestGeneration = ++locationRequestGeneration
-        val cancellationSource = CancellationTokenSource()
-        locationCancellationSource = cancellationSource
-        _locationStatus.value = LocationStatus.Acquiring
-
-        runCatching {
-            LocationServices.getFusedLocationProviderClient(context.applicationContext)
-                .getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cancellationSource.token)
-                .addOnSuccessListener { location ->
-                    if (requestGeneration != locationRequestGeneration) return@addOnSuccessListener
-                    _locationStatus.value = location?.let {
-                        LocationStatus.Acquired(it.latitude, it.longitude)
-                    } ?: LocationStatus.Unavailable
-                }
-                .addOnFailureListener {
-                    if (requestGeneration == locationRequestGeneration) {
-                        _locationStatus.value = LocationStatus.Unavailable
-                    }
-                }
-                .addOnCanceledListener {
-                    if (requestGeneration == locationRequestGeneration) {
-                        _locationStatus.value = LocationStatus.Unavailable
-                    }
-                }
-        }.onFailure {
-            if (requestGeneration == locationRequestGeneration) {
-                _locationStatus.value = LocationStatus.Unavailable
-            }
-        }
-    }
-
     fun resume() {
         val coordinator = serverCoordinator
         if (coordinator != null) {
-            runServerSessionOperation(coordinator::resume)
+            runServerSessionOperation(operation = coordinator::resume)
             return
         }
         applyTransition(machine.resume(state))
@@ -298,7 +275,11 @@ internal class ExerciseSessionController(
         if (coordinator != null) {
             val duration = state.effectiveDurationMillis(clock.nowEpochMillis())
             runServerSessionOperation(
-                if (duration < MinimumValidExerciseMillis) coordinator::cancel else coordinator::finish
+                operation = if (duration < MinimumValidExerciseMillis) {
+                    coordinator::cancel
+                } else {
+                    coordinator::finish
+                }
             )
             return
         }
@@ -348,42 +329,50 @@ internal class ExerciseSessionController(
     fun completeCapture(
         target: SessionCaptureTarget,
         success: Boolean,
-        durationSeconds: Double? = null
+        durationSeconds: Double? = null,
+        onFinished: () -> Unit = {}
     ) {
-        if (isMediaBusy) return
+        if (isMediaBusy) {
+            onFinished()
+            return
+        }
         isMediaBusy = true
         scope.launch {
-            val result = withContext(ioDispatcher) {
-                if (success && target.type == ProofMediaType.Image) {
-                    SessionMediaEditor.normalizeCapturedPhoto(target.file).getOrThrow()
-                }
-                val resolvedDuration = durationSeconds ?: if (success && target.type == ProofMediaType.Video) {
-                    SessionMediaEditor.readVideoDurationSeconds(target.file)
-                } else {
-                    null
-                }
-                mediaStore.completeCapture(target, success, resolvedDuration)
-            }
-            refreshDrafts()
-            isMediaBusy = false
-            message = result.fold(
-                onSuccess = {
-                    if (it.type == ProofMediaType.Image) interfaceText("现场照片已保存为本地草稿。", "On-site photo saved as a local draft.") else interfaceText("现场视频已保存为本地草稿。", "On-site video saved as a local draft.")
-                },
-                onFailure = {
-                    if (!success) {
-                        null
-                    } else if (target.type == ProofMediaType.Image) {
-                        interfaceText("现场照片保存失败，请重试。", "Could not save the on-site photo. Try again.")
-                    } else {
-                        interfaceText("现场视频保存失败，请重试。", "Could not save the on-site video. Try again.")
+            try {
+                val result = withContext(ioDispatcher) {
+                    if (success && target.type == ProofMediaType.Image) {
+                        SessionMediaEditor.normalizeCapturedPhoto(target.file).getOrThrow()
                     }
+                    val resolvedDuration = durationSeconds ?: if (success && target.type == ProofMediaType.Video) {
+                        SessionMediaEditor.readVideoDurationSeconds(target.file)
+                    } else {
+                        null
+                    }
+                    mediaStore.completeCapture(target, success, resolvedDuration)
                 }
-            )
+                refreshDrafts()
+                message = result.fold(
+                    onSuccess = {
+                        if (it.type == ProofMediaType.Image) interfaceText("现场照片已确认保留。", "On-site photo confirmed and retained.") else interfaceText("现场视频已确认保留。", "On-site video confirmed and retained.")
+                    },
+                    onFailure = {
+                        if (!success) {
+                            null
+                        } else if (target.type == ProofMediaType.Image) {
+                            interfaceText("现场照片保存失败，请重试。", "Could not save the on-site photo. Try again.")
+                        } else {
+                            interfaceText("现场视频保存失败，请重试。", "Could not save the on-site video. Try again.")
+                        }
+                    }
+                )
+            } finally {
+                isMediaBusy = false
+                onFinished()
+            }
         }
     }
 
-    /** Saves the raw camera result first, then replaces it only after verified local compression. */
+    /** Retains only explicitly confirmed video, then creates its verified upload copy. */
     fun completeVideoCapture(
         target: SessionCaptureTarget,
         success: Boolean,
@@ -397,26 +386,39 @@ internal class ExerciseSessionController(
         isMediaBusy = true
         scope.launch {
             try {
-                val result = runCatching {
-                    if (!success) {
-                        withContext(ioDispatcher) { mediaStore.completeCapture(target, false) }.getOrThrow()
-                    }
-                    val raw = withContext(ioDispatcher) {
+                val result = processVideoCaptureRetention(
+                    success = success,
+                    discardPending = {
+                        withContext(ioDispatcher) { mediaStore.cancelCapture(target) }
+                    },
+                    retainPending = {
+                        withContext(ioDispatcher) {
                         mediaStore.completeCapture(
                             target = target,
                             success = true,
                             durationSeconds = recordedDurationSeconds.coerceAtMost(15.0)
                         )
-                    }.getOrThrow()
-                    compressVideoDraft(raw.id).getOrThrow()
-                }
+                        }.getOrThrow().id
+                    },
+                    compressRetained = { draftId ->
+                        compressVideoDraft(draftId).getOrThrow()
+                    }
+                )
                 refreshDrafts()
+                if (result.getOrNull() == VideoCaptureRetentionResult.DiscardedPending) {
+                    return@launch
+                }
                 message = result.fold(
-                    onSuccess = { interfaceText("现场视频已压缩并保存为本地草稿。", "On-site video compressed and saved as a local draft.") },
+                    onSuccess = {
+                        interfaceText(
+                            "现场视频已压缩并保存为本地草稿。",
+                            "On-site video compressed and saved as a local draft."
+                        )
+                    },
                     onFailure = {
-                        if (!success) null else interfaceText(
-                            "视频压缩失败，原视频已保留。请重试压缩或重拍；未压缩视频不会上传。",
-                            "Video compression failed and the original was kept. Retry compression or record again; uncompressed video is never uploaded."
+                        interfaceText(
+                            "视频压缩失败，已确认的原视频仍会保留且不能排除。请重试处理；未压缩视频不会上传。",
+                            "Video compression failed. The confirmed original remains retained and cannot be excluded. Retry processing; uncompressed video is never uploaded."
                         )
                     }
                 )
@@ -466,283 +468,6 @@ internal class ExerciseSessionController(
             }.getOrThrow()
         }.onFailure {
             withContext(ioDispatcher) { runCatching { mediaStore.cancelFileUpdate(target) } }
-        }
-    }
-
-    fun removeDraft(draftId: String) {
-        val key = boundAccountId?.let { currentDraftKey(it, state) } ?: return
-        if (isMediaBusy) {
-            message = interfaceText("正在处理上一项媒体文件", "The previous media file is still being processed.")
-            return
-        }
-        isMediaBusy = true
-        scope.launch {
-            val removed = withContext(ioDispatcher) {
-                runCatching { mediaStore.remove(key, draftId) }.getOrDefault(false)
-            }
-            refreshDrafts()
-            isMediaBusy = false
-            if (!removed) {
-                message = interfaceText("删除媒体草稿失败，请稍后重试。", "Could not delete the media draft. Try again later.")
-            }
-        }
-    }
-
-    /** Opens a safe staging target for a replacement camera capture. */
-    fun prepareReplacementCapture(
-        draftId: String,
-        onPrepared: (Result<SessionMediaFileUpdateTarget>) -> Unit
-    ) {
-        val key = boundAccountId?.let { currentDraftKey(it, state) }
-        if (key == null) {
-            onPrepared(Result.failure(IllegalStateException(interfaceText("当前没有可替换的媒体草稿", "There is no media draft available to replace."))))
-            return
-        }
-        if (isMediaBusy) {
-            onPrepared(Result.failure(IllegalStateException(interfaceText("正在处理上一项媒体文件", "The previous media file is still being processed."))))
-            return
-        }
-        isMediaBusy = true
-        scope.launch {
-            val result = withContext(ioDispatcher) { mediaStore.prepareReplacement(key, draftId) }
-            isMediaBusy = false
-            onPrepared(result)
-        }
-    }
-
-    /** Completes a replacement only after the system camera has produced a valid new file. */
-    fun completeReplacementCapture(
-        target: SessionMediaFileUpdateTarget,
-        success: Boolean
-    ) {
-        if (isMediaBusy) return
-        isMediaBusy = true
-        scope.launch {
-            val result = withContext(ioDispatcher) {
-                if (!success) {
-                    runCatching { mediaStore.cancelFileUpdate(target) }
-                    Result.failure<SessionMediaDraft>(IllegalStateException("Capture cancelled"))
-                } else {
-                    if (target.type == ProofMediaType.Image) {
-                        SessionMediaEditor.normalizeCapturedPhoto(target.file).getOrThrow()
-                    }
-                    val duration = if (target.type == ProofMediaType.Video) {
-                        SessionMediaEditor.readVideoDurationSeconds(target.file)
-                    } else {
-                        null
-                    }
-                    mediaStore.commitFileUpdate(target, duration)
-                }
-            }
-            refreshDrafts()
-            isMediaBusy = false
-            message = result.fold(
-                onSuccess = {
-                    if (it.type == ProofMediaType.Image) {
-                        interfaceText("现场照片已替换。", "On-site photo replaced.")
-                    } else {
-                        interfaceText("现场视频已替换。", "On-site video replaced.")
-                    }
-                },
-                onFailure = {
-                    if (success) interfaceText("替换媒体失败，已保留原内容。", "Could not replace the media. The original was kept.") else null
-                }
-            )
-        }
-    }
-
-    fun completeReplacementVideoCapture(
-        target: SessionMediaFileUpdateTarget,
-        success: Boolean,
-        recordedDurationSeconds: Double,
-        onFinished: () -> Unit = {}
-    ) {
-        if (isMediaBusy) {
-            onFinished()
-            return
-        }
-        isMediaBusy = true
-        scope.launch {
-            try {
-                val result = runCatching {
-                    if (!success) {
-                        withContext(ioDispatcher) { mediaStore.cancelFileUpdate(target) }
-                        error("Capture cancelled")
-                    }
-                    val raw = withContext(ioDispatcher) {
-                        mediaStore.commitFileUpdate(
-                            target = target,
-                            durationSeconds = recordedDurationSeconds.coerceAtMost(15.0),
-                            compressedForUpload = false
-                        )
-                    }.getOrThrow()
-                    compressVideoDraft(raw.id).getOrThrow()
-                }
-                refreshDrafts()
-                message = result.fold(
-                    onSuccess = { interfaceText("现场视频已重新录制并压缩。", "On-site video re-recorded and compressed.") },
-                    onFailure = {
-                        if (!success) null else interfaceText(
-                            "新视频压缩失败，已保留可重试的原始录像。",
-                            "The new video could not be compressed; its original recording was kept for retry."
-                        )
-                    }
-                )
-            } finally {
-                isMediaBusy = false
-                onFinished()
-            }
-        }
-    }
-
-    /** Saves a photo edit to a staging file and commits it only after processing succeeds. */
-    fun savePhotoEdit(
-        draftId: String,
-        cropAspectRatio: Float?,
-        rotationDegrees: Int,
-        onCompleted: (Result<SessionMediaDraft>) -> Unit = {}
-    ) {
-        val key = boundAccountId?.let { currentDraftKey(it, state) }
-        if (key == null) {
-            onCompleted(Result.failure(IllegalStateException(interfaceText("当前没有可编辑的媒体草稿", "There is no media draft available to edit."))))
-            return
-        }
-        if (isMediaBusy) {
-            onCompleted(Result.failure(IllegalStateException(interfaceText("正在处理上一项媒体文件", "The previous media file is still being processed."))))
-            return
-        }
-        isMediaBusy = true
-        scope.launch {
-            val result = withContext(ioDispatcher) {
-                mediaStore.prepareEdit(key, draftId).fold(
-                    onSuccess = { target ->
-                        SessionMediaEditor.saveEditedPhoto(
-                            source = target.sourceFile,
-                            destination = target.file,
-                            cropAspectRatio = cropAspectRatio,
-                            rotationDegrees = rotationDegrees
-                        ).fold(
-                            onSuccess = { mediaStore.commitFileUpdate(target) },
-                            onFailure = { error ->
-                                runCatching { mediaStore.cancelFileUpdate(target) }
-                                Result.failure(error)
-                            }
-                        )
-                    },
-                    onFailure = { Result.failure(it) }
-                )
-            }
-            refreshDrafts()
-            isMediaBusy = false
-            message = result.fold(
-                onSuccess = { interfaceText("照片编辑已保存。", "Photo edit saved.") },
-                onFailure = { interfaceText("照片编辑失败，已保留原图。", "Photo edit failed. The original was kept.") }
-            )
-            onCompleted(result)
-        }
-    }
-
-    /** Saves a trimmed MP4 to a staging file and retains the original on any failure. */
-    fun trimVideo(
-        draftId: String,
-        startMillis: Long,
-        endMillis: Long,
-        onCompleted: (Result<SessionMediaDraft>) -> Unit = {}
-    ) {
-        val key = boundAccountId?.let { currentDraftKey(it, state) }
-        if (key == null) {
-            onCompleted(Result.failure(IllegalStateException(interfaceText("当前没有可编辑的媒体草稿", "There is no media draft available to edit."))))
-            return
-        }
-        if (isMediaBusy) {
-            onCompleted(Result.failure(IllegalStateException(interfaceText("正在处理上一项媒体文件", "The previous media file is still being processed."))))
-            return
-        }
-        isMediaBusy = true
-        scope.launch {
-            val result = withContext(ioDispatcher) {
-                mediaStore.prepareEdit(key, draftId).fold(
-                    onSuccess = { target ->
-                        if (target.type != ProofMediaType.Video) {
-                            mediaStore.cancelFileUpdate(target)
-                            Result.failure(
-                                IllegalArgumentException(
-                                    interfaceText("所选素材不是视频。", "The selected media is not a video.")
-                                )
-                            )
-                        } else {
-                            SessionMediaEditor.trimVideo(
-                                source = target.sourceFile,
-                                destination = target.file,
-                                startMillis = startMillis,
-                                endMillis = endMillis
-                            ).fold(
-                                onSuccess = {
-                                    mediaStore.commitFileUpdate(
-                                        target,
-                                        SessionMediaEditor.readVideoDurationSeconds(target.file)
-                                    )
-                                },
-                                onFailure = { error ->
-                                    runCatching { mediaStore.cancelFileUpdate(target) }
-                                    Result.failure(error)
-                                }
-                            )
-                        }
-                    },
-                    onFailure = { Result.failure(it) }
-                )
-            }
-            refreshDrafts()
-            isMediaBusy = false
-            message = result.fold(
-                onSuccess = { interfaceText("视频裁剪已保存。", "Video trim saved.") },
-                onFailure = { interfaceText("视频裁剪失败，已保留原视频。", "Video trim failed. The original was kept.") }
-            )
-            onCompleted(result)
-        }
-    }
-
-    fun setVideoCover(
-        draftId: String,
-        timestampMillis: Long,
-        onCompleted: (Boolean) -> Unit = {}
-    ) {
-        val key = boundAccountId?.let { currentDraftKey(it, state) } ?: run {
-            onCompleted(false)
-            return
-        }
-        if (isMediaBusy) {
-            onCompleted(false)
-            return
-        }
-        isMediaBusy = true
-        scope.launch {
-            val updated = withContext(ioDispatcher) {
-                runCatching { mediaStore.setVideoCover(key, draftId, timestampMillis) }.getOrDefault(false)
-            }
-            if (updated) refreshDrafts()
-            isMediaBusy = false
-            if (!updated) {
-                message = interfaceText("保存视频封面失败，请稍后重试。", "Could not save the video cover. Try again later.")
-            }
-            onCompleted(updated)
-        }
-    }
-
-    fun reorderPhotos(orderedDraftIds: List<String>) {
-        val key = boundAccountId?.let { currentDraftKey(it, state) } ?: return
-        if (isMediaBusy) return
-        isMediaBusy = true
-        scope.launch {
-            val updated = withContext(ioDispatcher) {
-                runCatching { mediaStore.reorderImages(key, orderedDraftIds) }.getOrDefault(false)
-            }
-            if (updated) refreshDrafts()
-            isMediaBusy = false
-            if (!updated) {
-                message = interfaceText("调整照片顺序失败，请稍后重试。", "Could not reorder photos. Try again later.")
-            }
         }
     }
 
@@ -942,6 +667,7 @@ internal class ExerciseSessionController(
         if (state !is ExerciseSessionState.Submitted) return
         state = ExerciseSessionState.Idle
         message = null
+        userFacingError = null
     }
 
     fun abandon() {
@@ -957,7 +683,6 @@ internal class ExerciseSessionController(
         val key = accountId?.let { currentDraftKey(it, state) }
         state = ExerciseSessionState.Idle
         drafts = emptyList()
-        resetLocationStatus()
         if (accountId != null) {
             queuePersistence(accountId, ExerciseSessionState.Idle)
         }
@@ -967,29 +692,41 @@ internal class ExerciseSessionController(
         message = completionMessage
     }
 
-    fun debugAddActiveDuration(durationMillis: Long) {
-        if (durationMillis <= 0L) return
-        state = when (val current = state) {
-            is ExerciseSessionState.Active -> current.copy(
-                startedAtEpochMillis = current.startedAtEpochMillis - durationMillis,
-                activeSegmentStartedAtEpochMillis = current.activeSegmentStartedAtEpochMillis -
-                    durationMillis
-            )
-
-            is ExerciseSessionState.Paused -> current.copy(
-                startedAtEpochMillis = current.startedAtEpochMillis - durationMillis,
-                accumulatedActiveMillis = (current.accumulatedActiveMillis + durationMillis)
-                    .coerceAtMost(MaximumExerciseMillis - 1L)
-            )
-
-            else -> current
+    /** Formal student action; the local timer is never edited directly. */
+    fun addSixtyMinutes() {
+        val coordinator = serverCoordinator
+        val current = coordinator?.state?.session?.takeIf {
+            it.phase == ExerciseSessionPhase.ACTIVE || it.phase == ExerciseSessionPhase.PAUSED
         }
-        persistCurrentState()
-        autoFinishIfNeeded()
+        if (coordinator == null || current == null) {
+            message = interfaceText(
+                "当前没有可增加时长的运动。",
+                "There is no current exercise to extend."
+            )
+            return
+        }
+        runServerSessionOperation(
+            successMessage = interfaceText(
+                "已增加 60 分钟，并刷新服务端运动状态。",
+                "60 minutes were added and the authoritative session was refreshed."
+            )
+        ) {
+            coordinator.addSixtyMinutes()
+        }
     }
 
     fun consumeMessage() {
         message = null
+    }
+
+    fun consumeUserFacingError() {
+        userFacingError = null
+    }
+
+    fun refreshExistingRemoteSession() {
+        val coordinator = serverCoordinator ?: return
+        if (existingRemoteSession == null || isSessionBusy) return
+        runServerSessionOperation(operation = { coordinator.restore(localMirror = null) })
     }
 
     fun dismissHealthReminder() {
@@ -999,11 +736,11 @@ internal class ExerciseSessionController(
     }
 
     fun destroy() {
-        locationCancellationSource?.cancel()
         scope.cancel()
     }
 
     private fun runServerSessionOperation(
+        successMessage: String? = null,
         operation: suspend () -> ExerciseSessionOperationResult
     ) {
         if (isSessionBusy) {
@@ -1023,11 +760,13 @@ internal class ExerciseSessionController(
             return
         }
         isSessionBusy = true
+        userFacingError = null
         scope.launch {
             val result = withContext(ioDispatcher) { operation() }
             if (generation != bindingGeneration || boundAccountId != accountId) return@launch
             when (result) {
                 is ExerciseSessionOperationResult.Success -> {
+                    existingRemoteSession = null
                     val mapped = runCatching {
                         result.session?.toLocalState(clock.nowEpochMillis())
                             ?: ExerciseSessionState.Idle
@@ -1039,8 +778,9 @@ internal class ExerciseSessionController(
                         }
                         persistCurrentState()
                         refreshDraftsAsync()
+                        successMessage?.let { message = it }
                     } else {
-                        message = serverStateFailureMessage()
+                        presentProtocolMismatch()
                     }
                 }
 
@@ -1064,15 +804,19 @@ internal class ExerciseSessionController(
                             refreshDraftsAsync()
                         }
                     }
-                    message = recoverableServerFailureMessage()
+                    presentUserFacingError(result.cause)
+                }
+
+                is ExerciseSessionOperationResult.AlreadyActive -> {
+                    state = ExerciseSessionState.Idle
+                    existingRemoteSession = result.existingRemoteSession
+                    message = null
+                    userFacingError = null
                 }
 
                 is ExerciseSessionOperationResult.Rejected -> {
                     if (result.reason == ExerciseOperationRejection.INVALID_STATE) {
-                        message = interfaceText(
-                            "服务端运动状态已变化，请重新进入页面后再试。",
-                            "The server exercise state changed. Reopen this page and try again."
-                        )
+                        presentUserFacingError(ExerciseVersionConflictException())
                     }
                 }
             }
@@ -1080,15 +824,23 @@ internal class ExerciseSessionController(
         }
     }
 
-    private fun recoverableServerFailureMessage(): String = interfaceText(
-        "网络请求失败，已保留最后确认的运动状态和本地媒体草稿，请重试。",
-        "The request failed. The last confirmed exercise state and local media drafts were retained. Try again."
-    )
+    private fun presentUserFacingError(error: Throwable) {
+        val mapped = ClientErrorMapper.map(error, ClientErrorContext.SESSION)
+        message = null
+        userFacingError = mapped
+        SafeClientLogger.log(
+            error = mapped,
+            context = ClientErrorContext.SESSION,
+            httpStatus = (error as? V1HttpException)?.statusCode
+        )
+    }
 
-    private fun serverStateFailureMessage(): String = interfaceText(
-        "服务端返回的运动状态无法识别，已保留本地状态。",
-        "The server returned an invalid exercise state. The local state was retained."
-    )
+    private fun presentProtocolMismatch() {
+        val mapped = ClientErrorMapper.protocolMismatch(ClientErrorContext.SESSION)
+        message = null
+        userFacingError = mapped
+        SafeClientLogger.log(mapped, ClientErrorContext.SESSION)
+    }
 
     private fun resolveExerciseGateway(): ExerciseGateway? =
         exerciseGatewayProvider?.invoke() ?: exerciseGateway
@@ -1133,13 +885,6 @@ internal class ExerciseSessionController(
         scope.launch { refreshDrafts() }
     }
 
-    private fun resetLocationStatus() {
-        locationRequestGeneration += 1
-        locationCancellationSource?.cancel()
-        locationCancellationSource = null
-        _locationStatus.value = LocationStatus.Unknown
-    }
-
     private suspend fun refreshDrafts() {
         val accountId = boundAccountId ?: return
         val key = currentDraftKey(accountId, state)
@@ -1167,6 +912,35 @@ internal class ExerciseSessionController(
         } ?: return null
         return SessionDraftKey(accountId = accountId, sessionId = sessionId)
     }
+}
+
+internal enum class VideoCaptureRetentionResult {
+    DiscardedPending,
+    RetainedAndCompressed
+}
+
+/**
+ * Encodes the confirmation boundary independently from camera UI callbacks.
+ * A rejected capture can only clear its pending target; it must never enter
+ * retained evidence or invoke compression.
+ */
+internal suspend fun processVideoCaptureRetention(
+    success: Boolean,
+    discardPending: suspend () -> Unit,
+    retainPending: suspend () -> String,
+    compressRetained: suspend (String) -> Unit
+): Result<VideoCaptureRetentionResult> = runCatching {
+    if (!success) {
+        discardPending()
+        return@runCatching VideoCaptureRetentionResult.DiscardedPending
+    }
+    val retainedDraftId = retainPending()
+    compressRetained(retainedDraftId)
+    VideoCaptureRetentionResult.RetainedAndCompressed
+}
+
+internal fun exerciseSessionRestoreFailureMessage(error: Throwable): String {
+    return ClientErrorMapper.map(error, ClientErrorContext.SESSION).legacySafeText()
 }
 
 private fun ExerciseRecordOperationResult.requireRecordSuccess(action: String) {

@@ -12,15 +12,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,8 +32,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import edu.bnbu.student.mvp.core.data.ApiStudentRepository
+import edu.bnbu.student.mvp.core.designsystem.BNBUFormField
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
@@ -142,13 +144,20 @@ fun HelpCenterScreen(
             )
         }
         item {
-            OutlinedTextField(
+            BNBUFormField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text(interfaceText("搜索帮助内容...", "Search help...")) },
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = interfaceText("搜索", "Search")) },
-                singleLine = true
+                label = interfaceText("搜索帮助内容", "Search help content"),
+                testTag = "help.search",
+                placeholder = interfaceText("搜索帮助内容...", "Search help..."),
+                supportingText = interfaceText(
+                    "按标题、分类或正文搜索",
+                    "Search titles, categories, or content"
+                ),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Search
+                )
             )
         }
         if (isShowingCachedArticles) {

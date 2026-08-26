@@ -5,6 +5,7 @@ import com.google.gson.reflect.TypeToken
 import edu.bnbu.student.mvp.BuildConfig
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentialStore
 import edu.bnbu.student.mvp.core.network.ProgressRequestBody
+import edu.bnbu.student.mvp.core.network.EnduranceScoreResponse
 import edu.bnbu.student.mvp.core.network.UploadProgress
 import edu.bnbu.student.mvp.core.network.v1.generated.AppReleasePolicy
 import edu.bnbu.student.mvp.core.network.v1.generated.ClassSection
@@ -36,6 +37,7 @@ import java.io.File
 import java.io.IOException
 import java.time.Instant
 import java.util.UUID
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
@@ -57,7 +59,8 @@ data class V1StudentWorkspaceSnapshot(
     val scores: List<StudentScore>,
     val notifications: List<Notification>,
     val teachers: Map<String, TeacherProfile> = emptyMap(),
-    val currentSemester: Semester? = null
+    val currentSemester: Semester? = null,
+    val sessionEnrollmentId: String? = null
 )
 
 data class V1UploadedExemptionMedia(
@@ -76,7 +79,10 @@ class V1StudentWorkspaceGateway private constructor(
     private val credentialStore: AuthSessionCredentialStore,
     private val sessionEnrollmentIdProvider: () -> String?,
     private val mutationRegistry: MutationIntentRegistry = MutationIntentRegistry(),
-    private val clock: () -> Instant = Instant::now
+    private val clock: () -> Instant = Instant::now,
+    private val mediaPollDelayMillis: Long = 1_000L,
+    private val maximumMediaPollAttempts: Int = 60,
+    private val pollDelay: suspend (Long) -> Unit = { delay(it) }
 ) {
     private val storageClient = httpClient.newBuilder()
         .followRedirects(false)
@@ -120,7 +126,7 @@ class V1StudentWorkspaceGateway private constructor(
                 pathSegments = listOf("teachers", id)
             )
         }
-        val currentSemester = getOne(
+        val currentSemester = getOptionalOne(
             operationId = "getCurrentSemester",
             path = "semesters/current",
             responseClass = Semester::class.java
@@ -144,7 +150,8 @@ class V1StudentWorkspaceGateway private constructor(
             scores = listAll("listStudentScores", "student-scores"),
             notifications = listAll("listNotifications", "notifications"),
             teachers = teachers,
-            currentSemester = currentSemester
+            currentSemester = currentSemester,
+            sessionEnrollmentId = currentSessionEnrollmentId()
         )
     }
 
@@ -295,7 +302,8 @@ class V1StudentWorkspaceGateway private constructor(
             body = body
         ),
         responseClass = Feedback::class.java,
-        expectedStatus = 201
+        expectedStatus = 201,
+        stableAcrossProcess = true
     )
 
     suspend fun listExemptions(): List<StructuredExemptionApplication> =
@@ -331,7 +339,8 @@ class V1StudentWorkspaceGateway private constructor(
             )
         ),
         responseClass = ExemptionApplication::class.java,
-        expectedStatus = 201
+        expectedStatus = 201,
+        stableAcrossProcess = true
     )
 
     suspend fun updateExemption(
@@ -389,11 +398,43 @@ class V1StudentWorkspaceGateway private constructor(
         )
     )
 
+    suspend fun previewActivityConversion(
+        timeSeconds: Int,
+        gender: String,
+        gradeLevel: String
+    ): EnduranceScoreResponse {
+        val normalizedGender = gender.trim().uppercase()
+        val normalizedGrade = gradeLevel.trim().uppercase()
+        val response = authorizedClient.executeCancellable<EnduranceScoreResponse>(
+            V1ApiRequest(
+                operationId = "previewActivityConversion",
+                method = V1HttpMethod.POST,
+                relativePath = "activity-conversion-rules/preview",
+                body = mapOf(
+                    "timeSeconds" to timeSeconds,
+                    "gender" to normalizedGender,
+                    "gradeLevel" to normalizedGrade
+                )
+            ),
+            EnduranceScoreResponse::class.java
+        )
+        require(response.statusCode == 200) {
+            "previewActivityConversion returned ${response.statusCode}."
+        }
+        return response.data ?: throw V1ProtocolException(
+            "previewActivityConversion",
+            response.statusCode,
+            response.meta.requestId,
+            "success data is null"
+        )
+    }
+
     suspend fun uploadExemptionMedia(
         enrollmentId: String,
         file: File,
         mimeType: String,
         durationSeconds: Long?,
+        captureSource: String,
         intentId: String,
         onProgress: (UploadProgress) -> Unit = {}
     ): V1UploadedExemptionMedia {
@@ -401,6 +442,7 @@ class V1StudentWorkspaceGateway private constructor(
         val normalizedMime = mimeType.trim().lowercase()
         require(normalizedMime in AllowedExemptionMimeTypes) { "Exemption media MIME type is not allowed." }
         if (normalizedMime.startsWith("video/")) requireNotNull(durationSeconds)
+        require(captureSource == "IN_APP_CAMERA" || captureSource == "FILE_PICKER")
 
         val body = JsonObject().apply {
             addProperty("enrollmentId", enrollmentId)
@@ -408,25 +450,43 @@ class V1StudentWorkspaceGateway private constructor(
             addProperty("mediaType", if (normalizedMime.startsWith("video/")) "VIDEO" else "IMAGE")
             addProperty("mimeType", normalizedMime)
             addProperty("fileSizeBytes", file.length())
-            addProperty("captureSource", "FILE_PICKER")
+            addProperty("captureSource", captureSource)
             durationSeconds?.let { addProperty("durationSeconds", it) }
         }
-        val initiated = mutation(
+        val initiationIntent = acquireMutationIntent(
             operationId = "initiateMediaUpload",
             actionSlot = "exemption-media:$intentId:initiate",
             canonicalInput = "intentId=$intentId\nenrollmentId=$enrollmentId" +
                 "\nmimeType=$normalizedMime\nfileSizeBytes=${file.length()}" +
-                "\ndurationSeconds=${durationSeconds ?: "null"}",
-            request = V1ApiRequest(
+                "\ndurationSeconds=${durationSeconds ?: "null"}\ncaptureSource=$captureSource"
+        )
+        val initiationResponse = authorizedClient.executeCancellable<MediaUploadSession>(
+            V1ApiRequest(
                 operationId = "initiateMediaUpload",
                 method = V1HttpMethod.POST,
                 relativePath = "media-uploads",
                 body = V1ExplicitJsonBody(body)
-            ),
-            responseClass = MediaUploadSession::class.java,
-            expectedStatus = 201
+            ).withMutationIntent(initiationIntent),
+            MediaUploadSession::class.java
         )
-        require(initiated.expiresAt.toInstant().isAfter(clock())) { "Media upload URL is expired." }
+        if (initiationResponse.statusCode != 201) {
+            throw V1ProtocolException(
+                "initiateMediaUpload",
+                initiationResponse.statusCode,
+                initiationResponse.meta.requestId,
+                "unexpected success status"
+            )
+        }
+        val initiated = initiationResponse.data ?: throw V1ProtocolException(
+            "initiateMediaUpload",
+            initiationResponse.statusCode,
+            initiationResponse.meta.requestId,
+            "success data is null"
+        )
+        if (!initiated.expiresAt.toInstant().isAfter(clock())) {
+            mutationRegistry.abandon(initiationIntent)
+            throw IllegalStateException("Media upload URL is expired.")
+        }
         val entityTag = uploadObject(initiated, file, normalizedMime, onProgress)
         val confirmed = mutation(
             operationId = "confirmMediaUpload",
@@ -448,7 +508,51 @@ class V1StudentWorkspaceGateway private constructor(
         require(confirmed.businessPurpose.value == "EXEMPTION_APPLICATION") {
             "Confirmed media has the wrong business purpose."
         }
+        // Initiation, private PUT and confirmation are one logical workflow.
+        // Only now may a future user retry allocate a different upload session.
+        mutationRegistry.complete(initiationIntent)
         return V1UploadedExemptionMedia(confirmed.id, normalizedMime, file.length())
+    }
+
+    suspend fun awaitExemptionMediaAvailable(mediaIds: Set<String>) {
+        require(mediaPollDelayMillis >= 0L) { "Media poll delay must not be negative." }
+        require(maximumMediaPollAttempts > 0) { "Media poll attempts must be positive." }
+        for (mediaId in mediaIds.sorted()) {
+            var lastStatus = "UNKNOWN"
+            var available = false
+            for (attempt in 0 until maximumMediaPollAttempts) {
+                val evidence = getOne(
+                    operationId = "getMediaEvidence",
+                    path = "media/{mediaId}",
+                    responseClass = MediaEvidence::class.java,
+                    pathSegments = listOf("media", mediaId)
+                )
+                require(evidence.id == mediaId) { "Media evidence ID does not match request." }
+                require(evidence.businessPurpose.value == "EXEMPTION_APPLICATION") {
+                    "Media evidence has the wrong business purpose."
+                }
+                lastStatus = evidence.uploadStatus.value
+                when (lastStatus) {
+                    "AVAILABLE" -> {
+                        available = true
+                        break
+                    }
+                    "FAILED", "DELETED" -> throw IOException(
+                        "Exemption media $mediaId cannot become available (status=$lastStatus)."
+                    )
+                }
+                if (attempt == maximumMediaPollAttempts - 1) {
+                    throw IOException(
+                        "Exemption media $mediaId did not become available " +
+                            "after $maximumMediaPollAttempts checks (status=$lastStatus)."
+                    )
+                }
+                pollDelay(mediaPollDelayMillis)
+            }
+            if (!available) {
+                throw IOException("Exemption media $mediaId is not available (status=$lastStatus).")
+            }
+        }
     }
 
     private suspend fun uploadObject(
@@ -486,12 +590,23 @@ class V1StudentWorkspaceGateway private constructor(
         )
     }
 
+    private suspend fun <T> getOptionalOne(
+        operationId: String,
+        path: String,
+        responseClass: Class<T>
+    ): T? = try {
+        getOne(operationId, path, responseClass)
+    } catch (error: V1HttpException) {
+        if (error.statusCode == 404) null else throw error
+    }
+
     private suspend inline fun <reified T> listAll(
         operationId: String,
         path: String,
         query: Map<String, String?> = emptyMap()
     ): List<T> {
         val collected = mutableListOf<T>()
+        val seenCursors = mutableSetOf<String>()
         var cursor: String? = null
         do {
             val requestQuery = query + mapOf("limit" to "100", "cursor" to cursor)
@@ -500,19 +615,24 @@ class V1StudentWorkspaceGateway private constructor(
                 object : TypeToken<List<T>>() {}.type
             )
             require(response.statusCode == 200) { "$operationId returned ${response.statusCode}." }
-            collected += response.data.orEmpty()
-            val pagination = response.meta.pagination?.takeIf { it.isJsonObject }?.asJsonObject
-            val hasMore = pagination?.get("hasMore")?.asBoolean == true
-            cursor = pagination?.get("nextCursor")
-                ?.takeUnless { it.isJsonNull }
-                ?.asString
-                ?.takeIf(String::isNotBlank)
-            if (hasMore && cursor == null) {
+            val data = response.data ?: throw V1ProtocolException(
+                operationId,
+                response.statusCode,
+                response.meta.requestId,
+                "paged success data is null"
+            )
+            collected += data
+            val pagination = response.meta.requireContractPagination(
+                operationId,
+                response.statusCode
+            )
+            cursor = pagination.nextCursor.takeIf { pagination.hasMore }
+            if (cursor != null && !seenCursors.add(cursor)) {
                 throw V1ProtocolException(
                     operationId,
                     response.statusCode,
                     response.meta.requestId,
-                    "pagination says hasMore without nextCursor"
+                    "meta.pagination.nextCursor repeats a previous page"
                 )
             }
         } while (cursor != null)
@@ -526,14 +646,14 @@ class V1StudentWorkspaceGateway private constructor(
         request: V1ApiRequest,
         responseClass: Class<T>,
         expectedStatus: Int,
-        allowNullData: Boolean = false
+        allowNullData: Boolean = false,
+        stableAcrossProcess: Boolean = false
     ): T {
-        val accountScope = authorizedClient.currentAccountScope()
-            ?.takeIf(String::isNotBlank)
-            ?: throw IllegalStateException("Authenticated account scope is unavailable.")
-        val intent = mutationRegistry.acquire(
-            MutationIntentScope(accountScope, operationId, actionSlot),
-            IntentFingerprint.fromCanonicalInput(operationId, canonicalInput)
+        val intent = acquireMutationIntent(
+            operationId,
+            actionSlot,
+            canonicalInput,
+            stableAcrossProcess
         )
         val response = authorizedClient.executeCancellable<T>(request.withMutationIntent(intent), responseClass)
         if (response.statusCode != expectedStatus) {
@@ -559,11 +679,38 @@ class V1StudentWorkspaceGateway private constructor(
         return data
     }
 
+    private fun acquireMutationIntent(
+        operationId: String,
+        actionSlot: String,
+        canonicalInput: String,
+        stableAcrossProcess: Boolean = false
+    ): MutationIntent {
+        val accountScope = authorizedClient.currentAccountScope()
+            ?.takeIf(String::isNotBlank)
+            ?: throw IllegalStateException("Authenticated account scope is unavailable.")
+        val scope = MutationIntentScope(accountScope, operationId, actionSlot)
+        val fingerprint = IntentFingerprint.fromCanonicalInput(operationId, canonicalInput)
+        return if (stableAcrossProcess) {
+            MutationIntent(
+                scope = scope,
+                fingerprint = fingerprint,
+                idempotencyKey = IdempotencyKey.fromGenerated(
+                    "android-intent-${fingerprint.stableValue}"
+                )
+            )
+        } else {
+            mutationRegistry.acquire(scope, fingerprint)
+        }
+    }
+
     companion object {
         fun create(
             credentialStore: AuthSessionCredentialStore,
             baseUrl: String = BuildConfig.BNBU_API_BASE_URL,
-            httpClient: OkHttpClient = edu.bnbu.student.mvp.core.network.SharedHttpClient.instance
+            httpClient: OkHttpClient = edu.bnbu.student.mvp.core.network.SharedHttpClient.instance,
+            mediaPollDelayMillis: Long = 1_000L,
+            maximumMediaPollAttempts: Int = 60,
+            pollDelay: suspend (Long) -> Unit = { delay(it) }
         ): V1StudentWorkspaceGateway {
             val authorized = V1AuthorizedApiClient.create(
                 credentialStore = credentialStore,
@@ -574,7 +721,10 @@ class V1StudentWorkspaceGateway private constructor(
                 authorizedClient = authorized,
                 httpClient = httpClient,
                 credentialStore = credentialStore,
-                sessionEnrollmentIdProvider = { credentialStore.loadAuthSession()?.enrollmentId }
+                sessionEnrollmentIdProvider = { credentialStore.loadAuthSession()?.enrollmentId },
+                mediaPollDelayMillis = mediaPollDelayMillis,
+                maximumMediaPollAttempts = maximumMediaPollAttempts,
+                pollDelay = pollDelay
             )
         }
 

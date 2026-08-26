@@ -25,6 +25,9 @@ internal interface ExerciseGateway {
 
     suspend fun resume(current: ExerciseSessionRecord): ExerciseSessionRecord
 
+    /** Adds one formal 60-minute block through the authoritative Backend. */
+    suspend fun addSixtyMinutes(current: ExerciseSessionRecord): ExerciseSessionRecord
+
     suspend fun finish(current: ExerciseSessionRecord): ExerciseSessionRecord
 
     suspend fun cancel(current: ExerciseSessionRecord): ExerciseSessionRecord
@@ -40,6 +43,29 @@ internal interface ExerciseGateway {
     ): ExerciseRecordDraft
 
     suspend fun submitRecord(command: SubmitExerciseRecordCommand): ExerciseRecord
+}
+
+/** Isolated client adapter for the Backend's guarded test-tool endpoints. */
+internal interface ExerciseTestToolsGateway {
+    /** Returns only stable capability identifiers; 404 and missing identifiers fail closed. */
+    suspend fun capabilities(): Set<String>
+
+    /** Advances exactly 3,600 synthetic seconds; the amount is not caller-controlled. */
+    suspend fun advanceDurationOneHour(sessionId: String, expectedVersion: Long)
+}
+
+/**
+ * Additive boundary for INVALID record attempts.
+ *
+ * A resubmission creates a new DRAFT record from a newly completed Session. It
+ * never re-opens or mutates the preceding INVALID record.
+ */
+internal interface ExerciseRecordResubmissionGateway {
+    suspend fun getRecordAttemptContext(recordId: String): ExerciseRecordAttemptContext
+
+    suspend fun createRecordResubmission(
+        command: CreateExerciseRecordResubmissionCommand
+    ): ExerciseRecordResubmissionDraft
 }
 
 internal enum class ExerciseSessionPhase {
@@ -117,6 +143,33 @@ internal data class ExerciseSessionRecord(
         }
     }
 }
+
+/**
+ * Safe, presentation-only projection for an authoritative active Session that
+ * this device cannot prove it owns. It deliberately omits control context.
+ */
+internal data class ExistingRemoteExerciseSession(
+    val sessionId: String,
+    val phase: ExerciseSessionPhase,
+    val startedAtEpochMillis: Long,
+    val requestId: String
+) {
+    init {
+        require(sessionId.isNotBlank()) { "Session ID cannot be empty." }
+        require(phase == ExerciseSessionPhase.ACTIVE || phase == ExerciseSessionPhase.PAUSED) {
+            "Only an active or paused Session can block another device."
+        }
+        require(startedAtEpochMillis >= 0L) { "Start time cannot be negative." }
+        require(requestId.isNotBlank()) { "Request ID cannot be empty." }
+    }
+}
+
+internal class ExerciseSessionAlreadyActiveOnAnotherDeviceException(
+    val existing: ExistingRemoteExerciseSession
+) : IllegalStateException(
+    "An authoritative exercise session is already active on another device " +
+        "(requestId=${existing.requestId})."
+)
 
 internal const val MinimumValidExerciseDurationSeconds = 60L * 60L
 internal const val MaximumExerciseDurationSeconds = 2L * 60L * 60L

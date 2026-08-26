@@ -39,6 +39,82 @@ class ExerciseSessionCoordinatorTest {
     }
 
     @Test
+    fun matchingPersistedSessionRecoversButAnotherDeviceSessionStaysReadOnly() = runBlocking {
+        val sameDeviceGateway = FakeExerciseGateway()
+        val local = session(ExerciseSessionPhase.ACTIVE, version = 1L, durationSeconds = 600L)
+        val authoritative = session(
+            ExerciseSessionPhase.PAUSED,
+            version = 4L,
+            durationSeconds = 900L
+        )
+        sameDeviceGateway.onGetActive = { mirror ->
+            assertEquals(local.sessionId, mirror?.sessionId)
+            authoritative
+        }
+        val sameDevice = ExerciseSessionCoordinator(sameDeviceGateway)
+
+        val recovered = sameDevice.restore(local)
+
+        assertTrue(recovered is ExerciseSessionOperationResult.Success)
+        assertEquals(authoritative, sameDevice.state.session)
+        assertEquals(null, sameDevice.state.existingRemoteSession)
+
+        val remote = ExistingRemoteExerciseSession(
+            sessionId = "session-on-device-a",
+            phase = ExerciseSessionPhase.ACTIVE,
+            startedAtEpochMillis = 12_345L,
+            requestId = "req-device-b"
+        )
+        val otherDeviceGateway = FakeExerciseGateway()
+        otherDeviceGateway.onGetActive = {
+            throw ExerciseSessionAlreadyActiveOnAnotherDeviceException(remote)
+        }
+        var cancelCalls = 0
+        otherDeviceGateway.onCancel = {
+            cancelCalls += 1
+            error("Another device's Session must never be cancelled")
+        }
+        val otherDevice = ExerciseSessionCoordinator(otherDeviceGateway)
+
+        val conflict = otherDevice.restore(localMirror = null)
+        val cancel = otherDevice.cancel()
+
+        assertTrue(conflict is ExerciseSessionOperationResult.AlreadyActive)
+        assertEquals(null, otherDevice.state.session)
+        assertEquals(remote, otherDevice.state.existingRemoteSession)
+        assertTrue(cancel is ExerciseSessionOperationResult.Rejected)
+        assertEquals(0, cancelCalls)
+    }
+
+    @Test
+    fun deviceBStartConflictNeverCreatesOrTakesOverASecondSession() = runBlocking {
+        val gateway = FakeExerciseGateway()
+        val remote = ExistingRemoteExerciseSession(
+            sessionId = "session-on-device-a",
+            phase = ExerciseSessionPhase.PAUSED,
+            startedAtEpochMillis = 44_000L,
+            requestId = "req-start-conflict"
+        )
+        var startCalls = 0
+        gateway.onGetActive = { null }
+        gateway.onStart = {
+            startCalls += 1
+            throw ExerciseSessionAlreadyActiveOnAnotherDeviceException(remote)
+        }
+        val coordinator = ExerciseSessionCoordinator(gateway)
+        coordinator.restore(localMirror = null)
+
+        val result = coordinator.start(
+            StartExerciseCommand(CreditType.General, sportType = "RUNNING")
+        )
+
+        assertTrue(result is ExerciseSessionOperationResult.AlreadyActive)
+        assertEquals(1, startCalls)
+        assertEquals(null, coordinator.state.session)
+        assertEquals(remote, coordinator.state.existingRemoteSession)
+    }
+
+    @Test
     fun pauseAndResumeUseTheLastServerVersion() = runBlocking {
         val gateway = FakeExerciseGateway()
         val active = session(ExerciseSessionPhase.ACTIVE, version = 7L, durationSeconds = 600L)
@@ -174,6 +250,30 @@ class ExerciseSessionCoordinatorTest {
         assertTrue(retried is ExerciseSessionOperationResult.Success)
         assertEquals(paused, coordinator.state.session)
         assertEquals(2, pauseCalls)
+    }
+
+    @Test
+    fun refreshCurrentReadsAuthoritativeStateAfterOutOfBandTestTool() = runBlocking {
+        val gateway = FakeExerciseGateway()
+        val active = session(ExerciseSessionPhase.ACTIVE, version = 2L, durationSeconds = 600L)
+        val advanced = session(
+            ExerciseSessionPhase.COMPLETED,
+            version = 3L,
+            durationSeconds = 3_600L
+        )
+        gateway.onGetActive = { active }
+        gateway.onGet = { sessionId, localMirror ->
+            assertEquals(active.sessionId, sessionId)
+            assertEquals(active, localMirror)
+            advanced
+        }
+        val coordinator = ExerciseSessionCoordinator(gateway)
+        coordinator.restore(null)
+
+        val refreshed = coordinator.refreshCurrent()
+
+        assertTrue(refreshed is ExerciseSessionOperationResult.Success)
+        assertEquals(advanced, coordinator.state.session)
     }
 
     private fun session(

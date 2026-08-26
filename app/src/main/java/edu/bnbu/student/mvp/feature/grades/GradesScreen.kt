@@ -227,7 +227,11 @@ private data class EnduranceRunDisplay(
 @Composable
 private fun CheckInHoursCard(progress: StudentProgress, rule: SportHourRule) {
     val cs = MaterialTheme.colorScheme
-    val completed = (progress.course + progress.general).coerceAtLeast(0.0)
+    val completed = if (rule.isAvailable) {
+        (progress.course + progress.general).coerceAtLeast(0.0)
+    } else {
+        progress.authoritativeTotalHours?.coerceAtLeast(0.0) ?: 0.0
+    }
     val required = rule.total.coerceAtLeast(0.0)
     val remaining = (required - completed).coerceAtLeast(0.0)
     val isComplete = required > 0.0 && completed >= required

@@ -8,6 +8,7 @@ import edu.bnbu.student.mvp.BuildConfig
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentialStore
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentials
+import edu.bnbu.student.mvp.core.local.EphemeralAuthSessionCredentialStore
 import edu.bnbu.student.mvp.core.network.v1.V1StudentWorkspaceGateway
 import edu.bnbu.student.mvp.core.network.v1.generated.PushDeviceRegistrationRequest
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +50,14 @@ object FcmPushRegistrar {
     suspend fun unregisterCurrentDevice(
         context: Context,
         credentials: AuthSessionCredentials
+    ): Result<Unit> = unregisterCurrentDevice(
+        context,
+        EphemeralAuthSessionCredentialStore(credentials)
+    )
+
+    internal suspend fun unregisterCurrentDevice(
+        context: Context,
+        credentialStore: AuthSessionCredentialStore
     ): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -56,7 +65,7 @@ object FcmPushRegistrar {
                 val deviceId = preferences.getString(PushDeviceIdKey, null)
                     ?.takeIf(String::isNotBlank)
                     ?: return@runCatching
-                V1StudentWorkspaceGateway.create(EphemeralCredentialStore(credentials))
+                V1StudentWorkspaceGateway.create(credentialStore)
                     .unregisterPushDevice(deviceId)
                 preferences.edit().remove(PushDeviceIdKey).apply()
                 Unit
@@ -65,21 +74,4 @@ object FcmPushRegistrar {
 
     private const val PushPreferenceName = "bnbu_push_registration"
     private const val PushDeviceIdKey = "v1_push_device_id"
-
-    /** Keeps logout network work independent from the real store being cleared immediately. */
-    private class EphemeralCredentialStore(initial: AuthSessionCredentials) :
-        AuthSessionCredentialStore {
-        private var session: AuthSessionCredentials? = initial
-
-        override fun saveAuthSession(session: AuthSessionCredentials): Boolean {
-            this.session = session
-            return true
-        }
-
-        override fun loadAuthSession(): AuthSessionCredentials? = session
-
-        override fun clearAuth() {
-            session = null
-        }
-    }
 }

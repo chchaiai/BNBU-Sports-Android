@@ -2,6 +2,107 @@ package edu.bnbu.student.mvp.core.network.v1
 
 import java.security.MessageDigest
 
+internal data class V1ContractPagination(
+    val nextCursor: String?,
+    val hasMore: Boolean,
+    val limit: Int
+)
+
+internal fun V1ResponseMeta.requireContractPagination(
+    operationId: String,
+    statusCode: Int
+): V1ContractPagination {
+    val element = pagination ?: throw V1ProtocolException(
+        operationId,
+        statusCode,
+        requestId,
+        "paged success response is missing meta.pagination"
+    )
+    if (!element.isJsonObject) {
+        throw V1ProtocolException(
+            operationId,
+            statusCode,
+            requestId,
+            "meta.pagination must be an object"
+        )
+    }
+    val value = element.asJsonObject
+    if (value.keySet() != PaginationKeys) {
+        throw V1ProtocolException(
+            operationId,
+            statusCode,
+            requestId,
+            "meta.pagination fields do not match the contract"
+        )
+    }
+
+    val nextElement = value.get("nextCursor")
+    val nextCursor = when {
+        nextElement == null || nextElement.isJsonNull -> null
+        nextElement.isJsonPrimitive && nextElement.asJsonPrimitive.isString ->
+            nextElement.asString.takeIf { it.length <= 2_048 }
+                ?: throw V1ProtocolException(
+                    operationId,
+                    statusCode,
+                    requestId,
+                    "meta.pagination.nextCursor exceeds the contract limit"
+                )
+        else -> throw V1ProtocolException(
+            operationId,
+            statusCode,
+            requestId,
+            "meta.pagination.nextCursor must be a string or null"
+        )
+    }
+    val hasMoreElement = value.get("hasMore")
+    if (
+        hasMoreElement == null ||
+        !hasMoreElement.isJsonPrimitive ||
+        !hasMoreElement.asJsonPrimitive.isBoolean
+    ) {
+        throw V1ProtocolException(
+            operationId,
+            statusCode,
+            requestId,
+            "meta.pagination.hasMore must be a boolean"
+        )
+    }
+    val limitElement = value.get("limit")
+    val limitText = limitElement
+        ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
+        ?.asString
+    val limit = limitText
+        ?.takeIf { it.matches(UnsignedIntegerPattern) }
+        ?.toIntOrNull()
+        ?.takeIf { it in 1..100 }
+        ?: throw V1ProtocolException(
+            operationId,
+            statusCode,
+            requestId,
+            "meta.pagination.limit must be an integer from 1 through 100"
+        )
+    val hasMore = hasMoreElement.asBoolean
+    if (hasMore && nextCursor.isNullOrBlank()) {
+        throw V1ProtocolException(
+            operationId,
+            statusCode,
+            requestId,
+            "meta.pagination.nextCursor is required when hasMore=true"
+        )
+    }
+    return V1ContractPagination(nextCursor, hasMore, limit)
+}
+
+internal fun V1ResponseMeta.validateOptionalContractPagination(
+    operationId: String,
+    statusCode: Int
+) {
+    if (pagination != null) requireContractPagination(operationId, statusCode)
+}
+
+private val PaginationKeys = setOf("nextCursor", "hasMore", "limit")
+private val UnsignedIntegerPattern = Regex("^[0-9]+$")
+
 data class CursorScope private constructor(
     val accountScope: String,
     val operationId: String,

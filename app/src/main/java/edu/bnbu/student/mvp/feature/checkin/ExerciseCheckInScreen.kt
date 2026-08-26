@@ -31,6 +31,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
@@ -55,14 +56,11 @@ import edu.bnbu.student.mvp.core.designsystem.AppleIconButton as IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import edu.bnbu.student.mvp.core.designsystem.AppleOutlinedButton as OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import edu.bnbu.student.mvp.core.designsystem.AppleTextButton as TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -71,6 +69,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -84,15 +84,21 @@ import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
 import coil3.ImageLoader
 import coil3.video.VideoFrameDecoder
-import edu.bnbu.student.mvp.BuildConfig
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
+import edu.bnbu.student.mvp.core.designsystem.BNBUErrorPanel
+import edu.bnbu.student.mvp.core.designsystem.BNBUFormField
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.designsystem.ValidationPanel
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
+import edu.bnbu.student.mvp.core.error.ClientErrorContext
+import edu.bnbu.student.mvp.core.error.ClientErrorMapper
+import edu.bnbu.student.mvp.core.error.SafeClientLogger
+import edu.bnbu.student.mvp.core.error.UserFacingError
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.exercise.MaxOtherSportNameLength
+import edu.bnbu.student.mvp.core.exercise.ExistingRemoteExerciseSession
 import edu.bnbu.student.mvp.core.exercise.requiresExerciseDescription
 import edu.bnbu.student.mvp.core.model.CreditType
 import edu.bnbu.student.mvp.core.model.CheckInTimeWindow
@@ -101,19 +107,18 @@ import edu.bnbu.student.mvp.core.model.ProofMediaType
 import edu.bnbu.student.mvp.core.model.ProofUploadRule
 import edu.bnbu.student.mvp.core.model.hourText
 import edu.bnbu.student.mvp.core.network.UploadProgress
+import edu.bnbu.student.mvp.core.network.v1.V1HttpException
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.core.time.BeijingCheckInZoneId
 import edu.bnbu.student.mvp.core.time.toBeijingBusinessDate
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionController
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionDetails
 import edu.bnbu.student.mvp.feature.checkin.session.ExerciseSessionState
-import edu.bnbu.student.mvp.feature.checkin.session.LocationStatus
 import edu.bnbu.student.mvp.feature.checkin.session.MaxExerciseDescriptionLength
 import edu.bnbu.student.mvp.feature.checkin.session.MaximumExerciseMillis
 import edu.bnbu.student.mvp.feature.checkin.session.MinimumValidExerciseMillis
 import edu.bnbu.student.mvp.feature.checkin.session.SessionCaptureTarget
 import edu.bnbu.student.mvp.feature.checkin.session.SessionDraftKey
-import edu.bnbu.student.mvp.feature.checkin.session.SessionMediaFileUpdateTarget
 import edu.bnbu.student.mvp.feature.checkin.session.SessionMediaDraft
 import edu.bnbu.student.mvp.feature.checkin.session.SubmissionSummary
 import edu.bnbu.student.mvp.feature.checkin.session.courseSportSelection
@@ -179,7 +184,7 @@ internal fun evaluateCheckInReadiness(
     appState.checkInTimeWindow.canStartExercise(now)?.let { reason ->
         return CheckInReadiness(false, reason)
     }
-    if (appState.hasSubmittedCheckInToday()) {
+    if (!appState.isV1ContractBacked && appState.hasSubmittedCheckInToday()) {
         return CheckInReadiness(false, interfaceText("今日已打卡，每天只能提交一次", "You have already checked in today. Only one submission is allowed per day."))
     }
     return CheckInReadiness(canStart = true)
@@ -206,7 +211,8 @@ private fun CreditType.displayLabel(): String = when (this) {
 @Composable
 internal fun ExerciseCheckInRoot(
     appState: StudentAppState,
-    controller: ExerciseSessionController
+    controller: ExerciseSessionController,
+    onReturnHome: () -> Unit = {}
 ) {
     val accountId = appState.workspace.student.id
     var selectedTab by rememberSaveable { mutableStateOf(ExerciseCheckInTab.Exercise) }
@@ -240,7 +246,11 @@ internal fun ExerciseCheckInRoot(
             appState = appState,
             record = selectedRecord,
             imageLoader = imageLoader,
-            onBack = { selectedRecordId = null }
+            onBack = { selectedRecordId = null },
+            onStartResubmission = {
+                selectedRecordId = null
+                selectedTab = ExerciseCheckInTab.Exercise
+            }
         )
         return
     }
@@ -271,7 +281,8 @@ internal fun ExerciseCheckInRoot(
             ExerciseCheckInTab.Exercise -> ExerciseFlowContent(
                 appState = appState,
                 controller = controller,
-                onViewRecords = { selectedTab = ExerciseCheckInTab.Records }
+                onViewRecords = { selectedTab = ExerciseCheckInTab.Records },
+                onReturnHome = onReturnHome
             )
             ExerciseCheckInTab.Records -> {
                 val records = appState.workspace.records.filter {
@@ -317,7 +328,8 @@ internal fun ExerciseCheckInRoot(
 private fun ExerciseFlowContent(
     appState: StudentAppState,
     controller: ExerciseSessionController,
-    onViewRecords: () -> Unit
+    onViewRecords: () -> Unit,
+    onReturnHome: () -> Unit
 ) {
     if (controller.shouldShowHealthReminder) {
         AlertDialog(
@@ -341,6 +353,21 @@ private fun ExerciseFlowContent(
         )
     }
 
+    controller.userFacingError?.let { error ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 28.dp)
+        ) {
+            item {
+                BNBUErrorPanel(
+                    error = error,
+                    onDismiss = controller::consumeUserFacingError
+                )
+            }
+        }
+        return
+    }
+
     if (controller.isRestoring) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -349,6 +376,16 @@ private fun ExerciseFlowContent(
                 Text(interfaceText("正在恢复运动会话…", "Restoring exercise session…"))
             }
         }
+        return
+    }
+
+    controller.existingRemoteSession?.let { existing ->
+        ExistingRemoteSessionPanel(
+            existing = existing,
+            isRefreshing = controller.isSessionBusy,
+            onRefresh = controller::refreshExistingRemoteSession,
+            onReturnHome = onReturnHome
+        )
         return
     }
 
@@ -361,6 +398,115 @@ private fun ExerciseFlowContent(
             state = state,
             onViewRecords = onViewRecords,
             onReturnHome = controller::resetAfterSubmission
+        )
+    }
+}
+
+@Composable
+private fun ExistingRemoteSessionPanel(
+    existing: ExistingRemoteExerciseSession,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    onReturnHome: () -> Unit
+) {
+    val status = when (existing.phase) {
+        edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase.ACTIVE ->
+            interfaceText("进行中", "In progress")
+        edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase.PAUSED ->
+            interfaceText("已暂停", "Paused")
+        else -> interfaceText("未知", "Unknown")
+    }
+    val startedAt = DateFormat.getDateTimeInstance(
+        DateFormat.MEDIUM,
+        DateFormat.SHORT
+    ).format(Date(existing.startedAtEpochMillis))
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            SwissPanel {
+                Text(
+                    text = interfaceText("已有运动正在进行", "An exercise is already in progress"),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = interfaceText(
+                        "后端检测到当前账号已有一条活动 Session，可能由另一台设备创建。此设备不会接管、结束、丢弃或覆盖它。",
+                        "The backend found an active Session for this account, possibly created on another device. This device will not take over, end, discard, or overwrite it."
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(16.dp))
+                SessionConflictFact(interfaceText("开始时间", "Started"), startedAt)
+                SessionConflictFact(interfaceText("当前状态", "Status"), status)
+                SessionConflictFact(
+                    interfaceText("来源设备", "Source device"),
+                    interfaceText("后端未提供安全设备信息", "Not safely provided by the backend")
+                )
+                SessionConflictFact(
+                    interfaceText("诊断编号", "Diagnostic ID"),
+                    existing.requestId
+                )
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    text = interfaceText(
+                        "请回到原设备继续或主动结束运动；也可以稍后刷新状态。若暂时不处理，可先返回首页。",
+                        "Continue or explicitly end the exercise on the original device, or refresh later. You can return home in the meantime."
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = onRefresh,
+                    enabled = !isRefreshing,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (isRefreshing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(interfaceText("刷新 Session 状态", "Refresh Session status"))
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onReturnHome,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(interfaceText("返回首页", "Return home"))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionConflictFact(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.weight(0.36f),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall
+        )
+        Text(
+            text = value,
+            modifier = Modifier.weight(0.64f),
+            style = MaterialTheme.typography.bodyMedium
         )
     }
 }
@@ -425,13 +571,6 @@ private fun ExercisePreparationContent(
         return
     }
 
-    val context = LocalContext.current
-    val locationPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) {
-        // requestLocation also reports Unavailable when the user denied permission.
-        controller.requestLocation(context)
-    }
     var creditTypeName by rememberSaveable { mutableStateOf(CreditType.General.name) }
     var generalSportType by rememberSaveable { mutableStateOf("running") }
     var generalCustomSportName by rememberSaveable { mutableStateOf("") }
@@ -475,12 +614,19 @@ private fun ExercisePreparationContent(
     )
     var currentShanghaiTime by remember { mutableStateOf(ZonedDateTime.now(BeijingCheckInZoneId)) }
     val today = currentShanghaiTime.toLocalDate()
-    val hasSubmittedToday = appState.hasSubmittedCheckInToday(today)
-    val todayRecordHours = appState.workspace.records
-        .asSequence()
-        .filter { it.creditType != CreditType.OrganizationOffset }
-        .filter { it.submittedAt.toBeijingBusinessDate() == today }
-        .sumOf { it.hours }
+    // A device-local date is only a demo observation. The V1 Backend derives
+    // businessDate from the organization timezone and authoritatively rejects
+    // a second daily submission.
+    val hasSubmittedToday = !appState.isV1ContractBacked && appState.hasSubmittedCheckInToday(today)
+    val todayRecordHours = if (appState.isV1ContractBacked) {
+        0.0
+    } else {
+        appState.workspace.records
+            .asSequence()
+            .filter { it.creditType != CreditType.OrganizationOffset }
+            .filter { it.submittedAt.toBeijingBusinessDate() == today }
+            .sumOf { it.hours }
+    }
     val timeWindow = appState.checkInTimeWindow
     val readiness = evaluateCheckInReadiness(appState, currentShanghaiTime)
     val startBlockedReason = readiness.blockedReason
@@ -547,11 +693,6 @@ private fun ExercisePreparationContent(
                 currentShanghaiTime = ZonedDateTime.now(BeijingCheckInZoneId)
                 if (evaluateCheckInReadiness(appState, currentShanghaiTime).canStart) {
                     controller.start(details)
-                    if (hasLocationPermission(context)) {
-                        controller.requestLocation(context)
-                    } else {
-                        locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-                    }
                 }
             },
             modifier = Modifier.align(Alignment.BottomCenter)
@@ -828,14 +969,15 @@ private fun ExerciseSetupCard(
                 sportType == ExerciseSessionDetails.OtherSportType
             ) {
                 Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
+                BNBUFormField(
                     value = customSportName,
                     onValueChange = onCustomSportNameChanged,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(interfaceText("具体运动名称", "Exercise name")) },
-                    supportingText = { Text("${customSportName.length}/32") },
-                    singleLine = true,
-                    shape = MaterialTheme.shapes.medium
+                    label = interfaceText("具体运动名称", "Exercise name"),
+                    testTag = "checkIn.customSportName",
+                    required = true,
+                    placeholder = interfaceText("例如：瑜伽", "For example: yoga"),
+                    supportingText = interfaceText("请填写具体运动项目。", "Enter the specific exercise."),
+                    counter = customSportName.length to 32
                 )
             }
         }
@@ -1086,8 +1228,8 @@ internal fun CheckInTimeWindow.canStartExercise(
             ?: return interfaceText("打卡时间配置无效，请联系管理员", "The check-in time configuration is invalid. Contact an administrator.")
         val configuredDailyEnd = runCatching { LocalTime.parse(dailyEndTime) }.getOrNull()
             ?: return interfaceText("打卡时间配置无效，请联系管理员", "The check-in time configuration is invalid. Contact an administrator.")
-        val dailyStart = maxOf(configuredDailyStart, LocalTime.of(6, 0))
-        val dailyEnd = minOf(configuredDailyEnd, LocalTime.of(22, 0))
+        val dailyStart = configuredDailyStart
+        val dailyEnd = configuredDailyEnd
         if (dailyStart >= dailyEnd) {
             return interfaceText("打卡时间配置无效，请联系管理员", "The check-in time configuration is invalid. Contact an administrator.")
         }
@@ -1155,23 +1297,6 @@ private fun CategoryButton(
     }
 }
 
-private fun hasLocationPermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.ACCESS_FINE_LOCATION
-    ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.ACCESS_COARSE_LOCATION
-    ) == PackageManager.PERMISSION_GRANTED
-
-private fun LocationStatus.displayLabel(): String = when (this) {
-    LocationStatus.Unknown, LocationStatus.Unavailable -> interfaceText("未获取位置", "Location unavailable")
-    LocationStatus.Acquiring -> interfaceText("正在获取位置", "Getting location")
-    is LocationStatus.Acquired -> interfaceText("已获取位置", "Location acquired")
-}
-
-private fun LocationStatus.hasLocation(): Boolean = this is LocationStatus.Acquired
-
 @Composable
 private fun ExerciseRunningContent(
     controller: ExerciseSessionController,
@@ -1180,14 +1305,11 @@ private fun ExerciseRunningContent(
 ) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var showFinishConfirm by remember { mutableStateOf(false) }
-    var replacementDraft by remember { mutableStateOf<SessionMediaDraft?>(null) }
     val duration = state.effectiveDurationMillis(now)
     val limitReached = duration >= MaximumExerciseMillis
     val endsWithoutCredit = duration < MinimumValidExerciseMillis
     val details = state.detailsOrNull() ?: return
     val draftCount = controller.drafts.size
-    val locationStatus by controller.locationStatus.collectAsState()
-
     LaunchedEffect(state) {
         while (state is ExerciseSessionState.Active) {
             now = System.currentTimeMillis()
@@ -1350,38 +1472,29 @@ private fun ExerciseRunningContent(
                 shape = MaterialTheme.shapes.large
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = interfaceText("现场凭证", "On-site proof"),
-                                color = MaterialTheme.colorScheme.onSurface,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = interfaceText("仅保存在本机，结束后再确认提交", "Saved only on this device until you confirm submission after ending."),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        StatusPill(
-                            label = locationStatus.displayLabel(),
-                            color = if (locationStatus.hasLocation()) CheckInGreen else CheckInOrange
+                    Column {
+                        Text(
+                            text = interfaceText("现场凭证", "On-site proof"),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = interfaceText("仅保存在本机，结束后再确认提交", "Saved only on this device until you confirm submission after ending."),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall
                         )
                     }
                     Spacer(Modifier.height(14.dp))
                     MediaCaptureActions(
                         controller = controller,
                         allowVideo = true,
-                        lightContent = false,
-                        replacementDraft = replacementDraft,
-                        onReplacementRequestConsumed = { replacementDraft = null }
+                        lightContent = false
                     )
                     Spacer(Modifier.height(14.dp))
                     SessionMediaManager(
                         controller = controller,
-                        submissionRequired = false,
-                        onRetakeRequested = { replacementDraft = it }
+                        submissionRequired = false
                     )
                 }
             }
@@ -1438,13 +1551,17 @@ private fun ExerciseRunningContent(
                 Text(interfaceText("结束运动", "End exercise"))
             }
 
-            if (BuildConfig.BNBU_ENVIRONMENT == "local") {
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = {
-                    controller.debugAddActiveDuration(60L * 60L * 1_000L)
-                }) {
-                    Text(interfaceText("开发测试：增加60分钟", "Debug: add 60 minutes"))
-                }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = controller::addSixtyMinutes,
+                enabled = !controller.isSessionBusy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("exercise.add60Minutes")
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(interfaceText("增加 60 分钟", "Add 60 minutes"))
             }
 
         }
@@ -1476,15 +1593,17 @@ private fun ExerciseFinishedContent(
     state: ExerciseSessionState.Finished
 ) {
     var localMessage by remember { mutableStateOf<String?>(null) }
+    var submissionError by remember { mutableStateOf<UserFacingError?>(null) }
     var showAbandonConfirm by remember { mutableStateOf(false) }
     var descriptionValidationRequested by remember { mutableStateOf(false) }
+    var descriptionFocusedOnce by remember { mutableStateOf(false) }
+    var descriptionTouched by remember { mutableStateOf(false) }
     var isSubmitting by remember { mutableStateOf(false) }
     var uploadProgress by remember { mutableStateOf<UploadProgress?>(null) }
-    var replacementDraft by remember { mutableStateOf<SessionMediaDraft?>(null) }
+    val descriptionFocusRequester = remember { FocusRequester() }
     val capturedImageCount = controller.drafts.count { it.type == ProofMediaType.Image }
     val capturedVideoCount = controller.drafts.count { it.type == ProofMediaType.Video }
     val descriptionRequired = state.details.creditType.requiresExerciseDescription
-    val locationStatus by controller.locationStatus.collectAsState()
     localMessage?.let { text ->
         AlertDialog(
             onDismissRequest = { localMessage = null },
@@ -1531,6 +1650,14 @@ private fun ExerciseFinishedContent(
                 }
             )
         }
+        submissionError?.let { error ->
+            item {
+                BNBUErrorPanel(
+                    error = error,
+                    onDismiss = { submissionError = null }
+                )
+            }
+        }
         item {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -1556,7 +1683,7 @@ private fun ExerciseFinishedContent(
         item {
             val descriptionError =
                 descriptionRequired &&
-                    descriptionValidationRequested &&
+                    (descriptionTouched || descriptionValidationRequested) &&
                     state.details.description.isBlank()
             SwissPanel {
                 Text(
@@ -1585,54 +1712,48 @@ private fun ExerciseFinishedContent(
                     style = MaterialTheme.typography.bodySmall
                 )
                 Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
+                BNBUFormField(
                     value = state.details.description,
                     onValueChange = {
                         controller.updateDescription(it.take(MaxExerciseDescriptionLength))
                     },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("checkIn.exerciseDescription"),
-                    placeholder = {
-                        Text(
-                            text = interfaceText(
-                                "例如：完成 5 公里跑步和拉伸",
-                                "For example: completed a 5 km run and stretching"
-                            ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                            style = MaterialTheme.typography.bodyLarge
+                    label = interfaceText("运动说明", "Exercise description"),
+                    testTag = "checkIn.exerciseDescription",
+                    placeholder = interfaceText(
+                        "例如：完成 5 公里跑步和拉伸",
+                        "For example: completed a 5 km run and stretching"
+                    ),
+                    supportingText = if (descriptionRequired) {
+                        interfaceText(
+                            "必填 · 1～$MaxExerciseDescriptionLength 字",
+                            "Required · 1–$MaxExerciseDescriptionLength characters"
+                        )
+                    } else {
+                        interfaceText(
+                            "选填 · 最多 $MaxExerciseDescriptionLength 字",
+                            "Optional · up to $MaxExerciseDescriptionLength characters"
                         )
                     },
-                    supportingText = {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                text = if (descriptionError) {
-                                    interfaceText("请填写运动说明", "Exercise description is required")
-                                } else if (descriptionRequired) {
-                                    interfaceText("必填 · 1～$MaxExerciseDescriptionLength 字", "Required · 1–$MaxExerciseDescriptionLength characters")
-                                } else {
-                                    interfaceText("选填 · 最多 $MaxExerciseDescriptionLength 字", "Optional · up to $MaxExerciseDescriptionLength characters")
-                                }
-                            )
-                            Text(
-                                text = "${state.details.description.length}/$MaxExerciseDescriptionLength",
-                                modifier = Modifier.fillMaxWidth(),
-                                textAlign = TextAlign.End
-                            )
-                        }
+                    errorText = if (descriptionError) {
+                        interfaceText("请填写运动说明", "Exercise description is required")
+                    } else {
+                        null
                     },
-                    isError = descriptionError,
-                    textStyle = MaterialTheme.typography.bodyLarge,
+                    required = descriptionRequired,
+                    enabled = !isSubmitting,
+                    loading = isSubmitting,
+                    singleLine = false,
                     minLines = 4,
                     maxLines = 6,
-                    shape = MaterialTheme.shapes.medium,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
-                        errorContainerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.16f),
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
-                    )
+                    counter = state.details.description.length to MaxExerciseDescriptionLength,
+                    inputModifier = Modifier.focusRequester(descriptionFocusRequester),
+                    onFocusChanged = { focused ->
+                        if (focused) {
+                            descriptionFocusedOnce = true
+                        } else if (descriptionFocusedOnce) {
+                            descriptionTouched = true
+                        }
+                    }
                 )
             }
         }
@@ -1654,9 +1775,7 @@ private fun ExerciseFinishedContent(
                 MediaCaptureActions(
                     controller = controller,
                     allowVideo = true,
-                    lightContent = false,
-                    replacementDraft = replacementDraft,
-                    onReplacementRequestConsumed = { replacementDraft = null }
+                    lightContent = false
                 )
                 Spacer(Modifier.height(18.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
@@ -1674,8 +1793,7 @@ private fun ExerciseFinishedContent(
                 Spacer(Modifier.height(10.dp))
                 SessionMediaManager(
                     controller = controller,
-                    submissionRequired = true,
-                    onRetakeRequested = { replacementDraft = it }
+                    submissionRequired = true
                 )
                 }
             }
@@ -1711,7 +1829,6 @@ private fun ExerciseFinishedContent(
                         interfaceText("${creditedExerciseHours(state.activeDurationMillis)} 小时", "${creditedExerciseHours(state.activeDurationMillis)} hours")
                     )
                     SummaryRow(interfaceText("打卡日期", "Check-in date"), formatDate(state.startedAtEpochMillis))
-                    SummaryRow(interfaceText("定位状态", "Location status"), locationStatus.displayLabel())
                     SummaryRow(
                         interfaceText("凭证数量", "Proof count"),
                         interfaceText(
@@ -1779,11 +1896,12 @@ private fun ExerciseFinishedContent(
                     if (isSubmitting) return@Button
                     descriptionValidationRequested = true
                     if (descriptionRequired && state.details.description.isBlank()) {
-                        localMessage = interfaceText("请填写运动说明", "Enter an exercise description.")
+                        descriptionFocusRequester.requestFocus()
                         return@Button
                     }
                     isSubmitting = true
                     uploadProgress = null
+                    submissionError = null
                     controller.submitReadyProofs(
                         onProgress = { uploadProgress = it }
                     ) { result ->
@@ -1810,7 +1928,16 @@ private fun ExerciseFinishedContent(
                                 appState.refreshWorkspace()
                             },
                             onFailure = { error ->
-                                localMessage = error.message ?: interfaceText("打卡提交失败，请重试", "Check-in submission failed. Try again.")
+                                val mapped = ClientErrorMapper.map(
+                                    error,
+                                    ClientErrorContext.RECORD
+                                )
+                                submissionError = mapped
+                                SafeClientLogger.log(
+                                    error = mapped,
+                                    context = ClientErrorContext.RECORD,
+                                    httpStatus = (error as? V1HttpException)?.statusCode
+                                )
                             }
                         )
                     }
@@ -1844,6 +1971,10 @@ private fun ExerciseFinishedContent(
             }
         }
     }
+}
+
+internal fun exerciseProofSubmissionErrorMessage(error: Throwable): String {
+    return ClientErrorMapper.map(error, ClientErrorContext.RECORD).legacySafeText()
 }
 
 @Composable
@@ -1884,89 +2015,48 @@ private fun Bundle.toCaptureTarget(): SessionCaptureTarget? = runCatching {
     )
 }.getOrNull()
 
-private fun SessionMediaFileUpdateTarget.toSavedState(): Bundle = Bundle().apply {
-    putString("accountId", key.accountId)
-    putString("sessionId", key.sessionId)
-    putString("draftId", draftId)
-    putString("mediaType", type.name)
-    putString("sourceFile", sourceFile.absolutePath)
-    putString("file", file.absolutePath)
-    putBoolean("replacesCapture", replacesCapture)
-}
-
-private fun Bundle.toFileUpdateTarget(): SessionMediaFileUpdateTarget? = runCatching {
-    SessionMediaFileUpdateTarget(
-        key = SessionDraftKey(
-            accountId = requireNotNull(getString("accountId")),
-            sessionId = requireNotNull(getString("sessionId"))
-        ),
-        draftId = requireNotNull(getString("draftId")),
-        type = ProofMediaType.valueOf(requireNotNull(getString("mediaType"))),
-        sourceFile = File(requireNotNull(getString("sourceFile"))),
-        file = File(requireNotNull(getString("file"))),
-        replacesCapture = getBoolean("replacesCapture")
-    )
-}.getOrNull()
-
 @Composable
 private fun MediaCaptureActions(
     controller: ExerciseSessionController,
     allowVideo: Boolean,
-    lightContent: Boolean,
-    replacementDraft: SessionMediaDraft? = null,
-    onReplacementRequestConsumed: () -> Unit = {}
+    lightContent: Boolean
 ) {
     val context = LocalContext.current
     var pendingPhotoState by rememberSaveable { mutableStateOf<Bundle?>(null) }
     var pendingVideoState by rememberSaveable { mutableStateOf<Bundle?>(null) }
-    var pendingPhotoReplacementState by rememberSaveable { mutableStateOf<Bundle?>(null) }
-    var pendingVideoReplacementState by rememberSaveable { mutableStateOf<Bundle?>(null) }
     val pendingPhoto = pendingPhotoState?.toCaptureTarget()
     val pendingVideo = pendingVideoState?.toCaptureTarget()
-    val pendingPhotoReplacement = pendingPhotoReplacementState?.toFileUpdateTarget()
-    val pendingVideoReplacement = pendingVideoReplacementState?.toFileUpdateTarget()
     var newPhotoAwaitingPermission by rememberSaveable { mutableStateOf(false) }
-    var photoReplacementAwaitingPermissionId by rememberSaveable { mutableStateOf<String?>(null) }
     var newVideoAwaitingPermission by rememberSaveable { mutableStateOf(false) }
-    var replacementAwaitingPermissionId by rememberSaveable { mutableStateOf<String?>(null) }
     var launchError by remember { mutableStateOf<String?>(null) }
     var showVideoRecordingNotice by rememberSaveable { mutableStateOf(false) }
     var isVideoProcessing by remember { mutableStateOf(false) }
+    var photoAwaitingRetentionConfirmation by rememberSaveable { mutableStateOf(false) }
+    var videoAwaitingRetentionDuration by rememberSaveable { mutableStateOf<Double?>(null) }
     lateinit var launchPhotoCapture: () -> Unit
     lateinit var launchVideoRecorder: () -> Unit
-    lateinit var launchReplacementCapture: (SessionMediaDraft) -> Unit
+
     val photoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-        pendingPhoto?.let { controller.completeCapture(it, success) }
-        pendingPhotoReplacement?.let { controller.completeReplacementCapture(it, success) }
-        pendingPhotoState = null
-        pendingPhotoReplacementState = null
+        val target = pendingPhoto
+        if (target == null) {
+            launchError = interfaceText(
+                "无法确认本次拍照，请重新拍摄。",
+                "This photo capture could not be confirmed. Capture it again."
+            )
+        } else if (success && target.file.isFile && target.file.length() > 0L) {
+            // Camera success only stages bytes. The draft remains PendingCapture
+            // until the student explicitly selects "确认保留".
+            photoAwaitingRetentionConfirmation = true
+        } else {
+            pendingPhotoState = null
+            controller.completeCapture(target, success = false)
+        }
     }
 
     fun hasCameraPermission(): Boolean = ContextCompat.checkSelfPermission(
         context,
         Manifest.permission.CAMERA
     ) == PackageManager.PERMISSION_GRANTED
-
-    val photoPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        val replacement = photoReplacementAwaitingPermissionId?.let { draftId ->
-            controller.drafts.firstOrNull { it.id == draftId }
-        }
-        photoReplacementAwaitingPermissionId = null
-        val captureNewPhoto = newPhotoAwaitingPermission
-        newPhotoAwaitingPermission = false
-        if (!granted) {
-            launchError = interfaceText(
-                "现场拍照需要相机权限。麦克风权限不会影响拍照。",
-                "On-site photos require camera permission. Microphone permission does not affect photos."
-            )
-        } else if (replacement != null) {
-            launchReplacementCapture(replacement)
-        } else if (captureNewPhoto) {
-            launchPhotoCapture()
-        }
-    }
 
     fun hasVideoPermissions(): Boolean = listOf(
         Manifest.permission.CAMERA,
@@ -1975,13 +2065,27 @@ private fun MediaCaptureActions(
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }
 
+    val photoPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val captureNewPhoto = newPhotoAwaitingPermission
+        newPhotoAwaitingPermission = false
+        if (!granted) {
+            launchError = interfaceText(
+                "现场拍照需要相机权限。麦克风权限不会影响拍照。",
+                "On-site photos require camera permission. Microphone permission does not affect photos."
+            )
+        } else if (captureNewPhoto) {
+            launchPhotoCapture()
+        }
+    }
+
     val videoPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        val granted = hasVideoPermissions()
-        if (!granted) {
-            newVideoAwaitingPermission = false
-            replacementAwaitingPermissionId = null
+        val captureNewVideo = newVideoAwaitingPermission
+        newVideoAwaitingPermission = false
+        if (!hasVideoPermissions()) {
             launchError = if (!hasCameraPermission()) {
                 interfaceText(
                     "现场拍照和录像都需要相机权限。",
@@ -1993,28 +2097,8 @@ private fun MediaCaptureActions(
                     "Video recording also requires microphone permission. On-site photos remain available."
                 )
             }
-        } else {
-            val replacement = replacementAwaitingPermissionId?.let { draftId ->
-                controller.drafts.firstOrNull { it.id == draftId }
-            }
-            replacementAwaitingPermissionId = null
-            if (replacement != null) {
-                launchReplacementCapture(replacement)
-            } else if (newVideoAwaitingPermission) {
-                newVideoAwaitingPermission = false
-                launchVideoRecorder()
-            }
-        }
-    }
-
-    launchVideoRecorder = {
-        controller.prepareCapture(ProofMediaType.Video) { result ->
-            result.fold(
-                onSuccess = { target -> pendingVideoState = target.toSavedState() },
-                onFailure = {
-                    launchError = interfaceText("无法准备现场录像，请稍后重试。", "Unable to prepare on-site video recording. Try again later.")
-                }
-            )
+        } else if (captureNewVideo) {
+            launchVideoRecorder()
         }
     }
 
@@ -2034,60 +2118,39 @@ private fun MediaCaptureActions(
                             photoLauncher.launch(uri)
                         },
                         onFailure = {
-                            controller.completeCapture(target, false)
-                            launchError = interfaceText("无法打开系统相机", "Unable to open the system camera.")
+                            controller.completeCapture(target, success = false)
+                            launchError = interfaceText(
+                                "无法打开系统相机",
+                                "Unable to open the system camera."
+                            )
                         }
                     )
                 },
                 onFailure = {
-                    launchError = interfaceText("无法准备现场拍照，请稍后重试。", "Unable to prepare on-site photo capture. Try again later.")
+                    launchError = interfaceText(
+                        "无法准备现场拍照，请稍后重试。",
+                        "Unable to prepare on-site photo capture. Try again later."
+                    )
                 }
             )
         }
     }
 
-    launchReplacementCapture = { draft ->
-        if (draft.type == ProofMediaType.Image && !hasCameraPermission()) {
-            photoReplacementAwaitingPermissionId = draft.id
-            photoPermissionLauncher.launch(Manifest.permission.CAMERA)
-        } else if (draft.type == ProofMediaType.Video && !hasVideoPermissions()) {
-            replacementAwaitingPermissionId = draft.id
-            videoPermissionLauncher.launch(
-                arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
-            )
-        } else {
-        controller.prepareReplacementCapture(draft.id) { result ->
+    launchVideoRecorder = {
+        controller.prepareCapture(ProofMediaType.Video) { result ->
             result.fold(
                 onSuccess = { target ->
-                    if (target.type == ProofMediaType.Video) {
-                        pendingVideoReplacementState = target.toSavedState()
-                    } else runCatching {
-                        FileProvider.getUriForFile(
-                            context,
-                            "${context.packageName}.fileprovider",
-                            target.file
-                        )
-                    }.fold(
-                        onSuccess = { uri: Uri ->
-                            pendingPhotoReplacementState = target.toSavedState()
-                            photoLauncher.launch(uri)
-                        },
-                        onFailure = {
-                            controller.completeReplacementCapture(target, false)
-                            launchError = interfaceText("无法打开系统相机", "Unable to open the system camera.")
-                        }
-                    )
+                    videoAwaitingRetentionDuration = null
+                    pendingVideoState = target.toSavedState()
                 },
-                onFailure = { launchError = interfaceText("无法准备替换媒体", "Unable to prepare media replacement.") }
+                onFailure = {
+                    launchError = interfaceText(
+                        "无法准备现场录像，请稍后重试。",
+                        "Unable to prepare on-site video recording. Try again later."
+                    )
+                }
             )
         }
-        }
-    }
-
-    LaunchedEffect(replacementDraft?.id) {
-        val draft = replacementDraft ?: return@LaunchedEffect
-        onReplacementRequestConsumed()
-        launchReplacementCapture(draft)
     }
 
     if (showVideoRecordingNotice) {
@@ -2118,73 +2181,109 @@ private fun MediaCaptureActions(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = interfaceText(
-                                "正在保存并压缩视频，请稍候…",
-                                "Saving and compressing the video. Please wait…"
-                            ),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            text = interfaceText(
-                                "完成后会自动返回凭证页面",
-                                "You will return to the proof page automatically when it is ready."
-                            ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
+                    Text(
+                        text = interfaceText(
+                            "正在保存并压缩已确认保留的视频，请稍候…",
+                            "Saving and compressing the confirmed retained video. Please wait…"
+                        ),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
         )
     }
 
-    pendingVideo?.let { target ->
-        ExerciseVideoRecorderDialog(
-            outputFile = target.file,
-            onCompleted = { duration ->
-                isVideoProcessing = true
-                pendingVideoState = null
-                controller.completeVideoCapture(
-                    target = target,
-                    success = true,
-                    recordedDurationSeconds = duration,
-                    onFinished = { isVideoProcessing = false }
-                )
+    if (photoAwaitingRetentionConfirmation && pendingPhoto != null) {
+        RetainCapturedMediaDialog(
+            type = ProofMediaType.Image,
+            isBusy = controller.isMediaBusy,
+            onKeep = {
+                val target = pendingPhoto ?: return@RetainCapturedMediaDialog
+                photoAwaitingRetentionConfirmation = false
+                pendingPhotoState = null
+                controller.completeCapture(target, success = true)
             },
-            onCancelled = {
-                pendingVideoState = null
-                controller.completeVideoCapture(target, success = false, recordedDurationSeconds = 0.0)
+            onRetake = {
+                val target = pendingPhoto ?: return@RetainCapturedMediaDialog
+                photoAwaitingRetentionConfirmation = false
+                pendingPhotoState = null
+                controller.completeCapture(target, success = false) {
+                    launchPhotoCapture()
+                }
             },
-            onError = {
-                pendingVideoState = null
-                controller.completeVideoCapture(target, success = false, recordedDurationSeconds = 0.0)
-                launchError = interfaceText("录像失败，请重试。", "Video recording failed. Try again.")
+            onDiscard = {
+                val target = pendingPhoto ?: return@RetainCapturedMediaDialog
+                photoAwaitingRetentionConfirmation = false
+                pendingPhotoState = null
+                controller.completeCapture(target, success = false)
             }
         )
     }
-    pendingVideoReplacement?.let { target ->
-        ExerciseVideoRecorderDialog(
-            outputFile = target.file,
-            onCompleted = { duration ->
+
+    val capturedVideoDuration = videoAwaitingRetentionDuration
+    if (capturedVideoDuration != null && pendingVideo != null) {
+        RetainCapturedMediaDialog(
+            type = ProofMediaType.Video,
+            isBusy = controller.isMediaBusy,
+            onKeep = {
+                val target = pendingVideo ?: return@RetainCapturedMediaDialog
+                videoAwaitingRetentionDuration = null
+                pendingVideoState = null
                 isVideoProcessing = true
-                pendingVideoReplacementState = null
-                controller.completeReplacementVideoCapture(
+                controller.completeVideoCapture(
                     target = target,
                     success = true,
-                    recordedDurationSeconds = duration,
+                    recordedDurationSeconds = capturedVideoDuration,
                     onFinished = { isVideoProcessing = false }
                 )
             },
+            onRetake = {
+                val target = pendingVideo ?: return@RetainCapturedMediaDialog
+                videoAwaitingRetentionDuration = null
+                pendingVideoState = null
+                controller.completeVideoCapture(
+                    target = target,
+                    success = false,
+                    recordedDurationSeconds = 0.0,
+                    onFinished = { launchVideoRecorder() }
+                )
+            },
+            onDiscard = {
+                val target = pendingVideo ?: return@RetainCapturedMediaDialog
+                videoAwaitingRetentionDuration = null
+                pendingVideoState = null
+                controller.completeVideoCapture(
+                    target = target,
+                    success = false,
+                    recordedDurationSeconds = 0.0
+                )
+            }
+        )
+    }
+
+    pendingVideo?.takeIf { videoAwaitingRetentionDuration == null }?.let { target ->
+        ExerciseVideoRecorderDialog(
+            outputFile = target.file,
+            onCompleted = { duration ->
+                // Recording success is still unconfirmed and not part of drafts.
+                videoAwaitingRetentionDuration = duration
+            },
             onCancelled = {
-                pendingVideoReplacementState = null
-                controller.completeReplacementVideoCapture(target, success = false, recordedDurationSeconds = 0.0)
+                pendingVideoState = null
+                controller.completeVideoCapture(
+                    target,
+                    success = false,
+                    recordedDurationSeconds = 0.0
+                )
             },
             onError = {
-                pendingVideoReplacementState = null
-                controller.completeReplacementVideoCapture(target, success = false, recordedDurationSeconds = 0.0)
-                launchError = interfaceText("重新录像失败，已保留原视频。", "Re-recording failed; the original video was kept.")
+                pendingVideoState = null
+                controller.completeVideoCapture(
+                    target,
+                    success = false,
+                    recordedDurationSeconds = 0.0
+                )
+                launchError = interfaceText("录像失败，请重试。", "Video recording failed. Try again.")
             }
         )
     }
@@ -2192,8 +2291,6 @@ private fun MediaCaptureActions(
     launchError?.let { ValidationPanel(message = it) }
     val isCaptureInProgress = pendingPhoto != null ||
         pendingVideo != null ||
-        pendingPhotoReplacement != null ||
-        pendingVideoReplacement != null ||
         showVideoRecordingNotice ||
         isVideoProcessing
     Row(
@@ -2203,9 +2300,10 @@ private fun MediaCaptureActions(
         CaptureButton(
             label = interfaceText("现场拍照", "Take photo"),
             icon = { Icon(Icons.Filled.CameraAlt, contentDescription = null) },
-            enabled = !controller.isMediaBusy && !isCaptureInProgress && controller.drafts.count {
-                it.type == ProofMediaType.Image
-            } < ProofUploadRule.maxImageCount,
+            enabled = !controller.isMediaBusy &&
+                !isCaptureInProgress &&
+                controller.drafts.count { it.type == ProofMediaType.Image } <
+                    ProofUploadRule.maxImageCount,
             lightContent = lightContent,
             modifier = Modifier.weight(1f),
             onClick = {
@@ -2219,44 +2317,93 @@ private fun MediaCaptureActions(
         )
         if (allowVideo) {
             CaptureButton(
-            label = interfaceText("现场录像", "Record video"),
+                label = interfaceText("现场录像", "Record video"),
                 icon = { Icon(Icons.Filled.Videocam, contentDescription = null) },
-                enabled = !controller.isMediaBusy && !isCaptureInProgress && controller.drafts.none {
-                    it.type == ProofMediaType.Video
-                },
+                enabled = !controller.isMediaBusy &&
+                    !isCaptureInProgress &&
+                    controller.drafts.none { it.type == ProofMediaType.Video },
                 lightContent = lightContent,
                 modifier = Modifier.weight(1f),
-                onClick = {
-                    showVideoRecordingNotice = true
-                }
+                onClick = { showVideoRecordingNotice = true }
             )
         }
     }
-    val photoLimitReached = controller.drafts.count { it.type == ProofMediaType.Image } >= ProofUploadRule.maxImageCount
-    val videoLimitReached = controller.drafts.count { it.type == ProofMediaType.Video } >= ProofUploadRule.maxVideoCount
+
+    val photoLimitReached =
+        controller.drafts.count { it.type == ProofMediaType.Image } >= ProofUploadRule.maxImageCount
+    val videoLimitReached =
+        controller.drafts.count { it.type == ProofMediaType.Video } >= ProofUploadRule.maxVideoCount
     if (photoLimitReached || (allowVideo && videoLimitReached)) {
         Spacer(Modifier.height(8.dp))
         Text(
             text = when {
                 photoLimitReached && allowVideo && videoLimitReached -> interfaceText(
-                    "照片和视频均已达到数量上限，删除已有素材后可继续拍摄。",
-                    "Photo and video limits are reached. Delete existing media before capturing more."
+                    "照片和视频均已达到本次 Session 的证据上限；已确认素材不能删除或替换。",
+                    "Photo and video evidence limits are reached for this session; confirmed media cannot be deleted or replaced."
                 )
-
                 photoLimitReached -> interfaceText(
-                    "照片已达到 ${ProofUploadRule.maxImageCount} 张上限，删除后可继续拍摄。",
-                    "The ${ProofUploadRule.maxImageCount}-photo limit is reached. Delete a photo to capture another."
+                    "照片已达到 ${ProofUploadRule.maxImageCount} 张上限；已确认照片不能删除或替换。",
+                    "The ${ProofUploadRule.maxImageCount}-photo limit is reached; confirmed photos cannot be deleted or replaced."
                 )
-
                 else -> interfaceText(
-                    "视频已达到 ${ProofUploadRule.maxVideoCount} 个上限，删除后可继续录制。",
-                    "The ${ProofUploadRule.maxVideoCount}-video limit is reached. Delete the video to record another."
+                    "视频已达到 ${ProofUploadRule.maxVideoCount} 个上限；已确认视频不能删除或替换。",
+                    "The ${ProofUploadRule.maxVideoCount}-video limit is reached; confirmed video cannot be deleted or replaced."
                 )
             },
             color = CheckInOrange,
             style = MaterialTheme.typography.bodySmall
         )
     }
+}
+
+@Composable
+private fun RetainCapturedMediaDialog(
+    type: ProofMediaType,
+    isBusy: Boolean,
+    onKeep: () -> Unit,
+    onRetake: () -> Unit,
+    onDiscard: () -> Unit
+) {
+    val mediaName = if (type == ProofMediaType.Image) {
+        interfaceText("照片", "photo")
+    } else {
+        interfaceText("视频", "video")
+    }
+    AlertDialog(
+        onDismissRequest = {},
+        title = {
+            Text(interfaceText("确认保留这项现场素材？", "Keep this on-site media?"))
+        },
+        text = {
+            Text(
+                interfaceText(
+                    "请先确认这项$mediaName。确认保留后，它会进入本次 Session 的完整证据集合，提交前不能删除、替换或排除。",
+                    "Review this $mediaName first. Once kept, it becomes part of the complete evidence set for this session and cannot be deleted, replaced, or excluded before submission."
+                )
+            )
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onRetake, enabled = !isBusy) {
+                    Text(
+                        if (type == ProofMediaType.Image) {
+                            interfaceText("重拍", "Retake")
+                        } else {
+                            interfaceText("重录", "Re-record")
+                        }
+                    )
+                }
+                Button(onClick = onKeep, enabled = !isBusy) {
+                    Text(interfaceText("确认保留", "Keep"))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDiscard, enabled = !isBusy) {
+                Text(interfaceText("放弃", "Discard"))
+            }
+        }
+    )
 }
 
 @Composable

@@ -84,6 +84,8 @@ import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.model.SystemMode
+import edu.bnbu.student.mvp.core.model.StudentWorkspace
+import edu.bnbu.student.mvp.core.model.safeStudentNumberOrNull
 import edu.bnbu.student.mvp.core.network.CourseJoinRequestBody
 import edu.bnbu.student.mvp.core.network.v1.V1CourseJoinCoordinator
 import edu.bnbu.student.mvp.core.network.v1.V1CourseJoinIdentity
@@ -111,9 +113,11 @@ import edu.bnbu.student.mvp.feature.login.ContactBindingScreen
 import edu.bnbu.student.mvp.feature.login.ContactActivationHelpScreen
 import edu.bnbu.student.mvp.feature.notifications.NotificationSheet
 import edu.bnbu.student.mvp.feature.profile.AccountDetailsScreen
+import edu.bnbu.student.mvp.feature.profile.AccountDeletionScreen
 import edu.bnbu.student.mvp.feature.profile.ProfileSettingsScreen
 import edu.bnbu.student.mvp.feature.profile.PrivacyPolicyScreen
 import edu.bnbu.student.mvp.feature.profile.ProfileScreen
+import edu.bnbu.student.mvp.feature.scoring.EnduranceScoringScreen
 import edu.bnbu.student.mvp.feature.exemption.ExemptionScreen
 import edu.bnbu.student.mvp.feature.feedback.FeedbackScreen
 import edu.bnbu.student.mvp.feature.settings.AboutScreen
@@ -136,10 +140,12 @@ enum class SubScreen {
     ScanJoin,
     EnterCode,
     CourseJoinConfirm,
+    EnduranceScoring,
     Exemption,
     AccountDetails,
     Settings,
     ContactBinding,
+    AccountDeletion,
     PrivacyPolicy,
     HelpCenter,
     Feedback,
@@ -200,7 +206,8 @@ internal fun AppRootScreen(
     initialPrivacyConsentRequired: Boolean = false,
     onPrivacyConsentAccepted: () -> Unit = {},
     onInitialTargetReady: () -> Unit = {},
-    onRequestNotificationPermission: () -> Unit = {}
+    onRequestNotificationPermission: () -> Unit = {},
+    localReviewWorkspaceFactory: (() -> StudentWorkspace)? = null
 ) {
     Box(
         modifier = Modifier
@@ -221,7 +228,8 @@ internal fun AppRootScreen(
                         localStore = localStore,
                         initialPrivacyConsentRequired = initialPrivacyConsentRequired,
                         onPrivacyConsentAccepted = onPrivacyConsentAccepted,
-                        onRequestNotificationPermission = onRequestNotificationPermission
+                        onRequestNotificationPermission = onRequestNotificationPermission,
+                        localReviewWorkspaceFactory = localReviewWorkspaceFactory
                     )
                 } else {
                     Column(modifier = Modifier.fillMaxSize()) {
@@ -236,7 +244,8 @@ internal fun AppRootScreen(
                                 localStore = localStore,
                                 initialPrivacyConsentRequired = initialPrivacyConsentRequired,
                                 onPrivacyConsentAccepted = onPrivacyConsentAccepted,
-                                onRequestNotificationPermission = onRequestNotificationPermission
+                                onRequestNotificationPermission = onRequestNotificationPermission,
+                                localReviewWorkspaceFactory = localReviewWorkspaceFactory
                             )
                         }
                     }
@@ -251,7 +260,8 @@ internal fun AppRootScreen(
                         localStore = localStore,
                         initialPrivacyConsentRequired = initialPrivacyConsentRequired,
                         onPrivacyConsentAccepted = onPrivacyConsentAccepted,
-                        onRequestNotificationPermission = onRequestNotificationPermission
+                        onRequestNotificationPermission = onRequestNotificationPermission,
+                        localReviewWorkspaceFactory = localReviewWorkspaceFactory
                     )
                 }
             }
@@ -266,7 +276,8 @@ private fun AppRootContent(
     localStore: AndroidAppLocalStore,
     initialPrivacyConsentRequired: Boolean,
     onPrivacyConsentAccepted: () -> Unit,
-    onRequestNotificationPermission: () -> Unit
+    onRequestNotificationPermission: () -> Unit,
+    localReviewWorkspaceFactory: (() -> StudentWorkspace)?
 ) {
     val courseJoinCoordinator = remember(localStore) {
         V1CourseJoinCoordinator.create(localStore)
@@ -320,7 +331,11 @@ private fun AppRootContent(
         else -> AuthUiState.Login
     }
     LaunchedEffect(authUiState, appState.requiresContactBinding) {
-        if (authUiState == AuthUiState.Authenticated && !appState.requiresContactBinding) {
+        if (
+            authUiState == AuthUiState.Authenticated &&
+            !appState.requiresContactBinding &&
+            !appState.isLocalReviewMode
+        ) {
             onRequestNotificationPermission()
         }
     }
@@ -404,7 +419,7 @@ private fun AppRootContent(
                         inviteCode = inviteCode,
                         course = inviteCourse,
                         initialName = appState.workspace.student.name,
-                        initialStudentNumber = appState.workspace.student.studentNumber,
+                        initialStudentNumber = appState.workspace.student.safeStudentNumberOrNull().orEmpty(),
                         initialGender = appState.workspace.student.gender,
                         initialGrade = appState.workspace.student.gradeLevel,
                         writeEnabled = appState.isWriteAllowed,
@@ -475,7 +490,10 @@ private fun AppRootContent(
                         onRecoveryRequest = { showRecoveryRequest = true },
                         onOpenPrivacy = { showLoginPrivacy = true },
                         privacyAccepted = loginPrivacyAccepted,
-                        onPrivacyAcceptedChange = { loginPrivacyAccepted = it }
+                        onPrivacyAcceptedChange = { loginPrivacyAccepted = it },
+                        onLocalReview = localReviewWorkspaceFactory
+                            ?.takeIf { BuildConfig.BNBU_ENVIRONMENT == "local" }
+                            ?.let { factory -> { appState.enterLocalReview(factory()) } }
                     )
                 }
             }
@@ -513,6 +531,39 @@ private fun ReadOnlyBanner(message: String) {
                 color = colors.onSecondaryContainer,
                 style = MaterialTheme.typography.bodySmall
             )
+        }
+    }
+}
+
+@Composable
+private fun LocalReviewBanner(onExit: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.tertiaryContainer)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .testTag("banner.localReview"),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = interfaceText("免登录测试模式", "Password-free review mode"),
+                color = colors.onTertiaryContainer,
+                style = MaterialTheme.typography.titleSmall
+            )
+            Text(
+                text = interfaceText(
+                    "仅使用本地合成学生数据，不会请求真实 Backend。",
+                    "Only local synthetic student data is used; the real Backend is not called."
+                ),
+                color = colors.onTertiaryContainer,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        TextButton(onClick = onExit, modifier = Modifier.testTag("localReview.exit")) {
+            Text(interfaceText("退出测试", "Exit review"))
         }
     }
 }
@@ -614,6 +665,7 @@ private fun AuthenticatedAppContent(
     BackHandler(enabled = subScreen != SubScreen.None) {
         when (subScreen) {
             SubScreen.ContactBinding -> subScreen = SubScreen.Settings
+            SubScreen.AccountDeletion -> subScreen = SubScreen.Settings
             SubScreen.PrivacyPolicy,
             SubScreen.HelpCenter,
             SubScreen.Feedback,
@@ -663,6 +715,9 @@ private fun AuthenticatedAppContent(
                         .background(pageBackground)
                         .padding(innerPadding)
                 ) {
+                    if (appState.isLocalReviewMode) {
+                        LocalReviewBanner(onExit = appState::logout)
+                    }
                     AnimatedVisibility(
                         visible = appState.lastError != null || appState.isShowingCachedData,
                         enter = expandVertically(tween(BNBUMotion.Standard)) +
@@ -680,6 +735,7 @@ private fun AuthenticatedAppContent(
                             contentPadding = PaddingValues(0.dp),
                             onOpenNotificationSheet = { showNotificationSheet = true },
                             onOpenCheckIn = { selectedTab = AppTab.CheckIn },
+                            onReturnDashboard = { selectedTab = AppTab.Dashboard },
                             openAccountDetails = {
                                 renderedSubScreen = SubScreen.AccountDetails
                                 subScreen = SubScreen.AccountDetails
@@ -692,6 +748,10 @@ private fun AuthenticatedAppContent(
                                 exemptionTargetId = targetId
                                 renderedSubScreen = SubScreen.Exemption
                                 subScreen = SubScreen.Exemption
+                            },
+                            openEnduranceScoring = {
+                                renderedSubScreen = SubScreen.EnduranceScoring
+                                subScreen = SubScreen.EnduranceScoring
                             },
                             openScanJoin = {
                                 scannedInviteCode = null
@@ -939,6 +999,15 @@ private fun SubScreenOverlay(
             .padding(BNBULayout.ScreenHorizontal)
     ) {
         when (subScreen) {
+            SubScreen.EnduranceScoring -> {
+                EnduranceScoringScreen(
+                    appState = appState,
+                    student = appState.workspace.student,
+                    repository = repo,
+                    onUnauthorized = appState::handleUnauthorized,
+                    onBack = onClose
+                )
+            }
             SubScreen.Exemption -> {
                 ExemptionScreen(
                     appState = appState,
@@ -956,6 +1025,7 @@ private fun SubScreenOverlay(
                 appState = appState,
                 onBack = onClose,
                 onOpenContactBinding = { onNavigateFromSettings(SubScreen.ContactBinding) },
+                onOpenAccountDeletion = { onNavigateFromSettings(SubScreen.AccountDeletion) },
                 onOpenPrivacy = { onNavigateFromSettings(SubScreen.PrivacyPolicy) },
                 onOpenHelpCenter = { onNavigateFromSettings(SubScreen.HelpCenter) },
                 onOpenFeedback = { onNavigateFromSettings(SubScreen.Feedback) },
@@ -975,6 +1045,11 @@ private fun SubScreenOverlay(
                     onBack = onReturnFromContactBinding
                 )
             }
+            SubScreen.AccountDeletion -> AccountDeletionScreen(
+                appState = appState,
+                localStore = localStore,
+                onBack = onReturnToSettings
+            )
             SubScreen.PrivacyPolicy -> PrivacyPolicyScreen(onBack = onReturnToSettings)
             SubScreen.HelpCenter -> HelpCenterScreen(
                 onBack = onReturnToSettings,
@@ -1000,7 +1075,7 @@ private fun SubScreenOverlay(
                         inviteCode = inviteCode,
                         course = inviteCourse,
                         initialName = appState.workspace.student.name,
-                        initialStudentNumber = appState.workspace.student.studentNumber,
+                        initialStudentNumber = appState.workspace.student.safeStudentNumberOrNull().orEmpty(),
                         initialGender = appState.workspace.student.gender,
                         initialGrade = appState.workspace.student.gradeLevel,
                         writeEnabled = appState.isWriteAllowed,
@@ -1285,9 +1360,11 @@ private fun RootTabContent(
     contentPadding: PaddingValues,
     onOpenNotificationSheet: () -> Unit,
     onOpenCheckIn: () -> Unit,
+    onReturnDashboard: () -> Unit,
     openAccountDetails: () -> Unit = {},
     openSettings: () -> Unit = {},
     openExemption: (String?) -> Unit = {},
+    openEnduranceScoring: () -> Unit = {},
     openScanJoin: () -> Unit = {},
     openEnterCode: () -> Unit = {}
 ) {
@@ -1317,13 +1394,18 @@ private fun RootTabContent(
                     onScanJoin = openScanJoin,
                     onEnterCode = openEnterCode
                 )
-                AppTab.CheckIn -> CheckInScreen(appState, exerciseSessionController)
+                AppTab.CheckIn -> CheckInScreen(
+                    appState = appState,
+                    exerciseSessionController = exerciseSessionController,
+                    onReturnHome = onReturnDashboard
+                )
                 AppTab.Grades -> GradesScreen(appState)
                 AppTab.Profile -> ProfileScreen(
                     appState = appState,
                     onOpenAccountDetails = openAccountDetails,
                     onOpenSettings = openSettings,
-                    onOpenExemption = openExemption
+                    onOpenExemption = openExemption,
+                    onOpenEnduranceScoring = openEnduranceScoring
                 )
             }
         }

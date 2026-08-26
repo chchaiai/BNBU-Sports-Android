@@ -27,3 +27,21 @@ fun feedbackCategoryLabel(value: String): String = when (value.trim().uppercase(
     "OTHER" -> interfaceText("其他", "Other")
     else -> interfaceText("其他", "Other")
 }
+
+/** Internal IDs and UUIDs are never a fallback for the public student number. */
+internal fun StudentProfile.safeStudentNumberOrNull(): String? {
+    val value = studentNumber.trim()
+    return value.takeIf {
+        it.isNotEmpty() &&
+            !it.equals(id.trim(), ignoreCase = true) &&
+            !UUID_LIKE_VALUE.matches(it)
+    }
+}
+
+internal fun StudentProfile.studentNumberForDisplay(): String =
+    safeStudentNumberOrNull()
+        ?: interfaceText("学号未提供", "Student number unavailable")
+
+private val UUID_LIKE_VALUE = Regex(
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+)

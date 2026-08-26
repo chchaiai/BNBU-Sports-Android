@@ -16,6 +16,9 @@ internal class FakeExerciseGateway : ExerciseGateway {
     var onResume: suspend (ExerciseSessionRecord) -> ExerciseSessionRecord = {
         error("resume was not expected")
     }
+    var onAddSixtyMinutes: suspend (ExerciseSessionRecord) -> ExerciseSessionRecord = {
+        error("addSixtyMinutes was not expected")
+    }
     var onFinish: suspend (ExerciseSessionRecord) -> ExerciseSessionRecord = {
         error("finish was not expected")
     }
@@ -54,6 +57,9 @@ internal class FakeExerciseGateway : ExerciseGateway {
 
     override suspend fun resume(current: ExerciseSessionRecord): ExerciseSessionRecord =
         onResume(current)
+
+    override suspend fun addSixtyMinutes(current: ExerciseSessionRecord): ExerciseSessionRecord =
+        onAddSixtyMinutes(current)
 
     override suspend fun finish(current: ExerciseSessionRecord): ExerciseSessionRecord =
         onFinish(current)

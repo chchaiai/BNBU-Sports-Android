@@ -39,7 +39,6 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -53,6 +52,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -60,6 +61,8 @@ import androidx.compose.ui.unit.sp
 import edu.bnbu.student.mvp.core.data.ApiStudentRepository
 import edu.bnbu.student.mvp.core.network.ApiHttpException
 import edu.bnbu.student.mvp.core.designsystem.ActionButton
+import edu.bnbu.student.mvp.core.designsystem.BNBUErrorPanel
+import edu.bnbu.student.mvp.core.designsystem.BNBUFormField
 import edu.bnbu.student.mvp.core.designsystem.BNBUMotion
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.PrimaryActionButton
@@ -71,6 +74,10 @@ import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.designsystem.ValidationPanel
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
+import edu.bnbu.student.mvp.core.error.ClientErrorContext
+import edu.bnbu.student.mvp.core.error.ClientErrorMapper
+import edu.bnbu.student.mvp.core.error.SafeClientLogger
+import edu.bnbu.student.mvp.core.error.UserFacingError
 import edu.bnbu.student.mvp.core.model.Exemption
 import edu.bnbu.student.mvp.core.model.ExemptionApplication
 import edu.bnbu.student.mvp.core.model.ExemptionType
@@ -93,6 +100,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.core.content.FileProvider
 import java.io.File
+import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -125,6 +133,7 @@ fun ExemptionScreen(
     var exemptions by remember { mutableStateOf<List<Exemption>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var userFacingError by remember { mutableStateOf<UserFacingError?>(null) }
     var successMessage by remember { mutableStateOf<String?>(null) }
     var selectedExemptionId by rememberSaveable { mutableStateOf(initialApplicationId) }
     var resubmittingExemption by remember { mutableStateOf<Exemption?>(null) }
@@ -163,6 +172,7 @@ fun ExemptionScreen(
         }
         isLoading = true
         errorMessage = null
+        userFacingError = null
         val request = appState.launchAuthenticatedRequest {
             try {
                 val response = remoteRepository.listExemptions()
@@ -194,8 +204,13 @@ fun ExemptionScreen(
                     onUnauthorized()
                     return@launchAuthenticatedRequest
                 }
-                // The prefix is client copy; an API-provided detail is displayed unchanged.
-                errorMessage = interfaceText("加载失败：", "Could not load applications: ") + (e.message ?: "")
+                val mapped = ClientErrorMapper.map(e, ClientErrorContext.EXEMPTION)
+                userFacingError = mapped
+                SafeClientLogger.log(
+                    error = mapped,
+                    context = ClientErrorContext.EXEMPTION,
+                    httpStatus = (e as? ApiHttpException)?.statusCode
+                )
             } finally {
                 isLoading = false
             }
@@ -323,6 +338,14 @@ fun ExemptionScreen(
                 ValidationPanel(message = message)
             }
         }
+        userFacingError?.let { error ->
+            item {
+                BNBUErrorPanel(
+                    error = error,
+                    onDismiss = { userFacingError = null }
+                )
+            }
+        }
 
         if (isLoading && exemptions.isEmpty()) {
             item {
@@ -372,11 +395,28 @@ fun ExemptionScreen(
                         onUnauthorized = onUnauthorized,
                         onSuccess = { msg ->
                             successMessage = msg
+                            userFacingError = null
                             resubmittingExemption = null
                             selectedTab = ExemptionTab.MyApplications
                             loadExemptions()
                         },
-                        onError = { errorMessage = it }
+                        onError = {
+                            userFacingError = null
+                            errorMessage = it
+                        },
+                        onRemoteError = { throwable ->
+                            val mapped = ClientErrorMapper.map(
+                                throwable,
+                                ClientErrorContext.EXEMPTION
+                            )
+                            errorMessage = null
+                            userFacingError = mapped
+                            SafeClientLogger.log(
+                                error = mapped,
+                                context = ClientErrorContext.EXEMPTION,
+                                httpStatus = (throwable as? ApiHttpException)?.statusCode
+                            )
+                        }
                     )
                 }
             }
@@ -574,15 +614,14 @@ private fun ExemptionTypeSelector(
     selected: ExemptionType,
     enabled: Boolean,
     pendingExemptionTypes: Set<String>,
+    gender: String,
     onSelected: (ExemptionType) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
     val availableTypes = listOf(
-        ExemptionType.Run800m,
-        ExemptionType.Run1000m,
+        if (gender.equals("male", ignoreCase = true)) ExemptionType.Run1000m else ExemptionType.Run800m,
         ExemptionType.SchoolTeam,
-        ExemptionType.StudentClub,
-        ExemptionType.SpecialCircumstance
+        ExemptionType.StudentClub
     )
     availableTypes.chunked(2).forEachIndexed { rowIndex, options ->
         if (rowIndex > 0) Spacer(Modifier.height(10.dp))
@@ -638,7 +677,8 @@ private fun NewExemptionForm(
     onSubmittingChanged: (Boolean) -> Unit,
     onUnauthorized: () -> Unit,
     onSuccess: (String) -> Unit,
-    onError: (String) -> Unit
+    onError: (String) -> Unit,
+    onRemoteError: (Throwable) -> Unit
 ) {
     val writeEnabled = appState.isWriteAllowed
     var selectedType by remember(initialExemption?.id) {
@@ -653,10 +693,26 @@ private fun NewExemptionForm(
     }
     var organization by remember(initialExemption?.id) { mutableStateOf(initialExemption?.organization.orEmpty()) }
     var reason by remember(initialExemption?.id) { mutableStateOf("") }
+    var organizationFocusedOnce by remember(initialExemption?.id) { mutableStateOf(false) }
+    var organizationTouched by remember(initialExemption?.id) { mutableStateOf(false) }
+    var reasonFocusedOnce by remember(initialExemption?.id) { mutableStateOf(false) }
+    var reasonTouched by remember(initialExemption?.id) { mutableStateOf(false) }
+    var submitAttempted by remember(initialExemption?.id) { mutableStateOf(false) }
+    val organizationFocusRequester = remember(initialExemption?.id) { FocusRequester() }
+    val reasonFocusRequester = remember(initialExemption?.id) { FocusRequester() }
     var proofAttachments by remember { mutableStateOf<List<ProofAttachment>>(emptyList()) }
     var attachmentNotice by remember { mutableStateOf<String?>(null) }
     var cameraTempUri by remember { mutableStateOf<Uri?>(null) }
     var cameraTempFile by remember { mutableStateOf<File?>(null) }
+    var submissionIntentId by rememberSaveable(initialExemption?.id) {
+        mutableStateOf(UUID.randomUUID().toString())
+    }
+    var preparedSubmissionFingerprint by rememberSaveable(initialExemption?.id) {
+        mutableStateOf<String?>(null)
+    }
+    var preparedMediaIds by rememberSaveable(initialExemption?.id) {
+        mutableStateOf(arrayListOf<String>())
+    }
     val submissionJob = remember { mutableStateOf<Job?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -666,6 +722,25 @@ private fun NewExemptionForm(
     val hasPendingSameType = initialExemption == null &&
         hasPendingExemption &&
         selectedType.apiValue in pendingExemptionTypes
+    val organizationError = if (
+        selectedType.isCheckInExemption &&
+        (organizationTouched || submitAttempted) &&
+        organization.isBlank()
+    ) {
+        interfaceText("请填写相关组织名称", "Enter the organization name.")
+    } else {
+        null
+    }
+    val reasonError = if (
+        (reasonTouched || submitAttempted) && reason.isBlank()
+    ) {
+        interfaceText(
+            "请填写申请理由或补充说明",
+            "Enter an application reason or additional notes."
+        )
+    } else {
+        null
+    }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -775,6 +850,7 @@ private fun NewExemptionForm(
                     selected = selectedType,
                     enabled = !isSubmitting,
                     pendingExemptionTypes = pendingExemptionTypes,
+                    gender = appState.workspace.student.gender,
                     onSelected = {
                         selectedType = it
                         if (!it.isCheckInExemption) organization = ""
@@ -792,45 +868,66 @@ private fun NewExemptionForm(
                 enter = expandVertically(tween(BNBUMotion.Standard)) + fadeIn(tween(BNBUMotion.Standard)),
                 exit = shrinkVertically(tween(BNBUMotion.Standard)) + fadeOut(tween(BNBUMotion.Quick))
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        text = interfaceText("组织名称", "Organization name"),
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                    OutlinedTextField(
-                        value = organization,
-                        onValueChange = { organization = it.take(128) },
-                        enabled = !isSubmitting,
-                        placeholder = { Text(interfaceText("填写相关组织名称", "Enter the organization name")) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                }
+                BNBUFormField(
+                    value = organization,
+                    onValueChange = { organization = it.take(128) },
+                    label = interfaceText("组织名称", "Organization name"),
+                    testTag = "exemption.organization",
+                    enabled = !isSubmitting,
+                    loading = isSubmitting,
+                    required = true,
+                    placeholder = interfaceText("填写相关组织名称", "Enter the organization name"),
+                    supportingText = interfaceText("请填写申请对应的组织全称。", "Enter the full organization name."),
+                    errorText = organizationError,
+                    counter = organization.length to 128,
+                    inputModifier = Modifier.focusRequester(organizationFocusRequester),
+                    onFocusChanged = { focused ->
+                        if (focused) {
+                            organizationFocusedOnce = true
+                        } else if (organizationFocusedOnce) {
+                            organizationTouched = true
+                        }
+                    }
+                )
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = if (initialExemption == null) interfaceText("申请理由", "Application reason") else interfaceText("补充说明", "Additional notes"),
-                    color = cs.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelMedium
-                )
-                OutlinedTextField(
-                    value = reason,
-                    onValueChange = { reason = it.take(MaxExemptionReasonLength) },
-                    enabled = !isSubmitting,
-                    placeholder = {
-                        Text(
-                            if (initialExemption != null) interfaceText("请说明本次补充材料的内容...", "Describe the additional documents...")
-                            else if (selectedType.isCheckInExemption) interfaceText("请说明组织身份及申请原因...", "Describe your organization identity and reason...")
-                            else interfaceText("请说明申请免测的原因...", "Explain why you are applying for an exemption...")
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 3,
-                    maxLines = 6
-                )
-            }
+            BNBUFormField(
+                value = reason,
+                onValueChange = { reason = it.take(MaxExemptionReasonLength) },
+                label = if (initialExemption == null) {
+                    interfaceText("申请理由", "Application reason")
+                } else {
+                    interfaceText("补充说明", "Additional notes")
+                },
+                testTag = "exemption.reason",
+                enabled = !isSubmitting,
+                loading = isSubmitting,
+                required = true,
+                placeholder = if (initialExemption != null) {
+                    interfaceText("请说明本次补充材料的内容...", "Describe the additional documents...")
+                } else if (selectedType.isCheckInExemption) {
+                    interfaceText("请说明组织身份及申请原因...", "Describe your organization identity and reason...")
+                } else {
+                    interfaceText("请说明申请免测的原因...", "Explain why you are applying for an exemption...")
+                },
+                supportingText = interfaceText(
+                    "请只填写审核所需信息，避免加入无关敏感资料。",
+                    "Include only information needed for review and avoid unrelated sensitive data."
+                ),
+                singleLine = false,
+                minLines = 3,
+                maxLines = 6,
+                errorText = reasonError,
+                counter = reason.length to MaxExemptionReasonLength,
+                inputModifier = Modifier.focusRequester(reasonFocusRequester),
+                onFocusChanged = { focused ->
+                    if (focused) {
+                        reasonFocusedOnce = true
+                    } else if (reasonFocusedOnce) {
+                        reasonTouched = true
+                    }
+                }
+            )
 
             // ── Proof file section with camera/gallery ─────────────
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -925,9 +1022,7 @@ private fun NewExemptionForm(
                 ) {
                     if (proofAttachments.isEmpty()) {
                         Text(
-                            text = if (selectedType == ExemptionType.SpecialCircumstance) {
-                                interfaceText("可选：上传与申请有关的证明材料。", "Optional: upload supporting documents related to the application.")
-                            } else if (selectedType.isCheckInExemption) {
+                            text = if (selectedType.isCheckInExemption) {
                                 interfaceText("必填：至少上传一份能够证明相关组织身份的材料。", "Required: upload at least one document proving organization membership.")
                             } else {
                                 interfaceText("必填：至少上传一份耐力跑免测证明材料。", "Required: upload at least one endurance-run exemption document.")
@@ -970,19 +1065,17 @@ private fun NewExemptionForm(
                         onError(interfaceText("你已有一个相同类型的待审核申请，请等待教师处理后再提交新申请。", "You already have a pending application of this type. Wait for the teacher's decision before submitting another."))
                         return@PrimaryActionButton
                     }
+                    submitAttempted = true
+                    if (selectedType.isCheckInExemption && organization.isBlank()) {
+                        organizationFocusRequester.requestFocus()
+                        return@PrimaryActionButton
+                    }
                     val normalizedReason = reason.trim()
                     if (normalizedReason.isEmpty()) {
-                        onError(interfaceText("请填写申请理由或补充说明", "Enter an application reason or additional notes."))
+                        reasonFocusRequester.requestFocus()
                         return@PrimaryActionButton
                     }
-                    if (selectedType.isCheckInExemption && organization.isBlank()) {
-                        onError(interfaceText("请填写相关组织名称", "Enter the organization name."))
-                        return@PrimaryActionButton
-                    }
-                    if (
-                        selectedType != ExemptionType.SpecialCircumstance &&
-                        proofAttachments.isEmpty()
-                    ) {
+                    if (proofAttachments.isEmpty()) {
                         onError(interfaceText("请至少上传一份证明材料", "Upload at least one supporting document."))
                         return@PrimaryActionButton
                     }
@@ -996,25 +1089,40 @@ private fun NewExemptionForm(
                         selectedTypeSnapshot.isCheckInExemption && it.isNotBlank()
                     }
                     val proofSnapshot = proofAttachments.toList()
+                    val submissionFingerprint = exemptionSubmissionFingerprint(
+                        type = selectedTypeSnapshot.apiValue,
+                        reason = normalizedReason,
+                        organization = organizationSnapshot,
+                        attachments = proofSnapshot
+                    )
                     onSubmittingChanged(true)
                     val request = appState.launchAuthenticatedRequest {
                         try {
-                            // Upload proof files first (if any)
-                            var uploadedCosKeys: List<String> = emptyList()
-                            if (proofSnapshot.isNotEmpty()) {
+                            // Reuse the same confirmed media IDs when the user
+                            // retries an unchanged submission after an ambiguous
+                            // create/submit response. This keeps the exemption
+                            // request body and its durable idempotency identity stable.
+                            var uploadedCosKeys = preparedMediaIds.takeIf {
+                                preparedSubmissionFingerprint == submissionFingerprint &&
+                                    it.size == proofSnapshot.size
+                            }.orEmpty()
+                            if (proofSnapshot.isNotEmpty() && uploadedCosKeys.isEmpty()) {
                                 val cacheDir = context.cacheDir
                                 val uploadResult = remoteRepository.uploadProofFiles(
                                     proofAttachments = proofSnapshot,
                                     cacheDir = cacheDir
                                 )
                                 uploadedCosKeys = uploadResult.getOrThrow().map { it.cosKey }
+                                preparedSubmissionFingerprint = submissionFingerprint
+                                preparedMediaIds = ArrayList(uploadedCosKeys)
                             }
 
                             val application = ExemptionApplication(
                                 type = selectedTypeSnapshot.apiValue,
                                 reason = normalizedReason,
                                 proofFiles = uploadedCosKeys,
-                                organization = organizationSnapshot
+                                organization = organizationSnapshot,
+                                intentId = submissionIntentId
                             )
                             val response = initialExemption?.let {
                                 remoteRepository.supplementExemption(it, application)
@@ -1025,6 +1133,9 @@ private fun NewExemptionForm(
                             }
                             val submittedIds = proofSnapshot.mapTo(mutableSetOf()) { it.id }
                             proofAttachments = proofAttachments.filterNot { it.id in submittedIds }
+                            submissionIntentId = UUID.randomUUID().toString()
+                            preparedSubmissionFingerprint = null
+                            preparedMediaIds = arrayListOf()
                             onSuccess(
                                 if (initialExemption != null) interfaceText("补充材料已提交 (${response.id})", "Additional documents submitted (${response.id})")
                                 else interfaceText("申请已提交 (${response.id})", "Application submitted (${response.id})")
@@ -1036,8 +1147,7 @@ private fun NewExemptionForm(
                                 onUnauthorized()
                                 return@launchAuthenticatedRequest
                             }
-                            // Keep an API error detail intact; only the client-owned prefix is localized.
-                            onError(interfaceText("提交失败：", "Submission failed: ") + (e.message ?: ""))
+                            onRemoteError(e)
                         } finally {
                             onSubmittingChanged(false)
                         }
@@ -1051,6 +1161,33 @@ private fun NewExemptionForm(
             )
         }
     }
+}
+
+private fun exemptionSubmissionFingerprint(
+    type: String,
+    reason: String,
+    organization: String?,
+    attachments: List<ProofAttachment>
+): String {
+    val fields = buildList {
+        add(type)
+        add(reason)
+        add(organization.orEmpty())
+        attachments.forEach { attachment ->
+            add(attachment.id)
+            add(attachment.source)
+            add(attachment.byteCount.toString())
+            add(attachment.type.name)
+        }
+    }
+    val canonical = buildString {
+        fields.forEach { field -> append(field.length).append(':').append(field) }
+    }
+    return MessageDigest.getInstance("SHA-256")
+        .digest(canonical.toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte ->
+            (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+        }
 }
 
 @Composable
@@ -1180,7 +1317,7 @@ private fun ExemptionRulesPanel(isPreview: Boolean) {
                 style = MaterialTheme.typography.labelMedium
             )
             Text(
-                text = interfaceText("申请会精确区分 800m、1000m、校队、社团和特殊情况，并由后端保存结构化类型。", "Applications preserve exact 800m, 1000m, school-team, student-club, and special-circumstance subtypes on the server."),
+                text = interfaceText("申请会按性别显示 800m 或 1000m，并向所有学生开放校队、社团类型；后端保存结构化类型。", "Applications show 800 m or 1000 m by gender and make school-team and student-club types available to every student; the backend preserves the structured subtype."),
                 color = cs.onSurface,
                 style = MaterialTheme.typography.bodyMedium
             )
@@ -1209,7 +1346,8 @@ private fun File.toProofAttachmentFromCamera(sourceUri: Uri): ProofAttachment? {
         type = ProofMediaType.Image,
         fileName = name,
         byteCount = length(),
-        source = sourceUri.toString()
+        source = sourceUri.toString(),
+        captureSource = "IN_APP_CAMERA"
     )
 }
 

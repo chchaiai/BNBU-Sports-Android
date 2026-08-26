@@ -58,8 +58,12 @@ import edu.bnbu.student.mvp.core.network.UpdateLanguagePreferenceRequest
 import edu.bnbu.student.mvp.core.network.v1.V1StudentWorkspaceGateway
 import edu.bnbu.student.mvp.core.network.v1.V1StudentWorkspaceSnapshot
 import edu.bnbu.student.mvp.core.exercise.CreateExerciseRecordDraftCommand
+import edu.bnbu.student.mvp.core.exercise.CreateExerciseRecordResubmissionCommand
 import edu.bnbu.student.mvp.core.exercise.ExerciseGateway
+import edu.bnbu.student.mvp.core.exercise.ExerciseRecordAttemptContext
 import edu.bnbu.student.mvp.core.exercise.ExerciseRecordForm
+import edu.bnbu.student.mvp.core.exercise.ExerciseRecordResubmissionDraft
+import edu.bnbu.student.mvp.core.exercise.ExerciseRecordResubmissionGateway
 import edu.bnbu.student.mvp.core.exercise.SubmitExerciseRecordCommand
 import edu.bnbu.student.mvp.core.network.v1.generated.CreateExemptionApplicationRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.CreateFeedbackRequest
@@ -80,6 +84,20 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.URI
 
+internal fun selectCurrentEnrollmentId(
+    sessionEnrollmentId: String?,
+    currentSemesterId: String?,
+    activeEnrollmentSemesterIds: Map<String, String>
+): String? {
+    val semesterId = currentSemesterId?.takeIf(String::isNotBlank) ?: return null
+    val currentCandidates = activeEnrollmentSemesterIds
+        .filterValues { it == semesterId }
+        .keys
+    return sessionEnrollmentId?.takeIf(String::isNotBlank)?.let { sessionId ->
+        sessionId.takeIf { it in currentCandidates }
+    } ?: currentCandidates.singleOrNull()
+}
+
 class ApiStudentRepository(
     initialBearerToken: String? = null,
     private val userProfile: UserDto? = null,
@@ -87,9 +105,11 @@ class ApiStudentRepository(
 ) : StudentRepository {
     private var lastV1Snapshot: V1StudentWorkspaceSnapshot? = null
     private var exerciseGateway: ExerciseGateway? = null
+    private var recordResubmissionGateway: ExerciseRecordResubmissionGateway? = null
 
     internal fun attachExerciseGateway(gateway: ExerciseGateway?): ApiStudentRepository = apply {
         exerciseGateway = gateway
+        recordResubmissionGateway = gateway as? ExerciseRecordResubmissionGateway
     }
 
     /**
@@ -191,10 +211,30 @@ class ApiStudentRepository(
                 )
                 SubmitRecordResponse(
                     id = submitted.recordId,
-                    submittedAt = java.time.Instant.ofEpochMilli(submitted.submittedAtEpochMillis).toString()
+                    submittedAt = java.time.Instant.ofEpochMilli(submitted.submittedAtEpochMillis).toString(),
+                    businessDate = submitted.businessDate.toString(),
+                    creditedDurationSeconds = submitted.creditedDurationSeconds,
+                    reviewStatus = submitted.reviewStatus
                 )
             }
         }
+    }
+
+    /** Reads additive attempt metadata without changing the frozen record projection. */
+    internal suspend fun fetchExerciseRecordAttemptContext(
+        recordId: String
+    ): ExerciseRecordAttemptContext = withContext(Dispatchers.IO) {
+        requireRecordResubmissionGateway().getRecordAttemptContext(recordId)
+    }
+
+    /**
+     * Creates only the next DRAFT attempt. The preceding INVALID record remains
+     * immutable and the returned draft still follows the ordinary media/submit flow.
+     */
+    internal suspend fun createExerciseRecordResubmission(
+        command: CreateExerciseRecordResubmissionCommand
+    ): ExerciseRecordResubmissionDraft = withContext(Dispatchers.IO) {
+        requireRecordResubmissionGateway().createRecordResubmission(command)
     }
 
     override suspend fun markNotificationRead(id: String): Result<MarkReadResponse> {
@@ -562,9 +602,13 @@ class ApiStudentRepository(
     // ── New: Endurance scoring ────────────────────────────────────
 
     suspend fun convertEndurance(request: EnduranceConversionRequest): EnduranceScoreResponse {
-        throw UnsupportedOperationException(
-            "Activity conversion rules are currently an explicit V1 default-deny capability."
-        )
+        return withContext(Dispatchers.IO) {
+            requireV1Gateway().previewActivityConversion(
+                timeSeconds = request.timeSeconds,
+                gender = request.gender,
+                gradeLevel = request.gradeLevel
+            )
+        }
     }
 
     // ── New: Exemptions ───────────────────────────────────────────
@@ -587,8 +631,9 @@ class ApiStudentRepository(
                 organizationName = payload.organization,
                 reason = payload.reason,
                 mediaIds = payload.proofFiles.filter(String::isNotBlank).toSet(),
-                intentId = java.util.UUID.randomUUID().toString()
+                intentId = payload.intentId
             )
+            gateway.awaitExemptionMediaAvailable(created.mediaIds)
             gateway.submitExemption(created.id, created.version).toLegacySubmitResponse()
         }
     }
@@ -671,6 +716,7 @@ class ApiStudentRepository(
                         file = file,
                         mimeType = attachment.mimeTypeForV1(),
                         durationSeconds = attachment.durationSeconds?.toLong(),
+                        captureSource = attachment.captureSource,
                         intentId = attachment.id,
                         onProgress = { itemProgress ->
                             onProgress(
@@ -716,6 +762,7 @@ class ApiStudentRepository(
                 mediaIds = current.mediaIds + payload.proofFiles.filter(String::isNotBlank),
                 expectedVersion = current.version
             )
+            gateway.awaitExemptionMediaAvailable(updated.mediaIds)
             gateway.submitExemption(updated.id, updated.version).toLegacySubmitResponse()
         }
     }
@@ -843,7 +890,7 @@ class ApiStudentRepository(
                     osVersion = android.os.Build.VERSION.RELEASE
                 )
             )
-            requireV1Gateway().createFeedback(body, java.util.UUID.randomUUID().toString())
+            requireV1Gateway().createFeedback(body, payload.intentId)
                 .toLegacyResponse()
         }
     }
@@ -856,6 +903,12 @@ class ApiStudentRepository(
 
     private fun requireV1Gateway(): V1StudentWorkspaceGateway = v1Gateway
         ?: throw IllegalStateException("The authenticated V1 workspace gateway is not configured.")
+
+    private fun requireRecordResubmissionGateway(): ExerciseRecordResubmissionGateway =
+        recordResubmissionGateway
+            ?: throw IllegalStateException(
+                "The authenticated exercise record resubmission gateway is not configured."
+            )
 
     private suspend fun activeEnrollmentId(): String {
         val gateway = requireV1Gateway()
@@ -881,8 +934,26 @@ class ApiStudentRepository(
         val contractProfile = requireNotNull(currentUser.studentProfile) {
             "The authenticated student projection is missing."
         }
-        val activeSection = enrollments.firstOrNull { it.status.value == "ACTIVE" }
-            ?.let { classSections[it.classSectionId] }
+        val activeEnrollmentSemesterIds = enrollments
+            .filter { it.status.value == "ACTIVE" }
+            .mapNotNull { enrollment ->
+                classSections[enrollment.classSectionId]?.semesterId?.let { semesterId ->
+                    enrollment.id to semesterId
+                }
+            }
+            .toMap()
+        val currentEnrollmentId = selectCurrentEnrollmentId(
+            sessionEnrollmentId = sessionEnrollmentId,
+            currentSemesterId = currentSemester?.id,
+            activeEnrollmentSemesterIds = activeEnrollmentSemesterIds
+        )
+        val currentEnrollment = currentEnrollmentId?.let { id ->
+            enrollments.singleOrNull { it.id == id }
+        }
+        val activeSection = currentEnrollment?.let { classSections[it.classSectionId] }
+        val primaryScore = currentEnrollmentId?.let { enrollmentId ->
+            scores.singleOrNull { it.enrollmentId == enrollmentId }
+        }
         val student = StudentProfile(
             // Android's student identity key follows StudentProfile.id; User.id
             // remains the authentication principal and is never substituted.
@@ -900,21 +971,20 @@ class ApiStudentRepository(
             gradeLevel = contractProfile.gradeYear.toString(),
             admissionYear = contractProfile.gradeYear,
             currentAcademicYear = "",
-            gradeCalculatedAt = scores.maxOfOrNull { it.calculatedAt?.toString().orEmpty() }.orEmpty(),
+            gradeCalculatedAt = primaryScore?.calculatedAt?.toString().orEmpty(),
             accountStatus = currentUser.user.status.value
         )
         val courses = enrollments.mapNotNull { enrollment ->
             val section = classSections[enrollment.classSectionId] ?: return@mapNotNull null
             val contractCourse = this.courses[section.courseId] ?: return@mapNotNull null
+            val contractSemester = currentSemester?.takeIf { it.id == section.semesterId }
             Course(
                 id = contractCourse.id,
                 code = contractCourse.courseCode,
                 section = section.classCode,
                 name = contractCourse.courseName,
-                semester = currentSemester
-                    ?.takeIf { it.id == section.semesterId }
-                    ?.displayName
-                    ?: section.semesterId,
+                // Internal semester IDs are routing facts, never user-facing labels.
+                semester = contractSemester?.displayName.orEmpty(),
                 students = 0,
                 completion = 0,
                 missing = 0,
@@ -922,25 +992,24 @@ class ApiStudentRepository(
                 teacher = teachers[section.teacherId]?.fullName ?: section.teacherId,
                 teacherId = section.teacherId,
                 semesterId = section.semesterId,
+                academicYear = contractSemester?.academicYear.orEmpty(),
+                term = contractSemester?.termCode?.value.orEmpty(),
+                semesterStatus = contractSemester?.status?.value?.lowercase().orEmpty(),
                 status = section.status.value.lowercase(),
                 enrollmentStatus = enrollment.status.value.lowercase(),
                 isCurrent = enrollment.status.value == "ACTIVE"
             )
         }
-        val validRecords = records.filter { it.currentReview?.result?.value == "VALID" }
-        val courseSeconds = if (scores.isNotEmpty()) {
-            scores.sumOf { it.validCourseDurationSeconds }
-        } else {
-            validRecords.filter { it.creditType.value == "COURSE_RELATED" }
-                .sumOf { it.creditedDurationSeconds }
+        val validCurrentRecords = records.filter { record ->
+            record.enrollmentId == currentEnrollmentId && record.currentReview?.result?.value == "VALID"
         }
-        val generalSeconds = if (scores.isNotEmpty()) {
-            scores.sumOf { it.validGeneralDurationSeconds }
-        } else {
-            validRecords.filter { it.creditType.value == "GENERAL" }
-                .sumOf { it.creditedDurationSeconds }
-        }
-        val qualified = scores.any { it.qualificationStatus.value == "QUALIFIED" }
+        val courseSeconds = validCurrentRecords
+            .filter { it.creditType.value == "COURSE_RELATED" }
+            .sumOf { it.creditedDurationSeconds }
+        val generalSeconds = validCurrentRecords
+            .filter { it.creditType.value == "GENERAL" }
+            .sumOf { it.creditedDurationSeconds }
+        val totalValidSeconds = courseSeconds + generalSeconds
         val progress = StudentProgress(
             id = student.id,
             name = student.name,
@@ -953,13 +1022,11 @@ class ApiStudentRepository(
             exam = 0,
             attendance = 0,
             physical = 0,
-            status = if (qualified) "completed" else "in_progress",
-            source = if (scores.isNotEmpty()) "v1:student-scores" else "v1:valid-exercise-records",
-            organizationCredit = null
+            status = primaryScore?.qualificationStatus?.value ?: "VALID_RECORDS_SUMMED",
+            source = "v1:exercise-records:valid-current-enrollment",
+            organizationCredit = null,
+            authoritativeTotalHours = totalValidSeconds / 3600.0
         )
-        val primaryScore = scores.firstOrNull { score ->
-            enrollments.any { it.id == score.enrollmentId && it.status.value == "ACTIVE" }
-        } ?: scores.firstOrNull()
         val publishedScore = primaryScore?.takeIf {
             it.status.value == "PUBLISHED" || it.status.value == "LOCKED"
         }?.finalScore
@@ -1026,7 +1093,9 @@ class ApiStudentRepository(
                     startTime = evidenceContext?.startedAt?.toString(),
                     endTime = evidenceContext?.endedAt?.toString(),
                     actualDurationSeconds = record.actualDurationSeconds,
-                    reviewStatus = record.currentReview?.result?.value
+                    reviewStatus = record.currentReview?.result?.value,
+                    businessDate = record.businessDate.toString(),
+                    version = record.version
                 )
             },
             grades = gradeRow,
@@ -1129,7 +1198,7 @@ class ApiStudentRepository(
             CreateExemptionApplicationRequest.ApplicationType.EXERCISE_CHECK_IN
         "run_800m", "run_1000m" ->
             CreateExemptionApplicationRequest.ApplicationType.PHYSICAL_TEST
-        else -> CreateExemptionApplicationRequest.ApplicationType.SPECIAL_CIRCUMSTANCE
+        else -> error("Unsupported exemption type: $type")
     }
 
     private fun ExemptionApplication.toContractApplicationSubtype():
@@ -1138,7 +1207,7 @@ class ApiStudentRepository(
         "run_1000m" -> CreateExemptionApplicationRequest.ApplicationSubtype.RUN_1000M
         "school_team" -> CreateExemptionApplicationRequest.ApplicationSubtype.SCHOOL_TEAM
         "student_club" -> CreateExemptionApplicationRequest.ApplicationSubtype.STUDENT_CLUB
-        else -> CreateExemptionApplicationRequest.ApplicationSubtype.SPECIAL_CIRCUMSTANCE
+        else -> error("Unsupported exemption subtype: $type")
     }
 
     private fun ProofAttachment.mimeTypeForV1(): String = when {

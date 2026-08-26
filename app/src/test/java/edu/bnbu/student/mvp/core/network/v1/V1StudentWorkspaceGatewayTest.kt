@@ -85,6 +85,42 @@ class V1StudentWorkspaceGatewayTest {
         assertEquals("100", second.requestUrl!!.queryParameter("limit"))
     }
 
+    @Test
+    fun missingCurrentSemesterMapsOnlyThatNotFoundResponseToNull() = runBlocking {
+        server.enqueue(success("me", currentUserJson))
+        server.enqueue(paged("enrollments", "[]"))
+        server.enqueue(error(404, "COURSE_NOT_FOUND", "semester-missing"))
+        repeat(3) { index -> server.enqueue(paged("rest-$index", "[]")) }
+        val gateway = V1StudentWorkspaceGateway.create(
+            credentialStore = FakeStore(credentials()),
+            baseUrl = server.url("/api/v1").toString(),
+            httpClient = TestHttps.clientBuilder().retryOnConnectionFailure(false).build()
+        )
+
+        val snapshot = gateway.loadWorkspace()
+
+        assertEquals(null, snapshot.currentSemester)
+        assertEquals(6, server.requestCount)
+    }
+
+    @Test
+    fun workspaceRejectsPagedResponseWithoutContractPagination() {
+        server.enqueue(success("me", currentUserJson))
+        server.enqueue(success("enrollments-without-pagination", "[]"))
+        val gateway = V1StudentWorkspaceGateway.create(
+            credentialStore = FakeStore(credentials()),
+            baseUrl = server.url("/api/v1").toString(),
+            httpClient = TestHttps.clientBuilder().retryOnConnectionFailure(false).build()
+        )
+
+        val error = org.junit.Assert.assertThrows(V1ProtocolException::class.java) {
+            runBlocking { gateway.loadWorkspace() }
+        }
+
+        assertTrue(error.message.orEmpty().contains("missing meta.pagination"))
+        assertEquals(2, server.requestCount)
+    }
+
     private fun success(requestId: String, data: String): MockResponse = MockResponse()
         .setResponseCode(200)
         .setHeader("X-Request-ID", requestId)
@@ -104,6 +140,13 @@ class V1StudentWorkspaceGatewayTest {
                 """{"data":$data,"meta":{"requestId":"$requestId","pagination":{"nextCursor":$cursor,"hasMore":$hasMore,"limit":100}}}"""
             )
     }
+
+    private fun error(status: Int, code: String, requestId: String): MockResponse = MockResponse()
+        .setResponseCode(status)
+        .setHeader("X-Request-ID", requestId)
+        .setBody(
+            """{"code":"$code","message":"safe error","details":{},"requestId":"$requestId","timestamp":"2026-08-06T12:00:00Z"}"""
+        )
 
     private fun credentials(): AuthSessionCredentials = AuthSessionCredentials.fromContract(
         sessionId = "session-1",

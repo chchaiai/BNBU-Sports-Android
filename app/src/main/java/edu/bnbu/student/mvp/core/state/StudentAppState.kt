@@ -7,8 +7,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import edu.bnbu.student.mvp.core.data.ApiStudentRepository
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
+import edu.bnbu.student.mvp.core.error.ClientErrorContext
+import edu.bnbu.student.mvp.core.error.ClientErrorMapper
+import edu.bnbu.student.mvp.core.error.SafeClientLogger
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
+import edu.bnbu.student.mvp.core.local.AuthSessionCredentials
+import edu.bnbu.student.mvp.core.local.EphemeralAuthSessionCredentialStore
 import edu.bnbu.student.mvp.core.model.CheckInRecord
 import edu.bnbu.student.mvp.core.model.CheckInTimeWindow
 import edu.bnbu.student.mvp.core.model.AppThemeMode
@@ -31,7 +36,6 @@ import edu.bnbu.student.mvp.core.model.SyncOperation
 import edu.bnbu.student.mvp.core.model.SyncOperationStatus
 import edu.bnbu.student.mvp.core.model.SyncOperationType
 import edu.bnbu.student.mvp.core.model.hourText
-import edu.bnbu.student.mvp.core.model.withRecordedCheckIn
 import edu.bnbu.student.mvp.core.time.currentBeijingBusinessDate
 import edu.bnbu.student.mvp.core.time.toBeijingBusinessDate
 import edu.bnbu.student.mvp.core.network.ApiHttpException
@@ -45,6 +49,8 @@ import edu.bnbu.student.mvp.core.network.UploadProgress
 import edu.bnbu.student.mvp.core.network.StudentProfileResponse
 import edu.bnbu.student.mvp.core.network.ContactMethodResponse
 import edu.bnbu.student.mvp.core.network.v1.V1StudentApi
+import edu.bnbu.student.mvp.core.network.v1.V1AuthorizedApiClient
+import edu.bnbu.student.mvp.core.network.v1.AccountDeletionConfirmation
 import edu.bnbu.student.mvp.core.network.v1.V1StudentWorkspaceGateway
 import edu.bnbu.student.mvp.core.network.v1.createV1ExerciseGateway
 import edu.bnbu.student.mvp.core.network.v1.generated.CurrentUserData
@@ -65,7 +71,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 import com.google.gson.GsonBuilder
-import com.google.gson.JsonParser
 
 private const val MaxOtherExerciseDescriptionLength = 200
 
@@ -125,6 +130,10 @@ class StudentAppState(
     // ── State ─────────────────────────────────────────────────────
 
     var isAuthenticated by mutableStateOf(false)
+        private set
+
+    /** True only for the in-memory, Debug-only password-free review session. */
+    var isLocalReviewMode by mutableStateOf(false)
         private set
 
     var workspace by mutableStateOf(
@@ -296,6 +305,10 @@ class StudentAppState(
     var apiRepository: ApiStudentRepository? = null
         private set
 
+    /** True only when mutations are backed by the current V1/OpenAPI service. */
+    val isV1ContractBacked: Boolean
+        get() = apiRepository != null
+
     init {
         scope.launch {
             ensureInitialLocalState()
@@ -334,7 +347,7 @@ class StudentAppState(
     val totalCompleted: Double
         get() {
             if (!hourRule.isAvailable) {
-                return (workspace.progress.course + workspace.progress.general).coerceAtLeast(0.0)
+                return workspace.progress.authoritativeTotalHours?.coerceAtLeast(0.0) ?: 0.0
             }
             // Cap each category at its required max to avoid double-counting overflow.
             // e.g., if a student has 15h course (over 10h cap), only 10h counts toward total.
@@ -398,6 +411,31 @@ class StudentAppState(
             "Password login is retired. Use the email verification-code flow."
         )
         onResult(false)
+    }
+
+    /**
+     * Installs a synthetic workspace without creating credentials or an API
+     * repository. The caller is build-type gated; this state method keeps the
+     * review session memory-only and invalidates any earlier network session.
+     */
+    fun enterLocalReview(reviewWorkspace: StudentWorkspace) {
+        require(reviewWorkspace.student.id == "LOCAL-REVIEW-STUDENT") {
+            "LOCAL_REVIEW_STUDENT_REQUIRED"
+        }
+        invalidateSessionGeneration()
+        localSessionInvalidated = true
+        localStore?.clearAuth()
+        apiRepository = null
+        workspace = reviewWorkspace
+        contactStatus = ContactStatusResponse()
+        currentUserVersion = 1L
+        isPreparingActivatedWorkspace = false
+        contactActivationLoadError = null
+        isShowingCachedData = false
+        isLoading = false
+        lastError = null
+        isLocalReviewMode = true
+        isAuthenticated = true
     }
 
     /**
@@ -686,33 +724,47 @@ class StudentAppState(
     }
 
     fun logout() {
-        val pushCredentials = localStore
-            ?.takeUnless { requiresContactBinding }
-            ?.loadAuthSession()
+        val logoutCredentials = localStore?.loadAuthSession()
+        val shouldUnregisterPush = !requiresContactBinding
         val context = ApiStudentRepository.androidAppContext()
-        if (pushCredentials != null && context != null) {
-            // Best effort: logout must still complete if FCM or the network is unavailable.
-            scope.launch(Dispatchers.IO) {
-                FcmPushRegistrar.unregisterCurrentDevice(context, pushCredentials)
-            }
+        invalidateSessionGeneration()
+        localSessionInvalidated = true
+        try {
+            localStore?.clearAll()
+        } catch (error: RuntimeException) {
+            logSafeClientFailure(error, ClientErrorContext.GENERAL)
+        }
+        scheduleRemoteLogoutAndFinalSessionClear(
+            event = "clear local data on logout",
+            credentials = logoutCredentials,
+            context = context,
+            shouldUnregisterPush = shouldUnregisterPush
+        )
+        resetToSignedOutState()
+    }
+
+    /** Called only after the backend proves terminal account deletion and global revocation. */
+    internal fun completeAccountDeletion(confirmation: AccountDeletionConfirmation) {
+        check(confirmation.allSessionsRevoked) { "Account deletion must revoke all sessions." }
+        check(confirmation.newRegistrationRequired) {
+            "Account deletion must require a new registration."
         }
         invalidateSessionGeneration()
         localSessionInvalidated = true
         try {
             localStore?.clearAll()
         } catch (error: RuntimeException) {
-            android.util.Log.e("StudentAppState", "clear local data on logout failed", error)
+            logSafeClientFailure(error, ClientErrorContext.ACCOUNT_DELETION)
         }
-        scheduleFinalSessionClear("clear local data on logout")
-        isAuthenticated = false
-        apiRepository = null
-        lastError = null
-        isLoading = false
-        workspace = StudentWorkspace.empty()
-        contactStatus = ContactStatusResponse()
-        currentUserVersion = 1L
-        isPreparingActivatedWorkspace = false
-        contactActivationLoadError = null
+        // Retry the local wipe outside the cancelled authenticated generation.
+        // No remote logout is attempted: deletion already revoked every session.
+        scheduleRemoteLogoutAndFinalSessionClear(
+            event = "clear local data after account deletion",
+            credentials = null,
+            context = null,
+            shouldUnregisterPush = false
+        )
+        resetToSignedOutState()
     }
 
     fun handleUnauthorized() {
@@ -863,7 +915,7 @@ class StudentAppState(
             failSubmission("submitExerciseCheckIn", interfaceText("正在处理上一项请求，请稍候", "The previous request is still being processed. Please wait."), onResult)
             return
         }
-        if (hasSubmittedCheckInToday()) {
+        if (!isV1ContractBacked && hasSubmittedCheckInToday()) {
             failSubmission("submitExerciseCheckIn", interfaceText("今日已打卡，每天只能提交一次", "You have already checked in today. Only one submission is allowed per day."), onResult)
             return
         }
@@ -913,7 +965,9 @@ class StudentAppState(
             return
         }
 
-        val submittedHours = normalizedCheckInHours(hours)
+        // Legacy DTO field retained for the adapter shape only. The V1 adapter
+        // does not send it; Backend derives creditedDurationSeconds.
+        val nonAuthoritativeHours = hours.coerceAtLeast(0.0)
         val submittedDescription = normalizedDescription
         val repo = apiRepository ?: run {
             failSubmission("submitExerciseCheckIn", interfaceText("尚未连接服务器，请重新登录", "The server is not connected. Sign in again."), onResult)
@@ -952,7 +1006,7 @@ class StudentAppState(
                 val payload = SubmitSportRecordRequest(
                     creditType = creditType.label,
                     courseId = associatedCourseId,
-                    hours = submittedHours,
+                    hours = nonAuthoritativeHours,
                     description = submittedDescription,
                     proofFiles = proofFiles,
                     sportType = sportType,
@@ -962,6 +1016,7 @@ class StudentAppState(
                 )
                 val response = repo.submitRecord(payload).getOrThrow()
                 if (!isCurrentSession(generation)) return@launchSessionRequest
+                val serverCreditedHours = response.creditedDurationSeconds / 3600.0
                 val serverProofs = uploadedFiles.map { uploaded ->
                     ProofAttachment(
                         id = uploaded.cosKey,
@@ -976,7 +1031,7 @@ class StudentAppState(
                     courseId = associatedCourseId,
                     taskTitle = interfaceText("运动打卡", "Exercise check-in"),
                     creditType = creditType,
-                    hours = submittedHours,
+                    hours = serverCreditedHours,
                     submittedAt = response.submittedAt,
                     proofSummary = proofSummary(serverProofs),
                     proofPhotoCount = serverProofs.count { it.type == ProofMediaType.Image },
@@ -988,26 +1043,21 @@ class StudentAppState(
                     sportType = sportType,
                     startTime = payload.startTime,
                     endTime = payload.endTime,
-                    actualDurationSeconds = payload.actualDurationSeconds
+                    actualDurationSeconds = payload.actualDurationSeconds,
+                    reviewStatus = response.reviewStatus,
+                    businessDate = response.businessDate
                 )
                 workspace = workspace.copy(
-                    records = listOf(record) + workspace.records,
-                    // The dashboard renders this snapshot. Update it together
-                    // with the record so the submitted duration is visible
-                    // immediately, rather than waiting for a later refresh.
-                    progress = workspace.progress.withRecordedCheckIn(
-                        creditType = creditType,
-                        hours = submittedHours
-                    )
+                    records = listOf(record) + workspace.records
                 )
                 enqueueSyncOperation(
                     type = SyncOperationType.SubmitRecord,
                     title = interfaceText("提交打卡记录", "Submit check-in record"),
                     detail = interfaceText(
-                        "${creditType.label} · ${submittedHours.hourText()} · ${serverProofs.size} 个凭证",
-                        "${creditType.label} · ${submittedHours.hourText()} · ${serverProofs.size} proof items"
+                        "${creditType.label} · ${serverCreditedHours.hourText()} · 已保存，权威进度待刷新",
+                        "${creditType.label} · ${serverCreditedHours.hourText()} · saved; authoritative progress pending refresh"
                     ),
-                    status = SyncOperationStatus.Synced
+                    status = SyncOperationStatus.Queued
                 )
                 saveWorkspace(event = "打卡提交已同步")
                 onResult(Result.success(Unit))
@@ -1015,7 +1065,6 @@ class StudentAppState(
                 throw e
             } catch (e: Exception) {
                 if (!isCurrentSession(generation)) return@launchSessionRequest
-                android.util.Log.e("StudentAppState", "submitExerciseCheckIn API failed", e)
                 if (isUnauthorized(e)) {
                     val message = interfaceText(
                         "登录已过期，请重新登录",
@@ -1024,7 +1073,7 @@ class StudentAppState(
                     expireSession(message)
                     onResult(Result.failure(IllegalStateException(message, e)))
                 } else {
-                    val message = errorMessage(e)
+                    val message = errorMessage(e, ClientErrorContext.RECORD)
                     lastError = message
                     onResult(Result.failure(IllegalStateException(message, e)))
                 }
@@ -1037,6 +1086,7 @@ class StudentAppState(
         }
     }
 
+    /** Local/demo observation only; V1 mutations must defer businessDate to Backend. */
     fun hasSubmittedCheckInToday(today: LocalDate = currentBeijingBusinessDate()): Boolean {
         return workspace.records.any { record ->
             record.creditType != CreditType.OrganizationOffset &&
@@ -1066,49 +1116,17 @@ class StudentAppState(
 
     // ── Private helpers ───────────────────────────────────────────
 
-    private suspend fun errorMessage(e: Exception): String {
-        if (isContactBindingRequired(e)) {
+    private suspend fun errorMessage(
+        e: Exception,
+        context: ClientErrorContext = ClientErrorContext.GENERAL
+    ): String {
+        val mapped = ClientErrorMapper.map(e, context)
+        SafeClientLogger.log(mapped, context)
+        if (mapped.code == "CONTACT_BINDING_REQUIRED") {
             forceContactActivation()
-            return interfaceText(
-                "请先验证邮箱后再继续使用。",
-                "Verify your email address to continue."
-            )
+            return mapped.legacySafeText()
         }
-        val msg = e.message.orEmpty()
-        val serverMessage = withContext(Dispatchers.IO) {
-            msg.indexOf('{').takeIf { it >= 0 }?.let { start ->
-                runCatching {
-                    JsonParser.parseString(msg.substring(start)).asJsonObject
-                        .get("message")
-                        ?.asString
-                }.getOrNull()
-            }
-        }
-        if (!serverMessage.isNullOrBlank()) return serverMessage
-        return when {
-            msg.contains("401") -> interfaceText("账号或密码错误", "Incorrect account or password.")
-            msg.contains("400") -> interfaceText("请输入账号和密码", "Enter your account and password.")
-            msg.contains("403") -> interfaceText("没有访问权限，请联系管理员", "You do not have access. Contact an administrator.")
-            msg.contains("500") || msg.contains("DB_ERROR") -> interfaceText("服务器内部错误，请联系管理员", "Internal server error. Contact an administrator.")
-            msg.contains("Unable to resolve host") || msg.contains("UnknownHost") ->
-                interfaceText("无法连接服务器，请检查网络", "Could not connect to the server. Check your connection.")
-            msg.contains("timeout") || msg.contains("Timeout") ->
-                interfaceText("连接超时，请稍后再试", "Connection timed out. Try again later.")
-            msg.contains("502") || msg.contains("503") ->
-                interfaceText("服务器维护中，请稍后再试", "Server maintenance is in progress. Try again later.")
-            msg.contains("ConnectException") || msg.contains("Connection refused") ->
-                interfaceText("无法连接到服务器，请检查网络连接", "Could not connect to the server. Check your network connection.")
-            msg.contains("SocketTimeoutException") ->
-                interfaceText("请求超时，请检查网络后重试", "Request timed out. Check your connection and try again.")
-            msg.contains("Gson returned null") ->
-                interfaceText("服务器返回数据异常，请联系管理员", "The server returned invalid data. Contact an administrator.")
-            msg.contains("CLEARTEXT") || msg.contains("cleartext") ->
-                interfaceText(
-                    "网络安全策略错误，请联系开发人员",
-                    "A network security policy error occurred. Contact support."
-                )
-            else -> interfaceText("请求失败，请稍后重试", "Request failed. Try again later.")
-        }
+        return mapped.legacySafeText()
     }
 
     private fun activationWorkspace(user: UserDto): StudentWorkspace {
@@ -1132,6 +1150,7 @@ class StudentAppState(
         current: CurrentUserData,
         cachedWorkspace: StudentWorkspace?
     ) {
+        isLocalReviewMode = false
         val profile = current.studentProfile
             ?: throw IllegalStateException("STUDENT_PROFILE_REQUIRED")
         currentUserVersion = current.user.version
@@ -1323,7 +1342,7 @@ class StudentAppState(
     private fun isContactBindingRequired(error: Throwable): Boolean {
         return error is ApiHttpException &&
             error.statusCode == 403 &&
-            error.responseBody.contains("CONTACT_BINDING_REQUIRED")
+            ClientErrorMapper.safeCode(error) == "CONTACT_BINDING_REQUIRED"
     }
 
     /** Turns any authoritative 403 into the same minimal activation state. */
@@ -1353,16 +1372,40 @@ class StudentAppState(
         val store = localStore ?: return
         FcmPushRegistrar.registerCurrentDevice(context, store)
             .onFailure { error ->
-                android.util.Log.w("StudentAppState", "FCM token registration deferred", error)
+                val mapped = ClientErrorMapper.map(error, ClientErrorContext.GENERAL)
+                SafeClientLogger.log(mapped, ClientErrorContext.GENERAL)
             }
     }
 
     private fun isUnauthorized(error: Throwable): Boolean {
         if (error is ApiHttpException && error.statusCode == 401) return true
-        val message = error.message.orEmpty()
-        return message.contains("HTTP 401") ||
-            message.contains("AUTH_REQUIRED") ||
-            message.contains("TOKEN_EXPIRED")
+        return ClientErrorMapper.safeCode(error) in setOf(
+            "AUTH_REQUIRED",
+            "AUTH_TOKEN_INVALID",
+            "AUTH_TOKEN_EXPIRED",
+            "AUTH_SESSION_REVOKED",
+            "AUTH_ACCOUNT_DISABLED"
+        )
+    }
+
+    private fun resetToSignedOutState() {
+        isAuthenticated = false
+        isLocalReviewMode = false
+        apiRepository = null
+        lastError = null
+        isLoading = false
+        workspace = StudentWorkspace.empty()
+        contactStatus = ContactStatusResponse()
+        currentUserVersion = 1L
+        isPreparingActivatedWorkspace = false
+        contactActivationLoadError = null
+    }
+
+    private fun logSafeClientFailure(
+        error: Throwable,
+        context: ClientErrorContext
+    ) {
+        SafeClientLogger.log(ClientErrorMapper.map(error, context), context)
     }
 
     private fun isCurrentSession(generation: Long): Boolean = sessionGeneration == generation
@@ -1664,10 +1707,34 @@ class StudentAppState(
         }
     }
 
-    private fun scheduleFinalSessionClear(event: String) {
+    private fun scheduleRemoteLogoutAndFinalSessionClear(
+        event: String,
+        credentials: AuthSessionCredentials?,
+        context: android.content.Context?,
+        shouldUnregisterPush: Boolean
+    ) {
         val store = localStore ?: return
         pendingSessionClear = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             withContext(NonCancellable) {
+                withContext(Dispatchers.IO) {
+                    if (credentials != null) {
+                        val ephemeralStore = EphemeralAuthSessionCredentialStore(credentials)
+                        if (shouldUnregisterPush && context != null) {
+                            // Best effort. A push cleanup failure must not prevent
+                            // the authoritative authentication session logout.
+                            FcmPushRegistrar.unregisterCurrentDevice(context, ephemeralStore)
+                        }
+                        runCatching {
+                            V1AuthorizedApiClient.create(ephemeralStore).logoutSafely()
+                        }.onFailure { error ->
+                            android.util.Log.w(
+                                "StudentAppState",
+                                "remote logout could not be confirmed",
+                                error
+                            )
+                        }
+                    }
+                }
                 persistenceMutex.withLock {
                     withContext(Dispatchers.IO) {
                         try {

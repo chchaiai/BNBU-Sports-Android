@@ -46,9 +46,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import edu.bnbu.student.mvp.core.designsystem.AppleTextButton as TextButton
 import edu.bnbu.student.mvp.core.designsystem.BNBUFormField
+import edu.bnbu.student.mvp.core.designsystem.BNBUErrorPanel
 import edu.bnbu.student.mvp.core.designsystem.BNBULayout
 import edu.bnbu.student.mvp.core.designsystem.BNBUPrimaryButton
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
+import edu.bnbu.student.mvp.core.error.ClientErrorContext
+import edu.bnbu.student.mvp.core.error.ClientErrorMapper
+import edu.bnbu.student.mvp.core.error.SafeClientLogger
+import edu.bnbu.student.mvp.core.error.UserFacingError
 import edu.bnbu.student.mvp.core.local.AndroidAppLocalStore
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.model.AppLanguage
@@ -116,6 +121,7 @@ fun ContactBindingScreen(
     var newCode by rememberSaveable { mutableStateOf("") }
     var flowState by rememberSaveable { mutableStateOf(EmailFlowState.Idle) }
     var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var userFacingError by remember { mutableStateOf<UserFacingError?>(null) }
     var resendAttempt by rememberSaveable { mutableIntStateOf(0) }
     var resendBlockedSeconds by rememberSaveable { mutableIntStateOf(0) }
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -173,6 +179,7 @@ fun ContactBindingScreen(
         currentCode = ""
         newCode = ""
         errorMessage = null
+        userFacingError = null
         resendBlockedSeconds = 0
         flowState = EmailFlowState.Idle
     }
@@ -182,6 +189,7 @@ fun ContactBindingScreen(
         val attempt = resendAttempt
         flowState = EmailFlowState.Sending
         errorMessage = null
+        userFacingError = null
         coroutineScope.launch {
             val intent = registry.acquire(
                 MutationIntentScope(
@@ -215,7 +223,13 @@ fun ContactBindingScreen(
             } catch (error: Exception) {
                 registry.abandon(intent)
                 resendBlockedSeconds = error.retryAfterSeconds() ?: 0
-                errorMessage = error.emailVerificationMessage()
+                val mapped = ClientErrorMapper.map(error, ClientErrorContext.OTP)
+                userFacingError = mapped
+                SafeClientLogger.log(
+                    error = mapped,
+                    context = ClientErrorContext.OTP,
+                    httpStatus = (error as? V1HttpException)?.statusCode
+                )
                 flowState = EmailFlowState.Error
             }
         }
@@ -226,6 +240,7 @@ fun ContactBindingScreen(
         if (!currentCodeValid || !newCodeValid || challengeExpired || sending || verifying) return
         flowState = EmailFlowState.Verifying
         errorMessage = null
+        userFacingError = null
         coroutineScope.launch {
             val intent = registry.acquire(
                 MutationIntentScope(
@@ -253,7 +268,13 @@ fun ContactBindingScreen(
                 throw error
             } catch (error: Exception) {
                 registry.abandon(intent)
-                errorMessage = error.emailVerificationMessage()
+                val mapped = ClientErrorMapper.map(error, ClientErrorContext.OTP)
+                userFacingError = mapped
+                SafeClientLogger.log(
+                    error = mapped,
+                    context = ClientErrorContext.OTP,
+                    httpStatus = (error as? V1HttpException)?.statusCode
+                )
                 flowState = EmailFlowState.Error
             }
         }
@@ -336,7 +357,10 @@ fun ContactBindingScreen(
                 } else {
                     interfaceText("邮箱", "Email")
                 },
-                placeholder = "name@school.edu.cn",
+                placeholder = interfaceText(
+                    "请输入学校登记邮箱",
+                    "Enter the email registered with your school"
+                ),
                 supportingText = interfaceText("请输入学校登记邮箱", "Enter the email registered with your school"),
                 errorText = if (email.isNotBlank() && !emailValid) {
                     interfaceText("请输入有效的邮箱地址。", "Enter a valid email address.")
@@ -410,6 +434,7 @@ fun ContactBindingScreen(
                         onValueChange = {
                             currentCode = it.filter(Char::isDigit).take(10)
                             errorMessage = null
+                            userFacingError = null
                         },
                         label = interfaceText("当前邮箱验证码", "Current-email code"),
                         placeholder = interfaceText("输入验证码", "Enter code"),
@@ -437,6 +462,7 @@ fun ContactBindingScreen(
                     onValueChange = {
                         newCode = it.filter(Char::isDigit).take(10)
                         errorMessage = null
+                        userFacingError = null
                     },
                     label = if (requiresCurrentCode) {
                         interfaceText("新邮箱验证码", "New-email code")
@@ -498,6 +524,12 @@ fun ContactBindingScreen(
                     color = colors.error,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.testTag("emailSecurity.message")
+                )
+            }
+            userFacingError?.let { error ->
+                BNBUErrorPanel(
+                    error = error,
+                    onDismiss = { userFacingError = null }
                 )
             }
 
@@ -643,30 +675,4 @@ private fun Exception.retryAfterSeconds(): Int? {
             ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
             ?.asInt
     }.getOrNull()?.takeIf { it > 0 }
-}
-
-private fun Exception.emailVerificationMessage(): String {
-    val code = (this as? V1HttpException)?.error?.code?.value
-    return when (code) {
-        "AUTH_VERIFICATION_CODE_INVALID" -> interfaceText(
-            "验证码错误、过期或已使用，请重新获取。",
-            "The code is invalid, expired, or already used. Request a new one."
-        )
-        "CONFLICT_VERSION_MISMATCH" -> interfaceText(
-            "账户信息已更新，请返回后重新进入此页面。",
-            "The account changed. Go back and open this page again."
-        )
-        "CONFLICT_RESOURCE_ALREADY_EXISTS" -> interfaceText(
-            "该邮箱已被其他账户使用。",
-            "That email is already used by another account."
-        )
-        "AUTH_RATE_LIMITED" -> interfaceText(
-            "请求过于频繁，请在倒计时结束后重试。",
-            "Too many attempts. Try again when the countdown ends."
-        )
-        else -> interfaceText(
-            "邮箱验证失败，请检查网络后重试。",
-            "Email verification failed. Check the network and try again."
-        )
-    }
 }

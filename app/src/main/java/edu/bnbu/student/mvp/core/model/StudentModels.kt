@@ -1,5 +1,7 @@
 package edu.bnbu.student.mvp.core.model
 
+import java.util.UUID
+
 enum class AppThemeMode(val label: String, val storageValue: String) {
     Light("浅色", "light"),
     Dark("深色", "dark"),
@@ -195,7 +197,9 @@ data class StudentProgress(
     val physical: Int,
     val status: String,
     val source: String,
-    val organizationCredit: Membership?
+    val organizationCredit: Membership?,
+    /** TOTAL_ONLY value from the one authoritative current-enrollment StudentScore. */
+    val authoritativeTotalHours: Double? = null
 )
 
 /**
@@ -246,8 +250,12 @@ data class CheckInRecord(
     val startTime: String? = null,
     val endTime: String? = null,
     val actualDurationSeconds: Long? = null,
-    /** PENDING, VALID, or INVALID from the latest server ReviewRecord. */
-    val reviewStatus: String? = null
+    /** VALID or INVALID from the latest authoritative server ReviewRecord. */
+    val reviewStatus: String? = null,
+    /** Backend-derived organization business date; never recomputed by the client. */
+    val businessDate: String? = null,
+    /** Authoritative optimistic version; zero means unavailable and must block mutation. */
+    val version: Long = 0L
 )
 
 /** The period in which a student may start an exercise check-in session. */
@@ -287,11 +295,11 @@ object ProofUploadRule {
     const val maxImageCount = 6
     const val maxVideoCount = 1
     const val maxAttachmentCount = maxImageCount + maxVideoCount
-    const val maxImageBytes = 10 * 1_024 * 1_024
+    const val maxImageBytes = 8_000_000
     const val maxVideoDurationSeconds = 15.0
 
     val summaryText: String
-        get() = "最多 $maxImageCount 张照片（每张不超过 10 MiB），最多 $maxVideoCount 个现场视频（累计录制不超过 15 秒）。"
+        get() = "最多 $maxImageCount 张照片（每张不超过 8 MB），最多 $maxVideoCount 个现场视频（累计录制不超过 15 秒，视频不设文件大小上限）。"
 
     fun limitMessage(proofs: List<ProofAttachment>): String? {
         val imageCount = proofs.count { it.type == ProofMediaType.Image }
@@ -311,7 +319,9 @@ data class ProofAttachment(
     val byteCount: Long?,
     val durationSeconds: Double? = null,
     val thumbnailBytes: ByteArray? = null,
-    val source: String
+    val source: String,
+    /** Stable Backend capture source; camera and picker must never be conflated. */
+    val captureSource: String = "FILE_PICKER"
 ) {
     val displaySize: String
         get() {
@@ -338,7 +348,7 @@ data class ProofAttachment(
             val bytes = byteCount
             if (bytes != null) {
                 if (type == ProofMediaType.Image && bytes > ProofUploadRule.maxImageBytes) {
-                    return "图片超过 10 MiB"
+                    return "图片超过 8 MB"
                 }
             }
             if (
@@ -587,6 +597,8 @@ data class ExemptionApplication(
     val type: String,
     val reason: String,
     val proofFiles: List<String>,
-    val organization: String? = null
+    val organization: String? = null,
+    /** Stable identity for retries of one user-confirmed submission. */
+    val intentId: String = UUID.randomUUID().toString()
 )
 // ── Student Tasks ──────────────────────────────────────────────────

@@ -1,5 +1,7 @@
 package edu.bnbu.student.mvp.core.network
 
+import java.util.UUID
+
 data class StudentLoginRequest(
     val account: String,
     val password: String,
@@ -72,5 +74,7 @@ data class SubmitFeedbackRequest(
     val category: String,
     val description: String,
     val currentPage: String,
-    val clientVersion: String
+    val clientVersion: String,
+    /** Stable identity for retries of one user-confirmed report. */
+    val intentId: String = UUID.randomUUID().toString()
 )

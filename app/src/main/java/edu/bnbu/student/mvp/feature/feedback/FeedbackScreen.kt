@@ -33,14 +33,22 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import edu.bnbu.student.mvp.BuildConfig
 import edu.bnbu.student.mvp.core.data.ApiStudentRepository
 import edu.bnbu.student.mvp.core.designsystem.ActionButton
+import edu.bnbu.student.mvp.core.designsystem.BNBUFormField
 import edu.bnbu.student.mvp.core.designsystem.EmptyPlaceholder
 import edu.bnbu.student.mvp.core.designsystem.PrimaryActionButton
 import edu.bnbu.student.mvp.core.designsystem.SectionTitle
@@ -58,6 +66,7 @@ import edu.bnbu.student.mvp.core.network.SubmitFeedbackRequest
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import java.util.UUID
 
 private const val MaxDescriptionLength = 2_000
 
@@ -96,6 +105,11 @@ fun FeedbackScreen(
     )
     var selectedCategory by remember(appLanguage) { mutableStateOf(categories.first()) }
     var description by remember { mutableStateOf("") }
+    var descriptionFocusedOnce by remember { mutableStateOf(false) }
+    var descriptionTouched by remember { mutableStateOf(false) }
+    var submitAttempted by remember { mutableStateOf(false) }
+    val descriptionFocusRequester = remember { FocusRequester() }
+    var submissionIntentId by rememberSaveable { mutableStateOf(UUID.randomUUID().toString()) }
     val currentPage = interfaceText("我的 / 问题反馈", "Profile / Report a problem")
 
     fun loadTickets() {
@@ -124,6 +138,7 @@ fun FeedbackScreen(
     }
 
     fun submit() {
+        submitAttempted = true
         val availableRepository = repository ?: run {
             errorMessage = interfaceText(
                 "尚未连接服务器，无法提交反馈；请重新登录后重试。",
@@ -142,7 +157,8 @@ fun FeedbackScreen(
         when {
             isSubmitting -> return
             note.isEmpty() -> {
-                errorMessage = interfaceText("请填写问题描述。", "Describe the problem.")
+                errorMessage = null
+                descriptionFocusRequester.requestFocus()
                 return
             }
             note.length > MaxDescriptionLength -> {
@@ -158,10 +174,15 @@ fun FeedbackScreen(
             try {
                 val ticket = availableRepository.submitFeedback(SubmitFeedbackRequest(
                     category = selectedCategory, description = note, currentPage = currentPage,
-                    clientVersion = BuildConfig.VERSION_NAME
+                    clientVersion = BuildConfig.VERSION_NAME,
+                    intentId = submissionIntentId
                 ))
                 submittedTicket = ticket
                 tickets = listOf(ticket) + tickets.filterNot { it.id == ticket.id }
+                submissionIntentId = UUID.randomUUID().toString()
+                submitAttempted = false
+                descriptionTouched = false
+                descriptionFocusedOnce = false
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 if (e is ApiHttpException && e.statusCode == 401) { onUnauthorized(); return@launchAuthenticatedRequest }
@@ -212,10 +233,21 @@ fun FeedbackScreen(
         errorMessage?.let { message -> item { ValidationPanel(message) } }
         when (tab) {
             FeedbackTab.New -> item { FeedbackForm(
-                categories, selectedCategory, { selectedCategory = it }, description, { description = it.take(MaxDescriptionLength) },
+                categories, selectedCategory, { selectedCategory = it }, description, {
+                    description = it.take(MaxDescriptionLength)
+                    errorMessage = null
+                },
                 isSubmitting,
                 writeEnabled = appState.isWriteAllowed && repository != null,
                 serviceUnavailable = repository == null,
+                descriptionError = if ((descriptionTouched || submitAttempted) && description.isBlank()) {
+                    interfaceText("请填写问题描述。", "Describe the problem.")
+                } else null,
+                descriptionFocusRequester = descriptionFocusRequester,
+                onDescriptionFocusChanged = { focused ->
+                    if (focused) descriptionFocusedOnce = true
+                    else if (descriptionFocusedOnce) descriptionTouched = true
+                },
                 onSubmit = ::submit
             ) }
             FeedbackTab.Tickets -> {
@@ -259,6 +291,9 @@ private fun FeedbackForm(
     categories: List<String>, selectedCategory: String, onCategoryChanged: (String) -> Unit,
     description: String, onDescriptionChanged: (String) -> Unit,
     isSubmitting: Boolean, writeEnabled: Boolean, serviceUnavailable: Boolean,
+    descriptionError: String?,
+    descriptionFocusRequester: FocusRequester,
+    onDescriptionFocusChanged: (Boolean) -> Unit,
     onSubmit: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -289,27 +324,46 @@ private fun FeedbackForm(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall
             )
-            ExposedDropdownMenuBox(expanded, { expanded = it }) {
-                OutlinedTextField(selectedCategory, {}, readOnly = true, label = { Text(interfaceText("问题类型", "Category")) }, enabled = formEnabled,
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
+            val categoryLabel = interfaceText("问题类型", "Category")
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { if (formEnabled) expanded = it },
+                modifier = Modifier.semantics(mergeDescendants = true) {
+                    contentDescription = categoryLabel
+                    stateDescription = listOf(
+                        selectedCategory,
+                        interfaceText("必填", "Required"),
+                        if (expanded) interfaceText("已展开", "Expanded") else interfaceText("已收起", "Collapsed")
+                    ).joinToString(". ")
+                }
+            ) {
+                OutlinedTextField(selectedCategory, {}, readOnly = true, label = { Text(interfaceText("问题类型（必填）", "Category (required)")) }, enabled = formEnabled,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }, modifier = Modifier.menuAnchor().fillMaxWidth().testTag("feedback.category"))
                 ExposedDropdownMenu(expanded, { expanded = false }) { categories.forEach { category -> DropdownMenuItem({ Text(category) }, { onCategoryChanged(category); expanded = false }) } }
             }
-            OutlinedTextField(
-                description,
-                onDescriptionChanged,
-                label = { Text(interfaceText("问题描述（必填）", "Description (required)")) },
-                placeholder = {
-                    Text(
-                        interfaceText(
-                            "例如：操作步骤、预期结果和实际情况",
-                            "Include the steps, expected result, and actual result"
-                        )
-                    )
-                },
-                supportingText = { Text("${description.length}/$MaxDescriptionLength") },
+            BNBUFormField(
+                value = description,
+                onValueChange = onDescriptionChanged,
+                label = interfaceText("问题描述", "Description"),
+                testTag = "feedback.description",
+                required = true,
+                placeholder = interfaceText(
+                    "例如：操作步骤、预期结果和实际情况",
+                    "Include the steps, expected result, and actual result"
+                ),
+                supportingText = interfaceText(
+                    "请勿填写密码、验证码或访问令牌。",
+                    "Do not include passwords, verification codes, or access tokens."
+                ),
+                errorText = descriptionError,
+                counter = description.length to MaxDescriptionLength,
+                singleLine = false,
                 minLines = 5,
+                maxLines = 10,
                 enabled = formEnabled,
-                modifier = Modifier.fillMaxWidth()
+                loading = isSubmitting,
+                inputModifier = Modifier.focusRequester(descriptionFocusRequester),
+                onFocusChanged = onDescriptionFocusChanged,
             )
         } }
         ValidationPanel(

@@ -518,10 +518,7 @@ private fun CourseCard(
                 )
                 CourseMetaLine(
                     icon = Icons.Filled.CalendarMonth,
-                    text = listOf(
-                        course.academicYear.ifBlank { interfaceText("学年待设置", "Academic year pending") },
-                        course.term.ifBlank { interfaceText("学期待设置", "Term pending") }
-                    ).joinToString(" · ")
+                    text = course.safeSemesterYearTermLabel()
                 )
             }
 
@@ -536,12 +533,12 @@ private fun CourseCard(
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    text = course.semester.ifBlank { interfaceText("学期待定", "Semester pending") },
+                    text = course.safeSemesterDisplayLabel(),
                     modifier = Modifier.weight(1f),
                     color = colors.onSurfaceVariant,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
-                    maxLines = 1,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis
                 )
             }
@@ -582,10 +579,11 @@ private fun CourseMetaLine(icon: ImageVector, text: String) {
         Spacer(Modifier.width(10.dp))
         Text(
             text = text,
+            modifier = Modifier.weight(1f),
             color = colors.onSurface,
             fontSize = 15.sp,
             lineHeight = 20.sp,
-            maxLines = 1,
+            maxLines = 3,
             overflow = TextOverflow.Ellipsis
         )
     }
@@ -707,12 +705,12 @@ private fun CourseDetailHeader(course: Course, historical: Boolean) {
             )
             Spacer(Modifier.width(10.dp))
             Text(
-                text = course.semester.ifBlank { interfaceText("学期待定", "Semester pending") },
+                text = course.safeSemesterDisplayLabel(),
                 modifier = Modifier.weight(1f),
                 color = colors.onSurfaceVariant,
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
-                maxLines = 1,
+                maxLines = 3,
                 overflow = TextOverflow.Ellipsis
             )
         }
@@ -727,10 +725,7 @@ private fun CourseInformationPanel(course: Course) {
         CourseFact(interfaceText("任课教师", "Instructor"), course.teacher.ifBlank { interfaceText("待公布", "To be announced") }),
         CourseFact(
             interfaceText("开课学期", "Teaching term"),
-            listOf(
-                course.academicYear.ifBlank { interfaceText("学年待设置", "Academic year pending") },
-                course.term.ifBlank { interfaceText("学期待设置", "Term pending") }
-            ).joinToString(" · ")
+            course.safeSemesterYearTermLabel()
         )
     )
     CourseGroupedPanel {
@@ -1108,6 +1103,37 @@ private fun String.enrollmentStatusLabel(): String = when (this) {
     "disabled" -> interfaceText("成员关系已停用", "Membership disabled")
     else -> ifBlank { interfaceText("待确认", "Pending") }
 }
+
+internal fun String.semesterTermLabel(): String = when (uppercase()) {
+    "FIRST" -> interfaceText("第一学期", "First semester")
+    "SECOND" -> interfaceText("第二学期", "Second semester")
+    "SUMMER" -> interfaceText("夏季学期", "Summer term")
+    else -> ifBlank { interfaceText("学期待设置", "Term pending") }
+}
+
+internal fun Course.safeSemesterDisplayLabel(): String {
+    semester.safePublicSemesterText(semesterId)?.let { return it }
+    return safeSemesterYearTermLabel()
+}
+
+internal fun Course.safeSemesterYearTermLabel(): String {
+    val year = academicYear.safePublicSemesterText(semesterId)
+    val termLabel = term.safePublicSemesterText(semesterId)?.semesterTermLabel()
+    return listOfNotNull(year, termLabel)
+        .joinToString(" · ")
+        .ifBlank { interfaceText("学期待定", "Semester pending") }
+}
+
+private fun String.safePublicSemesterText(internalSemesterId: String): String? = trim()
+    .takeIf(String::isNotEmpty)
+    ?.takeUnless { value ->
+        value.equals(internalSemesterId.trim(), ignoreCase = true) ||
+            UUID_LIKE_SEMESTER_VALUE.matches(value)
+    }
+
+private val UUID_LIKE_SEMESTER_VALUE = Regex(
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+)
 
 private fun String.semesterStatusLabel(): String = when (this) {
     "upcoming" -> interfaceText("即将开始", "Upcoming")

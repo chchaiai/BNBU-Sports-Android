@@ -242,6 +242,33 @@ class AndroidAppLocalStore(
         return null
     }
 
+    override fun savePendingRefreshIntent(intent: PendingRefreshIntent): Boolean =
+        saveSensitiveString(PendingRefreshIntentStorageKey, gson.toJson(intent))
+
+    override fun loadPendingRefreshIntent(): PendingRefreshIntent? {
+        val storedJson = readSensitiveString(PendingRefreshIntentStorageKey) ?: return null
+        return runCatching { gson.fromJson(storedJson, PendingRefreshIntent::class.java) }
+            .getOrNull()
+            ?.takeIf { intent ->
+                runCatching {
+                    PendingRefreshIntent(
+                        sessionId = intent.sessionId,
+                        refreshTokenFingerprint = intent.refreshTokenFingerprint,
+                        idempotencyKey = intent.idempotencyKey
+                    )
+                }.isSuccess
+            }
+            ?: run {
+                clearPendingRefreshIntent()
+                null
+            }
+    }
+
+    override fun clearPendingRefreshIntent() {
+        preferences.edit().remove(PendingRefreshIntentStorageKey).commit()
+        clearEncryptedValue(PendingRefreshIntentStorageKey)
+    }
+
     /** Compatibility bridge for old screens while their auth adapter migrates. */
     fun saveAuthToken(token: String): Boolean {
         val session = AuthSessionCredentials.legacyAccessOnly(token) ?: return false
@@ -295,6 +322,7 @@ class AndroidAppLocalStore(
         preferences.edit()
             .remove(AuthTokenKey)
             .remove(AuthSessionStorageKey)
+            .remove(PendingRefreshIntentStorageKey)
             .remove(UserProfileKey)
             .commit()
         encryptedPrefs.edit()
@@ -302,6 +330,8 @@ class AndroidAppLocalStore(
             .remove(AuthTokenIvKey)
             .remove(encryptedValueKey(AuthSessionStorageKey))
             .remove(encryptedIvKey(AuthSessionStorageKey))
+            .remove(encryptedValueKey(PendingRefreshIntentStorageKey))
+            .remove(encryptedIvKey(PendingRefreshIntentStorageKey))
             .remove(encryptedValueKey(UserProfileKey))
             .remove(encryptedIvKey(UserProfileKey))
             .commit()
@@ -312,6 +342,7 @@ class AndroidAppLocalStore(
             .remove(WorkspaceStorageKey)
             .remove(AuthTokenKey)
             .remove(AuthSessionStorageKey)
+            .remove(PendingRefreshIntentStorageKey)
             .remove(UserProfileKey)
             .remove(LastSyncKey)
             .commit()
@@ -572,6 +603,7 @@ class AndroidAppLocalStore(
         const val ExerciseSessionStorageKey = "bnbu.student.exercise.session.v1"
         const val AuthTokenKey = "bnbu.student.auth.token.v1"
         const val AuthSessionStorageKey = "bnbu.student.auth.session.v2"
+        const val PendingRefreshIntentStorageKey = "bnbu.student.auth.refresh-intent.v1"
         const val UserProfileKey = "bnbu.student.auth.profile.v1"
         const val LastSyncKey = "bnbu.student.last_sync.v1"
         const val ThemeModeKey = "bnbu.student.theme.mode.v1"

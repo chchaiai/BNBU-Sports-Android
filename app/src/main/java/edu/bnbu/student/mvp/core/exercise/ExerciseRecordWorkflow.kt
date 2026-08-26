@@ -140,6 +140,65 @@ internal data class SubmitExerciseRecordCommand(
     }
 }
 
+internal data class CreateExerciseRecordResubmissionCommand(
+    val previousRecordId: String,
+    val sessionId: String,
+    val expectedVersion: Long,
+    val creditType: CreditType,
+    val clientRequestId: String,
+    val form: ExerciseRecordForm
+) {
+    init {
+        require(previousRecordId.isNotBlank()) { "Previous record ID cannot be empty." }
+        require(sessionId.isNotBlank()) { "Session ID cannot be empty." }
+        require(expectedVersion >= 1L) { "Previous record version must be positive." }
+        require(creditType == CreditType.CourseRelated || creditType == CreditType.General) {
+            "Exercise record credit type is invalid."
+        }
+        require(clientRequestId.length in 1..MaxClientRequestIdLength) {
+            "Client request ID must contain 1 to $MaxClientRequestIdLength characters."
+        }
+        require(clientRequestId.matches(Regex("^[A-Za-z0-9._:-]{1,64}$"))) {
+            "Client request ID contains unsupported characters."
+        }
+        form.normalizedForDraft(creditType)
+    }
+}
+
+/** Public-safe chain metadata returned separately from the frozen record projection. */
+internal data class ExerciseRecordAttemptContext(
+    val recordId: String,
+    val previousAttemptId: String?,
+    val rootAttemptId: String,
+    val attemptNumber: Int
+) {
+    init {
+        require(recordId.isNotBlank()) { "Record ID cannot be empty." }
+        require(previousAttemptId == null || previousAttemptId.isNotBlank()) {
+            "Previous attempt ID cannot be blank."
+        }
+        require(rootAttemptId.isNotBlank()) { "Root attempt ID cannot be empty." }
+        require(attemptNumber >= 1) { "Attempt number must be positive." }
+    }
+}
+
+internal data class ExerciseRecordResubmissionDraft(
+    val draft: ExerciseRecordDraft,
+    val attemptContext: ExerciseRecordAttemptContext
+) {
+    init {
+        require(draft.recordId == attemptContext.recordId) {
+            "Attempt context must describe the new draft."
+        }
+        require(attemptContext.previousAttemptId != null) {
+            "A resubmission must link to the preceding attempt."
+        }
+        require(attemptContext.attemptNumber >= 2) {
+            "A resubmission must be attempt two or later."
+        }
+    }
+}
+
 internal data class ExerciseRecordDraft(
     val recordId: String,
     val sessionId: String,
@@ -156,13 +215,18 @@ internal data class ExerciseRecord(
     val recordId: String,
     val sessionId: String,
     val version: Long,
-    val submittedAtEpochMillis: Long
+    val submittedAtEpochMillis: Long,
+    val businessDate: java.time.LocalDate,
+    val creditedDurationSeconds: Long,
+    val reviewStatus: String
 ) {
     init {
         require(recordId.isNotBlank()) { "Record ID cannot be empty." }
         require(sessionId.isNotBlank()) { "Session ID cannot be empty." }
         require(version >= 1L) { "Record version must be positive." }
         require(submittedAtEpochMillis >= 0L) { "Submission time cannot be negative." }
+        require(creditedDurationSeconds >= 0L) { "Credited duration cannot be negative." }
+        require(reviewStatus.isNotBlank()) { "Review status cannot be empty." }
     }
 }
 

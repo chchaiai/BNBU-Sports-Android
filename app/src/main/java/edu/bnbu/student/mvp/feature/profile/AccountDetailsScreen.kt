@@ -27,6 +27,7 @@ import edu.bnbu.student.mvp.core.designsystem.StatusBadge
 import edu.bnbu.student.mvp.core.designsystem.SwissPanel
 import edu.bnbu.student.mvp.core.designsystem.bnbuClickable
 import edu.bnbu.student.mvp.core.model.studentStatusLabel
+import edu.bnbu.student.mvp.core.model.studentNumberForDisplay
 import edu.bnbu.student.mvp.core.state.StudentAppState
 
 /** Full account information, opened from the profile header instead of the main Profile tab. */
@@ -95,7 +96,10 @@ fun AccountDetailsScreen(
             SwissPanel {
                 Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     AccountDetailRow(stringResource(R.string.profile_name), student.name)
-                    AccountDetailRow(stringResource(R.string.profile_student_id), student.id)
+                    AccountDetailRow(
+                        stringResource(R.string.profile_student_id),
+                        student.studentNumberForDisplay()
+                    )
                     AccountDetailRow(stringResource(R.string.profile_class), student.className)
                     AccountDetailRow(
                         stringResource(R.string.profile_admission_year),
@@ -132,7 +136,7 @@ private fun AccountDetailRow(label: String, value: String) {
             color = colors.onSurface,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f),
-            maxLines = 2,
+            maxLines = 4,
             overflow = TextOverflow.Ellipsis
         )
     }

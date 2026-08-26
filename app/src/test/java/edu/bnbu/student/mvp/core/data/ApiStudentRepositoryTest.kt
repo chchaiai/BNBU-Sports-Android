@@ -7,6 +7,7 @@ import edu.bnbu.student.mvp.core.model.ExemptionApplication
 import edu.bnbu.student.mvp.core.model.AppLanguage
 import edu.bnbu.student.mvp.core.network.UserDto
 import edu.bnbu.student.mvp.core.network.SubmitSportRecordRequest
+import edu.bnbu.student.mvp.core.network.SubmitFeedbackRequest
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentialStore
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentials
 import edu.bnbu.student.mvp.core.exercise.StartExerciseCommand
@@ -18,6 +19,7 @@ import edu.bnbu.student.mvp.core.network.v1.V1ExerciseSessionGateway
 import edu.bnbu.student.mvp.core.network.v1.V1StudentWorkspaceGateway
 import edu.bnbu.student.mvp.testing.TestHttps
 import java.io.File
+import java.io.IOException
 import java.time.Instant
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
@@ -161,6 +163,9 @@ class ApiStudentRepositoryTest {
         val markRead = repository.markNotificationRead("notice-1")
 
         assertTrue(submit.isSuccess)
+        assertEquals("2026-08-11", submit.getOrThrow().businessDate)
+        assertEquals(3600L, submit.getOrThrow().creditedDurationSeconds)
+        assertEquals("VALID", submit.getOrThrow().reviewStatus)
         assertTrue(markRead.isSuccess)
         assertEquals(3, networkThreads.size)
         networkThreads.forEach { assertNotEquals(callerThread, it) }
@@ -192,9 +197,12 @@ class ApiStudentRepositoryTest {
         assertEquals(1, workspace.courses.size)
         assertEquals("PE101", workspace.courses.single().code)
         assertEquals("2026-2027 秋季学期", workspace.courses.single().semester)
+        assertEquals("2026-2027", workspace.courses.single().academicYear)
+        assertEquals("FIRST", workspace.courses.single().term)
+        assertEquals("current", workspace.courses.single().semesterStatus)
         assertEquals("Teacher Chen", workspace.courses.single().teacher)
-        assertEquals(14.0, workspace.progress.course, 0.0)
-        assertEquals(22.0, workspace.progress.general, 0.0)
+        assertEquals(0.0, workspace.progress.course, 0.0)
+        assertEquals(0.0, workspace.progress.general, 0.0)
         assertEquals("80.0", workspace.grades.totalDisplay)
         assertEquals("06:00", workspace.checkInTimeWindow.dailyStartTime)
         assertEquals("22:00", workspace.checkInTimeWindow.dailyEndTime)
@@ -204,11 +212,55 @@ class ApiStudentRepositoryTest {
         server.enqueue(paged("enrollments-failure", "[]"))
         server.enqueue(success("semester-failure", semesterJson()))
         server.enqueue(paged("records-failure", "[]"))
-        server.enqueue(error(503, "SYSTEM_MODE_READ_ONLY", "scores-failure"))
+        server.enqueue(error(503, "SYSTEM_READ_ONLY", "scores-failure"))
         val failure = assertThrows(Exception::class.java) {
             runBlocking { repository(userProfile = staleUser).loadWorkspaceAsync() }
         }
-        assertTrue(failure.message.orEmpty().contains("SYSTEM_MODE_READ_ONLY"))
+        assertTrue(failure.message.orEmpty().contains("SYSTEM_READ_ONLY"))
+    }
+
+    @Test
+    fun workspaceDoesNotGuessSemesterMetadataWhenCurrentSemesterDoesNotMatch() = runBlocking {
+        enqueueWorkspace(currentSemesterId = "semester-other")
+
+        val course = repository().loadWorkspaceAsync().courses.single()
+
+        assertEquals("", course.semester)
+        assertEquals("", course.academicYear)
+        assertEquals("", course.term)
+        assertEquals("", course.semesterStatus)
+    }
+
+    @Test
+    fun workspaceUsesOnlyTheCurrentSessionEnrollmentScoreAcrossHistoricalTerms() = runBlocking {
+        server.enqueue(success("me", currentUserJson()))
+        server.enqueue(
+            paged(
+                "enrollments",
+                "[${enrollmentJson()},${enrollmentJson(id = "enrollment-old", semesterId = "semester-old", sectionId = "section-old")}]"
+            )
+        )
+        server.enqueue(success("section-current", classSectionJson()))
+        server.enqueue(success("section-old", classSectionJson(id = "section-old", semesterId = "semester-old")))
+        server.enqueue(success("course", courseJson()))
+        server.enqueue(success("teacher", teacherJson()))
+        server.enqueue(success("semester", semesterJson()))
+        server.enqueue(paged("records", "[]"))
+        server.enqueue(
+            paged(
+                "scores",
+                "[${scoreJson()},${scoreJson(id = "score-old", enrollmentId = "enrollment-old", courseSeconds = 360000, generalSeconds = 360000, totalSeconds = 720000)}]"
+            )
+        )
+        server.enqueue(paged("notifications", "[]"))
+
+        val workspace = repository().loadWorkspaceAsync()
+
+        assertEquals(0.0, workspace.progress.course, 0.0)
+        assertEquals(0.0, workspace.progress.general, 0.0)
+        assertEquals(0.0, workspace.progress.authoritativeTotalHours ?: -1.0, 0.0)
+        assertEquals("v1:exercise-records:valid-current-enrollment", workspace.progress.source)
+        assertEquals("80.0", workspace.grades.totalDisplay)
     }
 
     @Test
@@ -260,9 +312,57 @@ class ApiStudentRepositoryTest {
     }
 
     @Test
+    fun exemptionUploadRetryReusesInitiationIntentAcrossPutAndConfirmWorkflow() = runBlocking {
+        val source = temporaryFolder.newFile("stable-proof.jpg").apply {
+            writeBytes(byteArrayOf(1, 2, 3, 4))
+        }
+        val repository = repository()
+        enqueueWorkspace()
+        repository.loadWorkspaceAsync()
+        val uploadUrl = server.url("/private-object/media-stable").toString()
+        val initiation = """{
+            "uploadSessionId":"upload-stable","mediaId":"media-stable",
+            "uploadUrl":"$uploadUrl","uploadMethod":"PUT","requiredHeaders":{},
+            "expiresAt":"2099-01-01T00:00:00Z"
+        }""".trimIndent()
+        server.enqueue(success("media-initiate-first", initiation, status = 201))
+        server.enqueue(MockResponse().setResponseCode(503))
+        server.enqueue(success("media-initiate-replay", initiation, status = 201))
+        server.enqueue(MockResponse().setResponseCode(200).setHeader("ETag", "etag-stable"))
+        server.enqueue(success("media-confirm", mediaJson(id = "media-stable")))
+
+        val attachment = imageAttachment(source)
+        val first = repository.uploadProofFiles(
+            proofAttachments = listOf(attachment),
+            cacheDir = temporaryFolder.newFolder("cache-stable-first")
+        )
+        val second = repository.uploadProofFiles(
+            proofAttachments = listOf(attachment),
+            cacheDir = temporaryFolder.newFolder("cache-stable-second")
+        )
+
+        assertTrue(first.isFailure)
+        assertTrue(second.isSuccess)
+        repeat(9) { server.takeRequest() }
+        val firstInitiation = server.takeRequest()
+        server.takeRequest()
+        val secondInitiation = server.takeRequest()
+        assertEquals("/api/v1/media-uploads", firstInitiation.path)
+        assertEquals("/api/v1/media-uploads", secondInitiation.path)
+        assertEquals(
+            firstInitiation.getHeader("Idempotency-Key"),
+            secondInitiation.getHeader("Idempotency-Key")
+        )
+        assertTrue(firstInitiation.getHeader("Idempotency-Key").orEmpty().isNotBlank())
+        assertEquals("/private-object/media-stable", server.takeRequest().path)
+        assertEquals("/api/v1/media-uploads/upload-stable/confirm", server.takeRequest().path)
+    }
+
+    @Test
     fun exemptionSupplementUsesVersionedV1LifecycleAndPayload() = runBlocking {
         server.enqueue(paged("exemption-list", "[${exemptionJson("SUPPLEMENT_REQUIRED", 2)}]"))
         server.enqueue(success("exemption-update", exemptionJson("SUPPLEMENT_REQUIRED", 3)))
+        server.enqueue(success("media-available", mediaJson("media-existing")))
         server.enqueue(success("exemption-submit", exemptionJson("SUBMITTED", 4)))
         val exemption = Exemption(
             id = "exemption-1",
@@ -278,7 +378,7 @@ class ApiStudentRepositoryTest {
         val response = repository().supplementExemption(
             exemption = exemption,
             payload = ExemptionApplication(
-                type = "exercise_check_in",
+                type = "school_team",
                 reason = "new supporting document",
                 proofFiles = listOf("proofs/student-1/new.jpg"),
                 organization = "Track Team"
@@ -299,9 +399,156 @@ class ApiStudentRepositoryTest {
         assertTrue(body.contains("\"expectedVersion\":2"))
         assertTrue(body.contains("proofs/student-1/new.jpg"))
         assertFalse(body.contains("\"applicationType\""))
+        val media = server.takeRequest()
+        assertEquals("/api/v1/media/media-existing", media.path)
+        assertEquals("GET", media.method)
         val submit = server.takeRequest()
         assertEquals("/api/v1/exemption-applications/exemption-1/submit", submit.path)
         assertTrue(submit.body.readUtf8().contains("\"expectedVersion\":3"))
+    }
+
+    @Test
+    fun exemptionCreateWaitsForAllMediaToBecomeAvailableBeforeSubmit() = runBlocking {
+        val repository = repository()
+        enqueueWorkspace()
+        repository.loadWorkspaceAsync()
+        server.enqueue(
+            success(
+                "exemption-create",
+                exemptionJson("DRAFT", 1, listOf("media-1")),
+                status = 201
+            )
+        )
+        server.enqueue(success("media-bound", mediaJson("media-1", "BOUND")))
+        server.enqueue(success("media-processing", mediaJson("media-1", "PROCESSING")))
+        server.enqueue(success("media-available", mediaJson("media-1", "AVAILABLE")))
+        server.enqueue(
+            success(
+                "exemption-submit",
+                exemptionJson("SUBMITTED", 2, listOf("media-1"))
+            )
+        )
+
+        val response = repository.submitExemption(
+            ExemptionApplication(
+                type = "school_team",
+                reason = "medical evidence",
+                proofFiles = listOf("media-1"),
+                organization = "Track Team"
+            )
+        )
+
+        assertEquals("exemption-1", response.id)
+        repeat(9) { server.takeRequest() }
+        val requests = (0 until 5).map { server.takeRequest() }
+        assertEquals("/api/v1/exemption-applications", requests[0].path)
+        assertEquals("/api/v1/media/media-1", requests[1].path)
+        assertEquals("/api/v1/media/media-1", requests[2].path)
+        assertEquals("/api/v1/media/media-1", requests[3].path)
+        assertEquals("/api/v1/exemption-applications/exemption-1/submit", requests[4].path)
+    }
+
+    @Test
+    fun failedExemptionMediaStopsBeforeSubmit() = runBlocking {
+        val repository = repository()
+        enqueueWorkspace()
+        repository.loadWorkspaceAsync()
+        server.enqueue(
+            success(
+                "exemption-create",
+                exemptionJson("DRAFT", 1, listOf("media-failed")),
+                status = 201
+            )
+        )
+        server.enqueue(success("media-failed", mediaJson("media-failed", "FAILED")))
+
+        val error = runCatching {
+            repository.submitExemption(
+                ExemptionApplication(
+                    type = "school_team",
+                    reason = "medical evidence",
+                    proofFiles = listOf("media-failed"),
+                    organization = "Track Team"
+                )
+            )
+        }.exceptionOrNull()
+
+        assertTrue(error is IOException)
+        assertTrue(error?.message.orEmpty().contains("status=FAILED"))
+        assertEquals(11, server.requestCount)
+        repeat(9) { server.takeRequest() }
+        assertEquals("/api/v1/exemption-applications", server.takeRequest().path)
+        assertEquals("/api/v1/media/media-failed", server.takeRequest().path)
+    }
+
+    @Test
+    fun exemptionCreateRetryReusesUserSubmissionIntent() = runBlocking {
+        val repository = repository()
+        enqueueWorkspace()
+        repository.loadWorkspaceAsync()
+        server.enqueue(error(503, "SYSTEM_SERVICE_UNAVAILABLE", "exemption-temporary"))
+        server.enqueue(
+            success(
+                "exemption-create-replay",
+                exemptionJson("DRAFT", 1, emptyList()),
+                status = 201
+            )
+        )
+        server.enqueue(
+            success(
+                "exemption-submit",
+                exemptionJson("SUBMITTED", 2, emptyList())
+            )
+        )
+        val payload = ExemptionApplication(
+            type = "school_team",
+            reason = "stable retry",
+            proofFiles = emptyList(),
+            organization = "Track Team",
+            intentId = "exemption-user-intent"
+        )
+
+        val first = runCatching { repository.submitExemption(payload) }.exceptionOrNull()
+        val second = repository.submitExemption(payload)
+
+        assertTrue(first is edu.bnbu.student.mvp.core.network.v1.V1HttpException)
+        assertEquals("exemption-1", second.id)
+        repeat(9) { server.takeRequest() }
+        val firstCreate = server.takeRequest()
+        val replayedCreate = server.takeRequest()
+        assertEquals(
+            firstCreate.getHeader("Idempotency-Key"),
+            replayedCreate.getHeader("Idempotency-Key")
+        )
+        assertEquals("/api/v1/exemption-applications/exemption-1/submit", server.takeRequest().path)
+    }
+
+    @Test
+    fun feedbackRetryReusesUserSubmissionIntent() = runBlocking {
+        server.enqueue(error(503, "SYSTEM_SERVICE_UNAVAILABLE", "feedback-temporary"))
+        server.enqueue(success("feedback-replay", feedbackJson(), status = 201))
+        val repository = repository()
+        val payload = SubmitFeedbackRequest(
+            category = "功能异常",
+            description = "retry this report",
+            currentPage = "Profile / Report",
+            clientVersion = "test",
+            intentId = "feedback-user-intent"
+        )
+
+        val first = runCatching { repository.submitFeedback(payload) }.exceptionOrNull()
+        val second = repository.submitFeedback(payload)
+
+        assertTrue(first is edu.bnbu.student.mvp.core.network.v1.V1HttpException)
+        assertEquals("feedback-1", second.id)
+        val firstCreate = server.takeRequest()
+        val replayedCreate = server.takeRequest()
+        assertEquals("/api/v1/feedback", firstCreate.path)
+        assertEquals("/api/v1/feedback", replayedCreate.path)
+        assertEquals(
+            firstCreate.getHeader("Idempotency-Key"),
+            replayedCreate.getHeader("Idempotency-Key")
+        )
     }
 
     @Test
@@ -344,7 +591,8 @@ class ApiStudentRepositoryTest {
         val gateway = V1StudentWorkspaceGateway.create(
             credentialStore = FakeStore(credentials()),
             baseUrl = server.url("/api/v1").toString(),
-            httpClient = httpClient
+            httpClient = httpClient,
+            mediaPollDelayMillis = 0L
         )
         return ApiStudentRepository(
             initialBearerToken = "access-token",
@@ -440,16 +688,23 @@ class ApiStudentRepositoryTest {
             "deletedAt":null,"version":1},"teacherProfile":null,"adminProfile":null
     }""".trimIndent()
 
-    private fun enrollmentJson(): String = """{
-        "id":"enrollment-1","organizationId":"org-1","semesterId":"semester-1",
-        "classSectionId":"section-1","studentId":"student-remote","source":"QR_CODE",
+    private fun enrollmentJson(
+        id: String = "enrollment-1",
+        semesterId: String = "semester-1",
+        sectionId: String = "section-1"
+    ): String = """{
+        "id":"$id","organizationId":"org-1","semesterId":"$semesterId",
+        "classSectionId":"$sectionId","studentId":"student-remote","source":"QR_CODE",
         "sourceReferenceId":null,"status":"ACTIVE","joinedAt":"2026-08-01T00:00:00Z",
         "endedAt":null,"endReason":null,"createdBy":null,"createdAt":"2026-08-01T00:00:00Z",
         "updatedAt":"2026-08-01T00:00:00Z","version":1
     }""".trimIndent()
 
-    private fun classSectionJson(): String = """{
-        "id":"section-1","organizationId":"org-1","courseId":"course-1","semesterId":"semester-1",
+    private fun classSectionJson(
+        id: String = "section-1",
+        semesterId: String = "semester-1"
+    ): String = """{
+        "id":"$id","organizationId":"org-1","courseId":"course-1","semesterId":"$semesterId",
         "teacherId":"teacher-1","classCode":"PE-01","displayName":"Physical Education 01",
         "status":"ACTIVE","isEnrollmentOpen":true,"checkInWindowMode":"AVAILABLE",
         "checkInStartDate":"2026-08-01","checkInEndDate":"2026-12-31",
@@ -472,46 +727,65 @@ class ApiStudentRepositoryTest {
         "departmentName":"Physical Education","title":"Lecturer"
     }""".trimIndent()
 
-    private fun semesterJson(): String = """{
-        "id":"semester-1","organizationId":"org-1","academicYear":"2026-2027",
+    private fun semesterJson(id: String = "semester-1"): String = """{
+        "id":"$id","organizationId":"org-1","academicYear":"2026-2027",
         "termCode":"FIRST","displayName":"2026-2027 秋季学期","startDate":"2026-08-01",
         "endDate":"2026-12-31","status":"CURRENT","isCurrent":true,"createdBy":null,
         "createdAt":"2026-08-01T00:00:00Z","updatedAt":"2026-08-01T00:00:00Z","version":1
     }""".trimIndent()
 
-    private fun scoreJson(): String = """{
-        "id":"score-1","organizationId":"org-1","enrollmentId":"enrollment-1","scoreRuleId":"rule-1",
-        "calculationRevision":1,"validCourseDurationSeconds":50400,"validGeneralDurationSeconds":79200,
-        "totalValidDurationSeconds":129600,"scoringSeconds":129600,"excessSeconds":0,
+    private fun scoreJson(
+        id: String = "score-1",
+        enrollmentId: String = "enrollment-1",
+        courseSeconds: Long = 50400,
+        generalSeconds: Long = 79200,
+        totalSeconds: Long = 129600
+    ): String = """{
+        "id":"$id","organizationId":"org-1","enrollmentId":"$enrollmentId","scoreRuleId":"rule-1",
+        "calculationRevision":1,"validCourseDurationSeconds":$courseSeconds,"validGeneralDurationSeconds":$generalSeconds,
+        "totalValidDurationSeconds":$totalSeconds,"scoringSeconds":$totalSeconds,"excessSeconds":0,
         "qualificationStatus":"QUALIFIED","baseScore":80.0,"adjustmentTotal":0.0,"finalScore":80.0,
         "status":"PUBLISHED","calculatedAt":"2026-08-11T00:00:00Z","publishedAt":"2026-08-11T00:00:00Z",
         "lockedAt":null,"sourceFingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","version":1
     }""".trimIndent()
 
-    private fun mediaJson(id: String): String = """{
+    private fun mediaJson(id: String, status: String = "AVAILABLE"): String = """{
         "id":"$id","organizationId":"org-1","ownerStudentId":"student-remote","sessionId":null,
         "enrollmentId":"enrollment-1","recordId":null,"businessPurpose":"EXEMPTION_APPLICATION",
         "mediaType":"IMAGE","declaredMimeType":"image/jpeg","verifiedMimeType":"image/jpeg",
         "declaredFileSizeBytes":4,"verifiedFileSizeBytes":4,"captureSource":"FILE_PICKER",
-        "uploadStatus":"AVAILABLE","uploadedAt":"2026-08-11T00:00:00Z","boundAt":null,
+        "uploadStatus":"$status","uploadedAt":"2026-08-11T00:00:00Z","boundAt":null,
         "declaredContentSha256":null,"verifiedContentSha256":null,"declaredDurationSeconds":null,
         "verifiedDurationSeconds":null,"version":1
     }""".trimIndent()
 
-    private fun exemptionJson(status: String, version: Long): String = """{
+    private fun exemptionJson(
+        status: String,
+        version: Long,
+        mediaIds: List<String> = listOf("media-existing")
+    ): String {
+        val mediaJson = mediaIds.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
+        return """{
         "id":"exemption-1","studentId":"student-remote","enrollmentId":"enrollment-1",
         "classSectionId":"section-1","applicationType":"EXERCISE_CHECK_IN","reason":"original reason",
-        "mediaIds":["media-existing"],"status":"$status","publicComment":"Add documents",
+        "mediaIds":$mediaJson,"status":"$status","publicComment":"Add documents",
         "submittedAt":"2026-08-10T00:00:00Z","decidedAt":null,"version":$version
     }""".trimIndent()
+    }
 
-    private fun enqueueWorkspace() {
+    private fun feedbackJson(): String = """{
+        "id":"feedback-1","category":"BUG","content":"retry this report",
+        "status":"OPEN","publicReply":null,"createdAt":"2026-08-11T00:00:00Z",
+        "updatedAt":"2026-08-11T00:00:00Z","version":1
+    }""".trimIndent()
+
+    private fun enqueueWorkspace(currentSemesterId: String = "semester-1") {
         server.enqueue(success("me", currentUserJson()))
         server.enqueue(paged("enrollments", "[${enrollmentJson()}]"))
         server.enqueue(success("section", classSectionJson()))
         server.enqueue(success("course", courseJson()))
         server.enqueue(success("teacher", teacherJson()))
-        server.enqueue(success("semester", semesterJson()))
+        server.enqueue(success("semester", semesterJson(currentSemesterId)))
         server.enqueue(paged("records", "[]"))
         server.enqueue(paged("scores", "[${scoreJson()}]"))
         server.enqueue(paged("notifications", "[]"))

@@ -62,7 +62,9 @@ internal class PrivateExerciseMediaObjectUploader(
                 override fun onFailure(call: Call, error: IOException) {
                     if (continuation.isActive) {
                         continuation.resumeWithException(
-                            ExerciseMediaObjectUploadException("Private media upload failed.", error)
+                            ExerciseMediaObjectUploadException(
+                                message = "Private media upload failed."
+                            )
                         )
                     }
                 }
@@ -71,14 +73,19 @@ internal class PrivateExerciseMediaObjectUploader(
                     val result = runCatching {
                         response.use {
                             if (it.code !in 200..299) {
+                                val failure = it.storageFailureMetadata()
                                 throw ExerciseMediaObjectUploadException(
-                                    "Private media upload returned HTTP ${it.code}."
+                                    message = "Private media upload returned HTTP ${it.code}.",
+                                    httpStatus = it.code,
+                                    storageErrorCode = failure.errorCode,
+                                    storageRequestId = failure.requestId
                                 )
                             }
                             val entityTag = it.header("ETag")?.trim().orEmpty()
                             if (entityTag.isEmpty()) {
                                 throw ExerciseMediaObjectUploadException(
-                                    "Private media upload response is missing ETag."
+                                    message = "Private media upload response is missing ETag.",
+                                    httpStatus = it.code
                                 )
                             }
                             ExerciseMediaUploadReceipt(entityTag)
@@ -94,7 +101,66 @@ internal class PrivateExerciseMediaObjectUploader(
         }
 }
 
+internal enum class ExerciseMediaStorageErrorCode(val wireValue: String) {
+    SIGNATURE_DOES_NOT_MATCH("SignatureDoesNotMatch"),
+    ACCESS_DENIED("AccessDenied"),
+    EXPIRED_TOKEN("ExpiredToken"),
+    REQUEST_EXPIRED("RequestExpired"),
+    REQUEST_TIME_TOO_SKEWED("RequestTimeTooSkewed");
+
+    companion object {
+        fun fromWireValue(value: String?): ExerciseMediaStorageErrorCode? =
+            entries.firstOrNull { it.wireValue == value?.trim() }
+    }
+}
+
 internal class ExerciseMediaObjectUploadException(
     message: String,
-    cause: Throwable? = null
-) : IOException(message, cause)
+    val httpStatus: Int? = null,
+    val storageErrorCode: ExerciseMediaStorageErrorCode? = null,
+    val storageRequestId: String? = null
+) : IOException(message)
+
+private data class StorageFailureMetadata(
+    val errorCode: ExerciseMediaStorageErrorCode?,
+    val requestId: String?
+)
+
+private fun Response.storageFailureMetadata(): StorageFailureMetadata {
+    val boundedBody = readBoundedStorageErrorBody()
+    val errorCode = ExerciseMediaStorageErrorCode.fromWireValue(
+        STORAGE_ERROR_CODE_XML.find(boundedBody)?.groupValues?.getOrNull(1)
+    )
+    val headerRequestId = STORAGE_REQUEST_ID_HEADERS.firstNotNullOfOrNull { headerName ->
+        header(headerName).safeStorageRequestId()
+    }
+    val xmlRequestId = STORAGE_REQUEST_ID_XML.find(boundedBody)
+        ?.groupValues
+        ?.getOrNull(1)
+        .safeStorageRequestId()
+    return StorageFailureMetadata(
+        errorCode = errorCode,
+        requestId = headerRequestId ?: xmlRequestId
+    )
+}
+
+private fun Response.readBoundedStorageErrorBody(): String {
+    val source = body?.source() ?: return ""
+    source.request(MAX_STORAGE_ERROR_BODY_BYTES + 1L)
+    val byteCount = minOf(source.buffer.size, MAX_STORAGE_ERROR_BODY_BYTES)
+    return source.buffer.clone().readUtf8(byteCount)
+}
+
+private fun String?.safeStorageRequestId(): String? = this
+    ?.trim()
+    ?.takeIf(SAFE_STORAGE_REQUEST_ID::matches)
+
+private const val MAX_STORAGE_ERROR_BODY_BYTES = 8_192L
+private val STORAGE_REQUEST_ID_HEADERS = listOf(
+    "x-cos-request-id",
+    "x-amz-request-id",
+    "x-obs-request-id"
+)
+private val STORAGE_ERROR_CODE_XML = Regex("<Code>\\s*([^<]{1,64})\\s*</Code>")
+private val STORAGE_REQUEST_ID_XML = Regex("<RequestId>\\s*([^<]{1,128})\\s*</RequestId>")
+private val SAFE_STORAGE_REQUEST_ID = Regex("^[A-Za-z0-9][A-Za-z0-9._:+/=-]{0,127}$")

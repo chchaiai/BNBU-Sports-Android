@@ -33,7 +33,7 @@ class SessionMediaDraftStoreTest {
     }
 
     @Test
-    fun pendingCaptureWithWrittenBytesRecoversAfterProcessRestart() {
+    fun pendingCaptureWithWrittenBytesNeverBecomesRetainedAfterProcessRestart() {
         val root = temporaryFolder.newFolder("drafts")
         val key = SessionDraftKey("student-1", "session-1")
         val firstStore = SessionMediaDraftStore(root, clock)
@@ -42,9 +42,46 @@ class SessionMediaDraftStoreTest {
 
         val recovered = SessionMediaDraftStore(root, clock).list(key)
 
-        assertEquals(1, recovered.size)
-        assertEquals(ProofMediaType.Video, recovered.single().type)
-        assertEquals(SessionMediaDraftStatus.Ready, recovered.single().status)
+        assertTrue(recovered.isEmpty())
+        assertTrue(target.file.isFile)
+
+        val confirmed = SessionMediaDraftStore(root, clock)
+            .completeCapture(target, success = true, durationSeconds = 10.0)
+            .getOrThrow()
+        assertEquals(SessionMediaDraftStatus.Ready, confirmed.status)
+    }
+
+    @Test
+    fun unconfirmedCaptureCanBeDiscardedThenRetakenBeforeAnyEvidenceIsRetained() {
+        val store = SessionMediaDraftStore(temporaryFolder.newFolder("drafts"), clock)
+        val key = SessionDraftKey("student-1", "session-1")
+        val discarded = store.prepareCapture(key, ProofMediaType.Image).getOrThrow()
+        discarded.file.writeBytes(byteArrayOf(1, 2, 3))
+
+        assertTrue(store.list(key).isEmpty())
+        assertTrue(store.completeCapture(discarded, success = false).isFailure)
+        assertFalse(discarded.file.exists())
+
+        val retake = store.prepareCapture(key, ProofMediaType.Image).getOrThrow()
+        retake.file.writeBytes(byteArrayOf(4, 5, 6))
+        assertTrue(store.list(key).isEmpty())
+        assertTrue(store.completeCapture(retake, success = true).isSuccess)
+        assertEquals(listOf(retake.draftId), store.readyForSubmission(key).getOrThrow().map { it.id })
+    }
+
+    @Test
+    fun cancelledVideoCaptureOnlyRemovesPendingBytesAndNeverBecomesReady() {
+        val store = SessionMediaDraftStore(temporaryFolder.newFolder("drafts"), clock)
+        val key = SessionDraftKey("student-1", "session-1")
+        val target = store.prepareCapture(key, ProofMediaType.Video).getOrThrow()
+        target.file.writeBytes(byteArrayOf(7, 8, 9))
+
+        assertTrue(store.list(key).isEmpty())
+        assertTrue(store.cancelCapture(target))
+
+        assertFalse(target.file.exists())
+        assertTrue(store.list(key).isEmpty())
+        assertTrue(store.readyForSubmission(key).isFailure)
     }
 
     @Test
@@ -87,8 +124,11 @@ class SessionMediaDraftStoreTest {
 
         assertTrue(result.isFailure)
         assertTrue(target.file.exists())
-        assertEquals(1, store.list(originalKey).size)
+        assertTrue(store.list(originalKey).isEmpty())
         assertTrue(store.list(otherKey).isEmpty())
+
+        assertTrue(store.completeCapture(target, success = true).isSuccess)
+        assertEquals(1, store.list(originalKey).size)
     }
 
     @Test

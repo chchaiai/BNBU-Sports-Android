@@ -65,6 +65,7 @@ import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import edu.bnbu.student.mvp.core.designsystem.pressScale
 import edu.bnbu.student.mvp.core.model.hourText
+import edu.bnbu.student.mvp.core.model.studentNumberForDisplay
 import edu.bnbu.student.mvp.core.model.progressStatusLabel
 import edu.bnbu.student.mvp.core.state.StudentAppState
 import edu.bnbu.student.mvp.feature.checkin.canStartExercise
@@ -105,7 +106,9 @@ internal fun DashboardScreen(
             item {
                 TodayCheckInPanel(
                     appState = appState,
-                    hasCheckedIn = appState.hasSubmittedCheckInToday(),
+                    // Remote businessDate is Backend-owned; never hide the
+                    // action from a device-local calendar guess.
+                    hasCheckedIn = !appState.isV1ContractBacked && appState.hasSubmittedCheckInToday(),
                     onOpenCheckIn = onOpenCheckIn
                 )
             }
@@ -533,12 +536,10 @@ private fun DashboardHeader(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = appState.workspace.student.studentNumber.ifBlank {
-                    interfaceText("学号未提供", "Student number unavailable")
-                },
+                text = appState.workspace.student.studentNumberForDisplay(),
                 color = cs.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
         }

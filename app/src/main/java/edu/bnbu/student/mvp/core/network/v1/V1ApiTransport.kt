@@ -6,8 +6,10 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import edu.bnbu.student.mvp.BuildConfig
 import edu.bnbu.student.mvp.core.network.SharedHttpClient
+import edu.bnbu.student.mvp.core.network.v1.generated.ErrorCode
 import java.io.IOException
 import java.lang.reflect.Type
+import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -133,12 +135,25 @@ class V1ProtocolException(
 
 class V1NetworkException(
     val operationId: String,
-    cause: IOException
+    cause: IOException,
+    val requestId: String? = null
 ) : V1TransportException("Network request failed (operationId=$operationId)") {
     init {
         initCause(cause)
     }
 }
+
+/** Returns only a bounded correlation ID that is safe to render in user-facing diagnostics. */
+internal fun Throwable.v1RequestIdForDisplay(): String? = when (this) {
+    is V1HttpException -> error.requestId
+    is V1ProtocolException -> requestId
+    is V1NetworkException -> requestId
+    else -> null
+}
+    ?.trim()
+    ?.takeIf(SAFE_DIAGNOSTIC_REQUEST_ID::matches)
+
+private val SAFE_DIAGNOSTIC_REQUEST_ID = Regex("^[A-Za-z0-9._:-]{1,64}$")
 
 class V1ApiTransport(
     baseUrl: String = BuildConfig.BNBU_API_BASE_URL,
@@ -162,7 +177,11 @@ class V1ApiTransport(
         val response = try {
             call.execute()
         } catch (error: IOException) {
-            throw V1NetworkException(request.operationId, error)
+            throw V1NetworkException(
+                operationId = request.operationId,
+                cause = error,
+                requestId = call.request().header(REQUEST_ID_HEADER)
+            )
         }
         return response.use { parseResponse(request.operationId, it, responseType) }
     }
@@ -186,7 +205,13 @@ class V1ApiTransport(
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) {
                 if (continuation.isActive) {
-                    continuation.resumeWithException(V1NetworkException(request.operationId, error))
+                    continuation.resumeWithException(
+                        V1NetworkException(
+                            operationId = request.operationId,
+                            cause = error,
+                            requestId = call.request().header(REQUEST_ID_HEADER)
+                        )
+                    )
                 }
             }
 
@@ -259,27 +284,43 @@ class V1ApiTransport(
             throw parseHttpError(operationId, response.code, responseHeaderRequestId, root)
         }
 
-        val unexpectedKeys = root.keySet() - SUCCESS_KEYS
-        if (unexpectedKeys.isNotEmpty() || !root.has("data")) {
+        if (root.keySet() != SUCCESS_KEYS) {
             throw protocolError(
                 operationId,
                 response.code,
                 responseHeaderRequestId,
-                "success envelope must contain only data and optional meta"
+                "success envelope must contain exactly data and meta"
             )
         }
-        val metaObject = root.get("meta")?.takeUnless(JsonElement::isJsonNull)?.let { element ->
-            if (!element.isJsonObject) {
-                throw protocolError(
-                    operationId,
-                    response.code,
-                    responseHeaderRequestId,
-                    "meta must be an object"
-                )
-            }
-            element.asJsonObject
+        val metaElement = root.get("meta")
+        if (metaElement == null || !metaElement.isJsonObject) {
+            throw protocolError(
+                operationId,
+                response.code,
+                responseHeaderRequestId,
+                "meta must be a non-null object"
+            )
         }
-        val bodyRequestId = metaObject?.stringValue("requestId")
+        val metaObject = metaElement.asJsonObject
+        if (
+            metaObject.keySet().isEmpty() ||
+            (metaObject.keySet() - META_KEYS).isNotEmpty() ||
+            "requestId" !in metaObject.keySet()
+        ) {
+            throw protocolError(
+                operationId,
+                response.code,
+                responseHeaderRequestId,
+                "meta fields do not match the contract"
+            )
+        }
+        val bodyRequestId = metaObject.stringValue("requestId")
+            ?: throw protocolError(
+                operationId,
+                response.code,
+                responseHeaderRequestId,
+                "meta.requestId must be a non-empty string"
+            )
         val finalRequestId = resolveFinalRequestId(
             operationId,
             response.code,
@@ -300,14 +341,16 @@ class V1ApiTransport(
                 )
             }
         }
-        return V1ApiSuccess(
+        val result = V1ApiSuccess(
             statusCode = response.code,
             data = parsedData,
             meta = V1ResponseMeta(
                 requestId = finalRequestId,
-                pagination = metaObject?.get("pagination")
+                pagination = metaObject.get("pagination")
             )
         )
+        result.meta.validateOptionalContractPagination(operationId, response.code)
+        return result
     }
 
     private fun parseHttpError(
@@ -325,6 +368,12 @@ class V1ApiTransport(
             )
         }
         val bodyRequestId = root.stringValue("requestId")
+            ?: throw protocolError(
+                operationId,
+                statusCode,
+                responseHeaderRequestId,
+                "error requestId must be a non-empty string"
+            )
         val finalRequestId = resolveFinalRequestId(
             operationId,
             statusCode,
@@ -333,12 +382,32 @@ class V1ApiTransport(
         )
         val code = root.stringValue("code")
             ?: throw protocolError(operationId, statusCode, finalRequestId, "error code is missing")
+        if (ErrorCode.entries.none { it.value == code }) {
+            throw protocolError(operationId, statusCode, finalRequestId, "error code is not in the contract")
+        }
         val message = root.stringValue("message")
             ?: throw protocolError(operationId, statusCode, finalRequestId, "error message is missing")
+        if (message.length > 1_000) {
+            throw protocolError(operationId, statusCode, finalRequestId, "error message exceeds the contract limit")
+        }
         val timestamp = root.stringValue("timestamp")
             ?: throw protocolError(operationId, statusCode, finalRequestId, "error timestamp is missing")
+        runCatching { OffsetDateTime.parse(timestamp) }.getOrElse {
+            throw protocolError(operationId, statusCode, finalRequestId, "error timestamp is invalid", it)
+        }
         val details = root.get("details")
             ?: throw protocolError(operationId, statusCode, finalRequestId, "error details are missing")
+        if (
+            !details.isJsonObject ||
+            (details.asJsonObject.keySet() - ERROR_DETAIL_KEYS).isNotEmpty()
+        ) {
+            throw protocolError(
+                operationId,
+                statusCode,
+                finalRequestId,
+                "error details fields do not match the contract"
+            )
+        }
         return V1HttpException(
             operationId = operationId,
             statusCode = statusCode,
@@ -376,7 +445,15 @@ class V1ApiTransport(
         responseHeaderRequestId: String?,
         bodyRequestId: String?
     ): String {
-        if (responseHeaderRequestId != null && bodyRequestId != null && responseHeaderRequestId != bodyRequestId) {
+        if (responseHeaderRequestId == null) {
+            throw protocolError(
+                operationId,
+                statusCode,
+                bodyRequestId,
+                "X-Request-ID response header is missing"
+            )
+        }
+        if (bodyRequestId != null && responseHeaderRequestId != bodyRequestId) {
             throw protocolError(
                 operationId,
                 statusCode,
@@ -384,8 +461,12 @@ class V1ApiTransport(
                 "response header and envelope requestId values differ"
             )
         }
-        return responseHeaderRequestId ?: bodyRequestId
-        ?: throw protocolError(operationId, statusCode, null, "server requestId is missing")
+        val resolved = bodyRequestId
+            ?: throw protocolError(operationId, statusCode, responseHeaderRequestId, "server requestId is missing")
+        if (resolved.length !in 1..64) {
+            throw protocolError(operationId, statusCode, null, "server requestId exceeds the contract limit")
+        }
+        return resolved
     }
 
     private fun protocolError(
@@ -401,6 +482,7 @@ class V1ApiTransport(
     private fun JsonObject.stringValue(name: String): String? = get(name)
         ?.takeUnless(JsonElement::isJsonNull)
         ?.takeIf(JsonElement::isJsonPrimitive)
+        ?.takeIf { it.asJsonPrimitive.isString }
         ?.asString
         ?.trim()
         ?.takeIf(String::isNotEmpty)
@@ -430,6 +512,20 @@ class V1ApiTransport(
         val EMPTY_BODY = ByteArray(0).toRequestBody(JSON_MEDIA_TYPE)
         val CLIENT_REQUEST_ID = Regex("^[A-Za-z0-9._:-]{1,64}$")
         val SUCCESS_KEYS = setOf("data", "meta")
+        val META_KEYS = setOf("requestId", "pagination")
         val ERROR_KEYS = setOf("code", "message", "details", "requestId", "timestamp")
+        val ERROR_DETAIL_KEYS = setOf(
+            "fieldErrors",
+            "resourceType",
+            "resourceId",
+            "currentState",
+            "allowedActions",
+            "expectedVersion",
+            "actualVersion",
+            "retryAfterSeconds",
+            "idempotencyKey",
+            "itemErrors",
+            "migrationReference"
+        )
     }
 }

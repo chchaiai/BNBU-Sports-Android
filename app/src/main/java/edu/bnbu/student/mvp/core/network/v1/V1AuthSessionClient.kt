@@ -4,10 +4,12 @@ import com.google.gson.Gson
 import edu.bnbu.student.mvp.BuildConfig
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentialStore
 import edu.bnbu.student.mvp.core.local.AuthSessionCredentials
+import edu.bnbu.student.mvp.core.local.PendingRefreshIntent
 import edu.bnbu.student.mvp.core.network.SharedHttpClient
 import edu.bnbu.student.mvp.core.network.v1.generated.AuthSession
 import edu.bnbu.student.mvp.core.network.v1.generated.LogoutRequest
 import edu.bnbu.student.mvp.core.network.v1.generated.RefreshRequest
+import java.security.MessageDigest
 import java.time.Instant
 import java.util.UUID
 import okhttp3.OkHttpClient
@@ -29,6 +31,9 @@ data class V1LogoutOutcome(
     val requestId: String?
 )
 
+class V1AuthCredentialStateException(reason: String) :
+    V1TransportException("Authentication credentials could not be persisted: $reason")
+
 /**
  * Serializes refresh-token rotation. Concurrent 401 responses that rejected
  * the same access token wait for one rotation and then reuse its result.
@@ -44,6 +49,10 @@ class V1AuthSessionCoordinator(
     @Volatile
     private var session: AuthSessionCredentials? = credentialStore.loadAuthSession()
 
+    @Volatile
+    private var pendingRefreshIntent: PendingRefreshIntent? =
+        credentialStore.loadPendingRefreshIntent()
+
     fun currentAccessToken(): String? = session?.accessToken
 
     fun currentSession(): AuthSessionCredentials? = session
@@ -58,8 +67,16 @@ class V1AuthSessionCoordinator(
                 return false
             }
             this.session = session
+            clearPendingRefreshIntent()
             return true
         }
+    }
+
+    fun sessionWithUsableAccessToken(): AuthSessionCredentials {
+        val latest = currentSession() ?: throw invalidated(requestId = null)
+        if (latest.usableAccessToken(clock()) != null) return latest
+        refreshAfterExpiredAccessToken(latest.accessToken)
+        return currentSession() ?: throw invalidated(requestId = null)
     }
 
     fun refreshAfterExpiredAccessToken(rejectedAccessToken: String): String {
@@ -77,6 +94,7 @@ class V1AuthSessionCoordinator(
                 persisted.accessToken != rejectedAccessToken
             ) {
                 session = persisted
+                clearPendingRefreshIntent()
                 return persisted.accessToken
             }
 
@@ -84,16 +102,37 @@ class V1AuthSessionCoordinator(
             if (latest.accessToken != rejectedAccessToken) return latest.accessToken
 
             val refreshToken = latest.usableRefreshToken(clock())
-                ?: throw invalidateAndBuildException(requestId = null)
+                ?: run {
+                    clearPendingRefreshIntent()
+                    throw invalidateAndBuildException(requestId = null)
+                }
+            val sessionId = latest.sessionId
+                ?: run {
+                    clearPendingRefreshIntent()
+                    throw invalidateAndBuildException(requestId = null)
+                }
+            val refreshIntent = acquirePendingRefreshIntent(sessionId, refreshToken)
             val rotated = try {
-                refreshSession(refreshToken, idempotencyKeyProvider())
+                refreshSession(
+                    refreshToken,
+                    IdempotencyKey.fromGenerated(refreshIntent.idempotencyKey)
+                )
             } catch (error: Exception) {
-                throw invalidateAndBuildException(error.requestIdOrNull(), error)
+                if (error.isDefinitiveRefreshFailure()) {
+                    clearPendingRefreshIntent()
+                    throw invalidateAndBuildException(error.requestIdOrNull(), error)
+                }
+                // A timeout, 409 request-in-progress, rate limit or 5xx response
+                // does not prove that the single-use refresh token is invalid.
+                // Keep both credentials and the same durable Idempotency-Key so
+                // the next attempt can safely replay the original rotation.
+                throw error
             }.withEnrollmentIdIfMissing(latest.enrollmentId)
             if (!credentialStore.saveAuthSession(rotated)) {
-                throw invalidateAndBuildException(requestId = null)
+                throw V1AuthCredentialStateException("rotated session write failed")
             }
             session = rotated
+            clearPendingRefreshIntent()
             return rotated.accessToken
         }
     }
@@ -101,10 +140,55 @@ class V1AuthSessionCoordinator(
     fun invalidate(requestId: String?, cause: Throwable? = null): V1SessionInvalidatedException {
         synchronized(GlobalRefreshLock) {
             session = null
+            clearPendingRefreshIntent()
             runCatching(credentialStore::clearAuth)
         }
         return invalidated(requestId, cause)
     }
+
+    private fun acquirePendingRefreshIntent(
+        sessionId: String,
+        refreshToken: String
+    ): PendingRefreshIntent {
+        val tokenFingerprint = refreshToken.sha256()
+        val loaded = credentialStore.loadPendingRefreshIntent()
+            ?: pendingRefreshIntent
+        if (
+            loaded != null &&
+            loaded.sessionId == sessionId &&
+            loaded.refreshTokenFingerprint == tokenFingerprint
+        ) {
+            pendingRefreshIntent = loaded
+            return loaded
+        }
+
+        if (loaded != null) clearPendingRefreshIntent()
+        val created = PendingRefreshIntent(
+            sessionId = sessionId,
+            refreshTokenFingerprint = tokenFingerprint,
+            idempotencyKey = idempotencyKeyProvider().wireValue
+        )
+        if (!credentialStore.savePendingRefreshIntent(created)) {
+            throw V1AuthCredentialStateException("refresh intent write failed")
+        }
+        pendingRefreshIntent = created
+        return created
+    }
+
+    private fun clearPendingRefreshIntent() {
+        pendingRefreshIntent = null
+        runCatching(credentialStore::clearPendingRefreshIntent)
+    }
+
+    private fun Throwable.isDefinitiveRefreshFailure(): Boolean =
+        this is V1HttpException &&
+            (statusCode == 401 || error.code.value in DefinitiveRefreshFailureCodes)
+
+    private fun String.sha256(): String = MessageDigest.getInstance("SHA-256")
+        .digest(toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte ->
+            (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+        }
 
     private fun invalidateAndBuildException(
         requestId: String?,
@@ -122,6 +206,11 @@ class V1AuthSessionCoordinator(
 
     private companion object {
         val GlobalRefreshLock = Any()
+        val DefinitiveRefreshFailureCodes = setOf(
+            "AUTH_CREDENTIAL_INVALID",
+            "AUTH_SESSION_REVOKED",
+            "AUTH_ACCOUNT_DISABLED"
+        )
     }
 }
 
@@ -259,9 +348,10 @@ class V1AuthorizedApiClient private constructor(
         }
         var outcome = V1LogoutOutcome(serverRevoked = false, requestId = null)
         try {
-            val refreshToken = session.refreshToken ?: return outcome
+            val usableSession = coordinator.sessionWithUsableAccessToken()
+            val refreshToken = usableSession.refreshToken ?: return outcome
             val response = authEndpoints.logout(
-                accessToken = session.accessToken,
+                accessToken = usableSession.accessToken,
                 refreshToken = refreshToken,
                 idempotencyKey = idempotencyKeyProvider()
             )
@@ -272,6 +362,8 @@ class V1AuthorizedApiClient private constructor(
         } catch (error: V1HttpException) {
             outcome = V1LogoutOutcome(false, error.error.requestId)
         } catch (error: V1ProtocolException) {
+            outcome = V1LogoutOutcome(false, error.requestId)
+        } catch (error: V1SessionInvalidatedException) {
             outcome = V1LogoutOutcome(false, error.requestId)
         } catch (_: V1TransportException) {
             outcome = V1LogoutOutcome(false, null)

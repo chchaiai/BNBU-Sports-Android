@@ -5,6 +5,7 @@ import edu.bnbu.student.mvp.core.model.ProofMediaType
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import java.time.LocalDate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -21,7 +22,10 @@ class ExerciseRecordCoordinatorTest {
             recordId = created.recordId,
             sessionId = session.sessionId,
             version = 3L,
-            submittedAtEpochMillis = 9_000L
+            submittedAtEpochMillis = 9_000L,
+            businessDate = LocalDate.parse("2026-08-11"),
+            creditedDurationSeconds = 3_600L,
+            reviewStatus = "VALID"
         )
         var createCommand: CreateExerciseRecordDraftCommand? = null
         gateway.onCreateRecordDraft = { command ->
@@ -148,7 +152,15 @@ class ExerciseRecordCoordinatorTest {
         var submitCommand: SubmitExerciseRecordCommand? = null
         gateway.onSubmitRecord = { command ->
             submitCommand = command
-            ExerciseRecord(command.recordId, "session-1", 3L, 9_000L)
+            ExerciseRecord(
+                command.recordId,
+                "session-1",
+                3L,
+                9_000L,
+                LocalDate.parse("2026-08-11"),
+                3_600L,
+                "VALID"
+            )
         }
         gateway.onUpdateRecordDraft = { command ->
             ExerciseRecordDraft(command.recordId, "session-1", 2L)
@@ -260,7 +272,10 @@ class ExerciseRecordCoordinatorTest {
                 command.recordId,
                 "session-1",
                 version = 2L,
-                submittedAtEpochMillis = 9_000L
+                submittedAtEpochMillis = 9_000L,
+                businessDate = LocalDate.parse("2026-08-11"),
+                creditedDurationSeconds = 3_600L,
+                reviewStatus = "VALID"
             )
         }
         val coordinator = ExerciseRecordCoordinator(gateway)
@@ -298,7 +313,10 @@ class ExerciseRecordCoordinatorTest {
                 command.recordId,
                 "session-1",
                 version = 2L,
-                submittedAtEpochMillis = 9_000L
+                submittedAtEpochMillis = 9_000L,
+                businessDate = LocalDate.parse("2026-08-11"),
+                creditedDurationSeconds = 3_600L,
+                reviewStatus = "VALID"
             )
         }
         val coordinator = ExerciseRecordCoordinator(gateway)

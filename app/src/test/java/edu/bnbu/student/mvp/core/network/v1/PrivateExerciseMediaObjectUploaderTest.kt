@@ -11,6 +11,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Before
@@ -55,6 +56,7 @@ class PrivateExerciseMediaObjectUploaderTest {
         val request = server.takeRequest()
         assertEquals("PUT", request.method)
         assertEquals("image/jpeg", request.getHeader("Content-Type"))
+        assertEquals(sourceFile.length().toString(), request.getHeader("Content-Length"))
         assertEquals("required-value", request.getHeader("x-required-header"))
         assertNull(request.getHeader("Authorization"))
         assertNull(request.getHeader("X-Request-ID"))
@@ -92,9 +94,94 @@ class PrivateExerciseMediaObjectUploaderTest {
     fun missingEntityTagIsNotReportedAsSuccessfulUpload() {
         server.enqueue(MockResponse().setResponseCode(200))
 
-        assertThrows(ExerciseMediaObjectUploadException::class.java) {
+        val error = assertThrows(ExerciseMediaObjectUploadException::class.java) {
             runBlocking { uploader.upload(command()) }
         }
+
+        assertEquals(200, error.httpStatus)
+        assertNull(error.storageErrorCode)
+    }
+
+    @Test
+    fun signatureMismatchUsesAllowlistedCodeAndPrefersStorageRequestHeader() {
+        val signedUrlSecret = "X-Amz-Signature=do-not-render"
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(403)
+                .setHeader("x-amz-request-id", "storage-header-1")
+                .setBody(
+                    """<Error><Code>SignatureDoesNotMatch</Code><Message>$signedUrlSecret</Message><RequestId>storage-xml-ignored</RequestId></Error>"""
+                )
+        )
+
+        val error = assertThrows(ExerciseMediaObjectUploadException::class.java) {
+            runBlocking { uploader.upload(command()) }
+        }
+
+        assertEquals(403, error.httpStatus)
+        assertEquals(ExerciseMediaStorageErrorCode.SIGNATURE_DOES_NOT_MATCH, error.storageErrorCode)
+        assertEquals("storage-header-1", error.storageRequestId)
+        assertNull(error.cause)
+        assertFalse(error.message.orEmpty().contains(signedUrlSecret))
+        assertFalse(error.toString().contains(signedUrlSecret))
+        assertFalse(error.message.orEmpty().contains("<Error>"))
+    }
+
+    @Test
+    fun accessDeniedUsesAllowlistedXmlRequestIdWhenHeaderIsAbsent() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(403)
+                .setBody("""<Error><Code>AccessDenied</Code><RequestId>storage-xml-2</RequestId></Error>""")
+        )
+
+        val error = assertThrows(ExerciseMediaObjectUploadException::class.java) {
+            runBlocking { uploader.upload(command()) }
+        }
+
+        assertEquals(ExerciseMediaStorageErrorCode.ACCESS_DENIED, error.storageErrorCode)
+        assertEquals("storage-xml-2", error.storageRequestId)
+    }
+
+    @Test
+    fun expiredStorageErrorsRemainStructuredWithoutAutomaticRetry() {
+        listOf(
+            "ExpiredToken" to ExerciseMediaStorageErrorCode.EXPIRED_TOKEN,
+            "RequestExpired" to ExerciseMediaStorageErrorCode.REQUEST_EXPIRED,
+            "RequestTimeTooSkewed" to ExerciseMediaStorageErrorCode.REQUEST_TIME_TOO_SKEWED
+        ).forEachIndexed { index, (wireCode, expectedCode) ->
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(403)
+                    .setBody("""<Error><Code>$wireCode</Code><RequestId>storage-expired-$index</RequestId></Error>""")
+            )
+
+            val error = assertThrows(ExerciseMediaObjectUploadException::class.java) {
+                runBlocking { uploader.upload(command()) }
+            }
+
+            assertEquals(expectedCode, error.storageErrorCode)
+            assertEquals("storage-expired-$index", error.storageRequestId)
+        }
+        assertEquals(3, server.requestCount)
+    }
+
+    @Test
+    fun unknownOrOutOfBoundsStorageDetailsAreNotRetained() {
+        val hiddenXml = "<Error><Code>AccessDenied</Code><RequestId>unsafe request id</RequestId></Error>"
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(403)
+                .setBody("x".repeat(8_192) + hiddenXml)
+        )
+
+        val error = assertThrows(ExerciseMediaObjectUploadException::class.java) {
+            runBlocking { uploader.upload(command()) }
+        }
+
+        assertNull(error.storageErrorCode)
+        assertNull(error.storageRequestId)
+        assertFalse(error.message.orEmpty().contains(hiddenXml))
     }
 
     private fun command() = UploadExerciseMediaObjectCommand(
@@ -111,6 +198,7 @@ class PrivateExerciseMediaObjectUploaderTest {
         uploadMethod = ExerciseMediaUploadMethod.PUT,
         requiredHeaders = mapOf(
             "Content-Type" to "image/jpeg",
+            "Content-Length" to sourceFile.length().toString(),
             "x-required-header" to "required-value"
         ),
         expiresAtEpochMillis = FixedNow.plusSeconds(300).toEpochMilli()

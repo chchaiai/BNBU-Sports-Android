@@ -437,20 +437,16 @@ internal class SessionMediaDraftStore(
 
                 SessionMediaDraftStatus.PendingCapture -> {
                     when {
-                        file.isFile && isFileSizeValid(draft.type, file.length()) -> {
-                            changed = true
-                            draft.copy(
-                                byteCount = file.length(),
-                                status = SessionMediaDraftStatus.Ready
-                            )
-                        }
-
                         now - draft.capturedAtEpochMillis >= PendingCaptureRetentionMillis -> {
                             safeDelete(file, sessionDirectory(key))
                             changed = true
                             null
                         }
 
+                        // Bytes written by the camera are still unconfirmed. A process
+                        // restart must never silently promote them into retained evidence.
+                        // Only completeCapture(success = true), called after the explicit
+                        // confirmation UI, may transition PendingCapture to Ready.
                         else -> draft
                     }
                 }

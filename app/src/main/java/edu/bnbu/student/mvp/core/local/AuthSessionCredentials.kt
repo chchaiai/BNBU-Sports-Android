@@ -7,7 +7,36 @@ import java.time.OffsetDateTime
 interface AuthSessionCredentialStore {
     fun saveAuthSession(session: AuthSessionCredentials): Boolean
     fun loadAuthSession(): AuthSessionCredentials?
+    fun savePendingRefreshIntent(intent: PendingRefreshIntent): Boolean = true
+    fun loadPendingRefreshIntent(): PendingRefreshIntent? = null
+    fun clearPendingRefreshIntent() = Unit
     fun clearAuth()
+}
+
+/**
+ * Durable identity for one in-flight refresh-token rotation.
+ *
+ * Only a SHA-256 fingerprint of the refresh token is stored. The raw token
+ * remains exclusively inside [AuthSessionCredentials].
+ */
+data class PendingRefreshIntent(
+    val sessionId: String,
+    val refreshTokenFingerprint: String,
+    val idempotencyKey: String
+) {
+    init {
+        require(sessionId.isNotBlank()) { "Pending refresh sessionId must not be blank" }
+        require(refreshTokenFingerprint.matches(Sha256Pattern)) {
+            "Pending refresh token fingerprint must be SHA-256"
+        }
+        require(idempotencyKey.length in 1..128 && idempotencyKey.all { it.code in 0x21..0x7e }) {
+            "Pending refresh Idempotency-Key is invalid"
+        }
+    }
+
+    private companion object {
+        val Sha256Pattern = Regex("^[a-f0-9]{64}$")
+    }
 }
 
 /**

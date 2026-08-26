@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,6 +28,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Notifications
@@ -49,6 +51,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -283,6 +286,17 @@ private fun NotificationList(
                         text = stringResource(filter.labelRes),
                         style = MaterialTheme.typography.labelMedium
                     )
+                },
+                leadingIcon = if (selected) {
+                    {
+                        Icon(
+                            imageVector = Icons.Filled.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                } else {
+                    null
                 }
             )
         }
@@ -323,7 +337,19 @@ private fun NotificationRow(
         animationSpec = BNBUMotion.colorSpec,
         label = "notificationReadTint"
     )
-    SwissPanel(modifier = modifier.bnbuClickable(onClick = onClick)) {
+    val containerColor by animateColorAsState(
+        targetValue = if (notice.isUnread) cs.surface else cs.surfaceVariant.copy(alpha = 0.55f),
+        animationSpec = BNBUMotion.colorSpec,
+        label = "notificationReadContainer"
+    )
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.large)
+            .background(containerColor)
+            .bnbuClickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 16.dp)
+    ) {
         Row(verticalAlignment = Alignment.Top) {
             Icon(
                 imageVector = if (notice.isUnread) Icons.Filled.NotificationsActive else Icons.Filled.CheckCircle,
@@ -341,7 +367,12 @@ private fun NotificationRow(
                         fontWeight = if (notice.isUnread) FontWeight.SemiBold else FontWeight.Normal,
                         modifier = Modifier.weight(1f)
                     )
-                    Text(notice.time, color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        text = notice.time,
+                        color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(start = 12.dp)
+                    )
                 }
                 Text(notice.message, color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             }

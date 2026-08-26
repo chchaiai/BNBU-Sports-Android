@@ -1,10 +1,10 @@
 # BNBU Sports Privacy Policy
 
-Version: 2.2
+Version: 2.3
 
-Updated: 11 August 2026
+Updated: 24 August 2026
 
-Effective: 11 August 2026
+Effective: 24 August 2026
 
 BNBU Sports is operated for sports teaching administration at Beijing Normal University at Zhuhai. This policy applies to the student app, teacher services, and related course, attendance, activity-hour and grade services. It explains how we handle personal information and how you can exercise your rights.
 
@@ -18,15 +18,15 @@ To provide account and teaching services, we may process your student ID, name, 
 
 ## 3. Android permissions
 
-CAMERA is used after your action to scan a course invitation QR code or capture on-site check-in evidence. RECORD_AUDIO is requested only together with CAMERA when you choose in-app video recording, because check-in video must contain sound. Active recording is limited to 15 seconds, paused time is excluded, and the result is compressed on-device before upload. Denying CAMERA prevents on-site photos and video; denying only RECORD_AUDIO prevents video but does not affect on-site photos or manual invitation-code entry. The app does not request broad media-storage, background location, contacts, SMS, call logs or installed-app-list permissions. Photo and video selection uses the system picker for files you choose.
+CAMERA is used after your action to scan a course invitation QR code or capture on-site check-in evidence. RECORD_AUDIO is requested only together with CAMERA when you choose in-app video recording, because check-in video must contain sound. Active recording is limited to 15 seconds, paused time is excluded, and the result is compressed on-device before upload. Denying CAMERA prevents on-site photos and video; denying only RECORD_AUDIO prevents video but does not affect on-site photos or manual invitation-code entry. The app does not request precise, approximate or background location, broad media-storage, contacts, SMS, call logs or installed-app-list permissions. Photo and video selection uses the system picker for files you choose.
 
 ## 4. Course, check-in and application processing
 
 Course invitations, enrolment requests, check-ins, exercise duration, supporting materials, exemption applications and grades are processed to deliver the teaching workflow, prevent duplicate submissions and allow authorised teachers to review records. Media drafts remain on the device until submitted or discarded; submitted materials are retained with the related teaching record under applicable school retention rules.
 
-## 5. Location and device information
+## 5. Device information
 
-When you actively start a check-in that requires location verification, the app may obtain a one-time foreground location to prepare the verification. It does not request background location or create continuous travel tracks. Technical requests may include device model, Android/app version, language, network state, time zone, IP address, request path and status code for security and troubleshooting.
+The current app does not request location permission, obtain coordinates or create travel tracks for check-in evidence. Technical requests may include device model, Android/app version, language, network state, time zone, IP address, request path and status code for security and troubleshooting.
 
 ## 6. Notifications and service providers
 

@@ -13,11 +13,15 @@
     <string name="login_privacy_required">Read and agree to the Privacy Policy to continue.</string>
     <string name="login_other_methods">Other methods</string>
     <string name="login_recovery">Can’t use your linked email?</string>
+    <string name="login_local_review_section">Password-free review access</string>
+    <string name="login_local_review_description">Uses local synthetic data only, without signing in or sending business requests to the real Backend.</string>
+    <string name="login_local_review_button">Enter as test student</string>
+    <string name="login_local_review_hint">Local test student · LOCAL-REVIEW-STUDENT</string>
     <string name="privacy_consent_eyebrow">BNBU SPORTS</string>
     <string name="privacy_consent_title">Before you begin</string>
     <string name="privacy_consent_intro">Please read and accept the Privacy Policy. We use information only as needed to provide your sports education service.</string>
     <string name="privacy_consent_summary_title">How we use your information</string>
-    <string name="privacy_consent_summary">To provide sports education services, we process your student ID, name, courses, grades, and activity check-in records. Camera and microphone access records on-site video with audio only when you choose that feature; active recording is limited to 15 seconds, compressed on-device, and uploaded only after compression succeeds and you submit. Selected media and one-time foreground location are also used only when chosen. Notifications use Firebase Cloud Messaging installation identifiers and push tokens. This information is not used for advertising or personalised recommendations.</string>
+    <string name="privacy_consent_summary">To provide sports education services, we process your student ID, name, courses, grades, and activity check-in records. Camera and microphone access records on-site video with audio only when you choose that feature; active recording is limited to 15 seconds, compressed on-device, and uploaded only after compression succeeds and you submit. Selected media is used only when chosen; the current app does not request location permission or collect coordinates. Notifications use Firebase Cloud Messaging installation identifiers and push tokens. This information is not used for advertising or personalised recommendations.</string>
     <string name="privacy_consent_full_policy">Read the full Privacy Policy</string>
     <string name="privacy_consent_agree">Agree and continue</string>
     <string name="privacy_consent_decline">Disagree and exit</string>
@@ -56,6 +60,7 @@
     <string name="dashboard_remaining_after_offset">%1$s remaining to check in after offset</string>
     <string name="dashboard_total">Total</string>
     <string name="profile_exemption">Exemptions</string>
+    <string name="profile_endurance">Endurance run score conversion</string>
     <string name="profile_settings">Settings</string>
     <string name="profile_name">Student name</string>
     <string name="profile_student_id">Student ID</string>
@@ -91,6 +96,7 @@
     <string name="profile_services_eyebrow">Services</string>
     <string name="profile_services_title">Quick services</string>
     <string name="profile_exemption_short_hint">Apply and track progress</string>
+    <string name="profile_endurance_short_hint">800m / 1000m</string>
     <string name="profile_student_id_short">Student ID</string>
     <string name="profile_class_short">Class</string>
     <string name="profile_grade_short">Grade</string>
@@ -119,6 +125,21 @@
 
     <string name="common_back">Back</string>
     <string name="common_cancel">Cancel</string>
+    <string name="endurance_invalid_time">Enter a valid running time.</string>
+    <string name="endurance_invalid_seconds">Seconds must be between 0 and 59.</string>
+    <string name="endurance_gender_required">Set your gender in Profile first.</string>
+    <string name="endurance_grade_required">Set your grade in Profile first.</string>
+    <string name="endurance_failed">Conversion failed</string>
+    <string name="endurance_title">Endurance run score conversion</string>
+    <string name="endurance_test">Test: %1$s</string>
+    <string name="endurance_minutes">Minutes</string>
+    <string name="endurance_seconds">Seconds</string>
+    <string name="endurance_converting">Converting…</string>
+    <string name="endurance_convert">Convert</string>
+    <string name="endurance_result">Conversion result</string>
+    <string name="endurance_score">Score</string>
+    <string name="endurance_level">Level</string>
+    <string name="endurance_input_time">Input time: %1$d′%2$d″</string>
     <string name="notification_all">All</string>
     <string name="notification_unread">Unread</string>
     <string name="notification_deadline">Deadline reminders</string>

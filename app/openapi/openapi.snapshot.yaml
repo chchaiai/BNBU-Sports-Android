@@ -1,14 +1,17 @@
 openapi: 3.1.0
 info:
   title: BNBU Sports Unified API
-  version: 2.0.12-contract
+  version: 3.0.0-contract
   summary: Unified contract for the sports check-in platform
   license:
     name: UNLICENSED
     identifier: LicenseRef-UNLICENSED
   description: |
-    Cross-client compatibility candidate derived from the immutable published 1.4.0
-    snapshot. It does not prove that every registered capability is
+    Cross-client consistency candidate derived from the latest immutable published
+    contract. It removes the exercise-review PENDING state, makes VALID/INVALID
+    the only authoritative review results, enables organization-wide endurance
+    conversion rules, and exposes the formal 60-minute session operation. It does
+    not prove that every registered capability is
     business-enabled or production-ready.
     Business fields come from 02-data-dictionary.md, state transitions from
     03-state-machines.md, rules from 04-business-rules.md, and authorization
@@ -31,7 +34,7 @@ security:
 x-authorization-invariants:
   teacherScope: ClassSection.teacherId must equal principal.teacherId; no assignment or inferred multi-teacher relation exists.
   rawAuditLogRead: ADMIN within the same organization only; TEACHER is denied.
-  defaultDeny: Student enrollment withdrawal, submitted-record withdrawal, roster ignore, archived-score correction, Export, four client authentication/recovery operations, six exemption operations, sport catalog, activity conversion, and six GPS/location operations are explicit routed denials. Twelve Stage 21 client-support operations are local-integration implementations only and are not Staging or production enablement. Student Course/ClassSection projection remains denied until an ACTIVE Enrollment can be resolved.
+  defaultDeny: Student enrollment withdrawal, submitted-record withdrawal, roster ignore, archived-score correction, unsupported student mutation, four Export operations, sport catalog, and six GPS/location operations are explicit routed denials. Locally implemented client-support operations are not Staging or production enablement. Student Course/ClassSection projection remains denied until an ACTIVE Enrollment can be resolved.
 tags:
   - name: Health
     description: Public liveness and dependency-aware readiness probes.
@@ -80,7 +83,7 @@ tags:
   - name: Audit Logs
     description: Organization-scoped raw audit events available only to administrators.
   - name: Client Capabilities
-    description: Contract-first client support capabilities; 12 operations are local-integration implementations and 18 remain stable default-deny. This is not Staging or production enablement.
+    description: Contract-first client support capabilities include authentication and recovery, messaging, exemption applications, and organization-wide activity-conversion rules. Governance-blocked capabilities remain stable default-deny. Local implementation is not Staging or production enablement.
   - name: Notifications
     description: Role-scoped notification inbox and push-device registration contracts.
   - name: Exemption Applications
@@ -324,8 +327,12 @@ paths:
           $ref: '#/components/responses/AuthSuccess'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '500':
@@ -469,6 +476,73 @@ paths:
           $ref: '#/components/responses/UnprocessableEntity'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /me/account-deletion-challenges:
+    post:
+      tags: [Current User, Authentication]
+      operationId: requestCurrentUserAccountDeletionChallenge
+      x-error-codes: [ACCOUNT_DELETION_REAUTH_REQUIRED, ACCOUNT_DELETION_ACTIVE_SESSION, ACCOUNT_DELETION_PENDING_REVIEW, CONFLICT_VERSION_MISMATCH]
+      x-access-policy:
+        policyId: USER-ACCOUNT-DELETE-REQUEST
+        authentication: ACCESS_TOKEN
+        allowedRoles: [STUDENT, TEACHER, ADMIN]
+        organizationScope: PRINCIPAL_ORGANIZATION
+        resourceScope: SELF
+        resourceResolver: PRINCIPAL_USER
+        defaultDeny: true
+      summary: Start the required reauthentication step for account deletion
+      description: Students receive a one-time code at the currently verified email. Teachers and administrators must provide the current password. The operation never deletes or overwrites historical business records.
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccountDeletionChallengeRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/AccountDeletionChallengeAcceptedSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /me/account-deletion-challenges/{challengeId}/confirm:
+    post:
+      tags: [Current User, Authentication]
+      operationId: confirmCurrentUserAccountDeletion
+      x-error-codes: [ACCOUNT_DELETION_REAUTH_REQUIRED, ACCOUNT_DELETION_ACTIVE_SESSION, ACCOUNT_DELETION_PENDING_REVIEW, CONFLICT_VERSION_MISMATCH]
+      x-access-policy:
+        policyId: USER-ACCOUNT-DELETE-CONFIRM
+        authentication: ACCESS_TOKEN
+        allowedRoles: [STUDENT, TEACHER, ADMIN]
+        organizationScope: PRINCIPAL_ORGANIZATION
+        resourceScope: SELF
+        resourceResolver: PRINCIPAL_USER
+        defaultDeny: true
+      summary: Atomically disable and de-identify the current account
+      description: A valid challenge is consumed in the same transaction that disables the User, increments tokenVersion, revokes every AuthSession and RefreshToken, detaches every PushDevice, and de-identifies the role Profile. Immutable business and audit facts keep their foreign keys. A later registration always creates a new User.
+      parameters:
+        - name: challengeId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/OpaqueId' }
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmAccountDeletionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/AccountDeletionSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /students:
     get:
       tags: [Students]
@@ -1936,6 +2010,39 @@ paths:
           $ref: '#/components/responses/UnprocessableEntity'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /exercise-sessions/{sessionId}/add-sixty-minutes:
+    post:
+      tags: [Exercise Sessions]
+      operationId: addSixtyMinutesToExerciseSession
+      x-access-policy:
+        policyId: EXERCISE-SESSION-ADD-SIXTY-MINUTES
+        authentication: ACCESS_TOKEN
+        allowedRoles: [STUDENT]
+        organizationScope: PRINCIPAL_ORGANIZATION
+        resourceScope: SELF
+        resourceResolver: EXERCISE_SESSION_FROM_PATH
+        defaultDeny: true
+      summary: Add one 60-minute block to the current exercise session
+      description: This is a normal student operation, not a test tool. The Backend atomically adds exactly 3600 seconds to the owned IN_PROGRESS or PAUSED session, enforces the session duration cap, records audit and outbox evidence, and returns the authoritative session projection.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        $ref: '#/components/requestBodies/SessionControlBody'
+      responses:
+        '200':
+          $ref: '#/components/responses/SessionSuccess'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /exercise-sessions/{sessionId}/cancel:
     post:
       tags: [Exercise Sessions]
@@ -2257,6 +2364,73 @@ paths:
           $ref: '#/components/responses/UnprocessableEntity'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /exercise-records/{recordId}/resubmissions:
+    post:
+      tags: [Exercise Records]
+      operationId: createExerciseRecordResubmission
+      x-error-codes: [EXERCISE_RECORD_RESUBMISSION_NOT_ALLOWED, EXERCISE_RECORD_ALREADY_EXISTS_FOR_SESSION, CONFLICT_VERSION_MISMATCH, ENROLLMENT_NOT_ACTIVE, COURSE_DEADLINE_PASSED, SESSION_NOT_FOUND]
+      x-access-policy:
+        policyId: EXERCISE-RECORD-RESUBMIT
+        authentication: ACCESS_TOKEN
+        allowedRoles: [STUDENT]
+        organizationScope: PRINCIPAL_ORGANIZATION
+        resourceScope: SELF
+        resourceResolver: EXERCISE_RECORD_FROM_PATH
+        defaultDeny: true
+      summary: Create the next DRAFT attempt after the current attempt was reviewed INVALID
+      description: The rejected record, its ReviewRecord history, and its media stay immutable. The new attempt must use a new completed ExerciseSession in the same Enrollment and is formally submitted through the ordinary submit operation.
+      parameters:
+        - $ref: '#/components/parameters/RecordId'
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateExerciseRecordResubmissionRequest'
+      responses:
+        '201':
+          $ref: '#/components/responses/ExerciseRecordResubmissionSuccess'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/ExerciseRecordResubmissionConflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /exercise-records/{recordId}/attempt-context:
+    get:
+      tags: [Exercise Records]
+      operationId: getExerciseRecordAttemptContext
+      x-access-policy:
+        policyId: EXERCISE-RECORD-ATTEMPT-CONTEXT-READ
+        authentication: ACCESS_TOKEN
+        allowedRoles: [STUDENT, TEACHER, ADMIN]
+        organizationScope: PRINCIPAL_ORGANIZATION
+        resourceScope: ROLE_SCOPED
+        resourceResolver: EXERCISE_RECORD_FROM_PATH
+        defaultDeny: true
+      summary: Read additive attempt-chain metadata without changing the frozen ExerciseRecord projection
+      parameters:
+        - $ref: '#/components/parameters/RecordId'
+        - $ref: '#/components/parameters/RequestIdHeader'
+      responses:
+        '200':
+          $ref: '#/components/responses/ExerciseRecordAttemptContextSuccess'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /exercise-records/{recordId}/discard:
     post:
       tags: [Exercise Records]
@@ -2336,7 +2510,7 @@ paths:
         allowedRoles: [STUDENT]
         organizationScope: PRINCIPAL_ORGANIZATION
         resourceScope: SELF
-        resourceResolver: EXERCISE_SESSION_FROM_REQUEST
+        resourceResolver: MEDIA_UPLOAD_TARGET_FROM_REQUEST
         defaultDeny: true
       summary: Request a short-lived private object-storage upload session
       parameters:
@@ -2367,6 +2541,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
         '413':
@@ -2377,6 +2553,47 @@ paths:
           $ref: '#/components/responses/UnprocessableEntity'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /exemption-applications/{applicationId}/media-uploads:
+    post:
+      tags: [Exemption Applications, Media Uploads]
+      operationId: initiateExemptionApplicationMediaUpload
+      x-error-codes: [EXEMPTION_APPLICATION_MEDIA_INVALID, MEDIA_COUNT_LIMIT_EXCEEDED, MEDIA_VIDEO_DURATION_EXCEEDED]
+      x-access-policy:
+        policyId: EXEMPTION-APPLICATION-MEDIA-UPLOAD-INITIATE
+        authentication: ACCESS_TOKEN
+        allowedRoles: [STUDENT]
+        organizationScope: PRINCIPAL_ORGANIZATION
+        resourceScope: SELF
+        resourceResolver: PRINCIPAL_STUDENT
+        defaultDeny: true
+      summary: Request an upload session scoped to one current exemption application
+      description: The path must resolve to the authenticated student's DRAFT or SUPPLEMENT_REQUIRED application with an ACTIVE Enrollment. Its 20-item quota is isolated from completed historical applications. Removed DRAFT evidence remains an orphan candidate and is not physically deleted or counted unless still associated.
+      parameters:
+        - name: applicationId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/OpaqueId' }
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InitiateExemptionApplicationMediaUploadRequest' }
+      responses:
+        '201':
+          description: Application-scoped upload session created; signed values must not be logged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaUploadSessionEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /media-uploads/{uploadSessionId}/confirm:
     post:
       tags: [Media Uploads]
@@ -2563,8 +2780,8 @@ paths:
         resourceScope: TEACHER_CLASS_SECTION
         resourceResolver: EXERCISE_RECORD_FROM_PATH
         defaultDeny: true
-      summary: Append an INVALID decision for a current VALID record, or resolve legacy PENDING
-      description: New submissions are system-valid by default. The responsible teacher may append INVALID when a problem is found. Legacy or explicitly reopened PENDING records may still be resolved as VALID or INVALID. Existing ReviewRecord rows are never overwritten. creditedDurationOverrideSeconds must be null until ADR-047 is accepted.
+      summary: Append a VALID or INVALID correction to the current two-state review
+      description: New submissions are system-valid by default. The responsible teacher may append INVALID when a problem is found and may later append VALID after correction. Existing ReviewRecord rows are never overwritten. creditedDurationOverrideSeconds must be null until ADR-047 is accepted.
       x-field-blocker: ADR-047
       x-field-deny-error: REVIEW_CREDIT_OVERRIDE_NOT_APPROVED
       parameters:
@@ -2577,44 +2794,6 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateReviewRequest'
-      responses:
-        '201':
-          $ref: '#/components/responses/ReviewSuccess'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '422':
-          $ref: '#/components/responses/UnprocessableEntity'
-        '503':
-          $ref: '#/components/responses/ServiceUnavailable'
-  /exercise-records/{recordId}/reviews/reopen:
-    post:
-      tags: [Exercise Reviews]
-      operationId: reopenExerciseRecordReview
-      x-access-policy:
-        policyId: EXERCISE-REVIEW-REOPEN
-        authentication: ACCESS_TOKEN
-        allowedRoles: [TEACHER]
-        organizationScope: PRINCIPAL_ORGANIZATION
-        resourceScope: TEACHER_CLASS_SECTION
-        resourceResolver: EXERCISE_RECORD_FROM_PATH
-        defaultDeny: true
-      summary: Append a new PENDING review and move the record back to SUBMITTED
-      parameters:
-        - $ref: '#/components/parameters/RecordId'
-        - $ref: '#/components/parameters/RequestIdHeader'
-        - $ref: '#/components/parameters/IdempotencyKeyHeader'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ReopenReviewRequest'
       responses:
         '201':
           $ref: '#/components/responses/ReviewSuccess'
@@ -3396,6 +3575,42 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
+  /audit-logs/client-errors:
+    post:
+      tags: [Audit Logs, Client Capabilities]
+      operationId: reportClientError
+      x-access-policy:
+        policyId: CLIENT-ERROR-REPORT
+        authentication: ACCESS_TOKEN
+        allowedRoles: [STUDENT, TEACHER, ADMIN]
+        organizationScope: PRINCIPAL_ORGANIZATION
+        resourceScope: SELF
+        resourceResolver: PRINCIPAL_USER
+        defaultDeny: true
+      summary: Persist a redacted authenticated client error in the organization audit timeline
+      description: Accepts only a closed metadata envelope. Error messages, stack traces, request bodies, credentials, personal data, and arbitrary attachments are not accepted.
+      x-allowed-roles: [STUDENT, TEACHER, ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClientErrorReportRequest' }
+      responses:
+        '200':
+          $ref: '#/components/responses/ClientErrorReportSuccess'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /audit-logs/{auditLogId}:
     get:
       tags: [Audit Logs]
@@ -4111,15 +4326,38 @@ paths:
         resourceResolver: PRINCIPAL_ORGANIZATION
         defaultDeny: true
       summary: Get versioned physical-activity or endurance conversion rules
-      description: Stable default-deny. The accepted Session duration and Score rules remain unchanged and no client-side table becomes authoritative.
-      x-enabled-by-default: false
-      x-business-blocker: ACTIVITY_CONVERSION_RULE_GATE
-      x-default-deny-error: SYSTEM_MODE_UNSUPPORTED
+      description: Returns the active organization-wide endurance bands configured for all clients. Clients must not embed a second scoring table.
       parameters:
         - $ref: '#/components/parameters/RequestIdHeader'
       responses:
         '200': { $ref: '#/components/responses/ActivityConversionRuleListSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /activity-conversion-rules/preview:
+    post:
+      tags: [Client Capabilities]
+      operationId: previewActivityConversion
+      x-access-policy:
+        policyId: ACTIVITY-CONVERSION-PREVIEW
+        authentication: ACCESS_TOKEN
+        allowedRoles: [STUDENT]
+        organizationScope: PRINCIPAL_ORGANIZATION
+        resourceScope: SELF
+        resourceResolver: PRINCIPAL_STUDENT
+        defaultDeny: true
+      summary: Preview an endurance result using the active global rules
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ActivityConversionPreviewRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ActivityConversionPreviewSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /exercise-sessions/{sessionId}/location-track:
     post:
@@ -4503,6 +4741,20 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/EmailVerificationChallengeAcceptedEnvelope' }
+    AccountDeletionChallengeAcceptedSuccess:
+      description: Account-deletion reauthentication challenge accepted
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestIdResponseHeader' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AccountDeletionChallengeEnvelope' }
+    AccountDeletionSuccess:
+      description: The account is disabled, de-identified, and signed out on every device
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestIdResponseHeader' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AccountDeletionResultEnvelope' }
     HealthSuccess:
       description: Foundation health status
       headers:
@@ -4686,6 +4938,16 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ExerciseRecordEnvelope' }
+    ExerciseRecordResubmissionSuccess:
+      description: Newly created record plus additive attempt-chain context
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ExerciseRecordResubmissionEnvelope' }
+    ExerciseRecordAttemptContextSuccess:
+      description: Additive attempt-chain metadata for one authorized record
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ExerciseRecordAttemptContextEnvelope' }
     ExerciseRecordEvidenceContextSuccess:
       description: Authorized server timing and private evidence references for an exercise record
       content:
@@ -4771,6 +5033,13 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/AuditLogListEnvelope' }
+    ClientErrorReportSuccess:
+      description: Redacted client error accepted into the durable audit timeline
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestIdResponseHeader' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ClientErrorReportEnvelope' }
     NotificationSuccess:
       description: Notification projection
       headers:
@@ -4869,6 +5138,13 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ActivityConversionRuleListEnvelope' }
+    ActivityConversionPreviewSuccess:
+      description: Endurance preview calculated from the active organization rule table
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestIdResponseHeader' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ActivityConversionPreviewEnvelope' }
     LocationTrackSuccess:
       description: Owned location-track intake state without raw sample projection
       headers:
@@ -4906,6 +5182,16 @@ components:
       $ref: '#/components/responses/Error415'
     Conflict:
       $ref: '#/components/responses/Error409'
+    ExerciseRecordResubmissionConflict:
+      description: Conflict while creating the next immutable attempt
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestIdResponseHeader' }
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - { $ref: '#/components/schemas/ErrorEnvelope' }
+              - { $ref: '#/components/schemas/ExerciseRecordResubmissionErrorEnvelope' }
     UnprocessableEntity:
       $ref: '#/components/responses/Error422'
     TooManyRequests:
@@ -5119,7 +5405,7 @@ components:
       enum: [DRAFT, SUBMITTED, REVIEWED, CANCELLED]
     ReviewResult:
       type: string
-      enum: [PENDING, VALID, INVALID]
+      enum: [VALID, INVALID]
     ReviewReasonCode:
       type: string
       enum: [INSUFFICIENT_EVIDENCE, INVALID_MEDIA, DURATION_INCONSISTENT, IDENTITY_MISMATCH, DUPLICATE_SUBMISSION, OUTSIDE_ALLOWED_SCOPE, OTHER]
@@ -5170,6 +5456,7 @@ components:
         - AUTH_SESSION_REVOKED
         - USER_PROFILE_UPDATED
         - USER_STATUS_CHANGED
+        - ACCOUNT_DELETED
         - COURSE_CREATED
         - COURSE_UPDATED
         - COURSE_STATUS_CHANGED
@@ -5189,6 +5476,7 @@ components:
         - EXERCISE_SESSION_COMPLETED
         - EXERCISE_SESSION_CANCELLED
         - EXERCISE_SESSION_RECONCILED
+        - EXERCISE_SESSION_TEST_TIME_ADVANCED
         - EXERCISE_SESSION_ENDED
         - EXERCISE_RECORD_DRAFT_CREATED
         - EXERCISE_RECORD_DRAFT_UPDATED
@@ -5208,6 +5496,7 @@ components:
         - SYSTEM_MODE_CHANGED
         - DATA_EXPORTED
         - AUDIT_LOG_READ
+        - CLIENT_ERROR_REPORTED
     AuditOutcome:
       type: string
       enum: [SUCCEEDED, REJECTED, FAILED]
@@ -5543,6 +5832,25 @@ components:
           resourceId: rec_01JABC123
           expectedVersion: 3
           actualVersion: 4
+        requestId: req_01JABC123
+        timestamp: '2026-08-02T12:00:00Z'
+    ExerciseRecordResubmissionErrorEnvelope:
+      type: object
+      additionalProperties: false
+      properties:
+        code: { type: string, const: EXERCISE_RECORD_RESUBMISSION_NOT_ALLOWED }
+        message: { type: string, minLength: 1, maxLength: 1000 }
+        details: { $ref: '#/components/schemas/ErrorDetails' }
+        requestId: { type: string, minLength: 1, maxLength: 64 }
+        timestamp: { type: string, format: date-time }
+      required: [code, message, details, requestId, timestamp]
+      example:
+        code: EXERCISE_RECORD_RESUBMISSION_NOT_ALLOWED
+        message: A new exercise record attempt cannot be created from this record.
+        details:
+          resourceType: EXERCISE_RECORD
+          resourceId: rec_01JABC123
+          currentState: REVIEWED
         requestId: req_01JABC123
         timestamp: '2026-08-02T12:00:00Z'
     EmptyEnvelope:
@@ -5970,6 +6278,23 @@ components:
             - { type: 'null' }
         version: { $ref: '#/components/schemas/PositiveVersion' }
       required: [id, organizationId, semesterId, studentId, enrollmentId, classSectionId, courseId, teacherId, sessionId, businessDate, creditType, sportType, sportName, description, actualDurationSeconds, pausedDurationSeconds, creditedDurationSeconds, status, submittedAt, cancelledAt, clientRequestId, currentReview, version]
+    ExerciseRecordAttemptContext:
+      type: object
+      additionalProperties: false
+      properties:
+        recordId: { $ref: '#/components/schemas/OpaqueId' }
+        previousAttemptId: { oneOf: [{ $ref: '#/components/schemas/OpaqueId' }, { type: 'null' }] }
+        rootAttemptId: { $ref: '#/components/schemas/OpaqueId' }
+        attemptNumber: { type: integer, minimum: 1 }
+      required: [recordId, previousAttemptId, rootAttemptId, attemptNumber]
+      description: Additive chain metadata. The frozen ExerciseRecord response remains byte-compatible with 2.0.12.
+    ExerciseRecordResubmission:
+      type: object
+      additionalProperties: false
+      properties:
+        record: { $ref: '#/components/schemas/ExerciseRecord' }
+        attemptContext: { $ref: '#/components/schemas/ExerciseRecordAttemptContext' }
+      required: [record, attemptContext]
     ExerciseRecordEvidenceContext:
       type: object
       additionalProperties: false
@@ -6017,7 +6342,7 @@ components:
         id: { $ref: '#/components/schemas/OpaqueId' }
         organizationId: { $ref: '#/components/schemas/OpaqueId' }
         recordId: { $ref: '#/components/schemas/OpaqueId' }
-        teacherId: { oneOf: [{ $ref: '#/components/schemas/OpaqueId' }, { type: 'null' }], description: Null for the initial system VALID row and legacy system PENDING rows; required for teacher-created VALID or INVALID rows. }
+        teacherId: { oneOf: [{ $ref: '#/components/schemas/OpaqueId' }, { type: 'null' }], description: Null only for the initial system VALID row; required for teacher-created VALID or INVALID rows. }
         reviewVersion: { type: integer, minimum: 1 }
         previousReviewId: { oneOf: [{ $ref: '#/components/schemas/OpaqueId' }, { type: 'null' }] }
         result: { $ref: '#/components/schemas/ReviewResult' }
@@ -6161,12 +6486,35 @@ components:
         safeMetadata:
           type: object
           additionalProperties: true
-          description: "Action-specific allowlisted metadata; excludes secrets, PII, storage keys, signed URLs, media bodies, and internalNote text."
+          description: 'Action-specific allowlisted metadata; excludes secrets, PII, storage keys, signed URLs, media bodies, and internalNote text.'
         sourceIpHash: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }], description: Irreversible peppered digest; no raw IP is stored. }
         deviceFingerprintHash: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }], description: Irreversible peppered digest; no raw fingerprint is stored. }
         occurredAt: { type: string, format: date-time }
       required: [id, organizationId, actorUserId, actorRoleSnapshot, permissionId, actionType, targetType, targetId, requestId, idempotencyKeyReference, outcome, reasonCode, safeMetadata, sourceIpHash, deviceFingerprintHash, occurredAt]
       description: ADMIN-only redacted projection; teachers cannot read raw AuditLog. Raw idempotency keys, IP addresses, fingerprints, user-agent strings, secrets, internal notes, and snapshots are excluded.
+    ClientErrorReportRequest:
+      type: object
+      additionalProperties: false
+      required: [platform, level, errorCode, category, retryable, clientOccurredAt]
+      properties:
+        platform: { type: string, enum: [ANDROID, IOS, WEB_STUDENT, WEB_TEACHER, WEB_ADMIN], x-transport-constraint: true }
+        level: { type: string, enum: [ERROR], x-transport-constraint: true }
+        errorCode: { type: string, pattern: '^[A-Z][A-Z0-9_]*$', maxLength: 100 }
+        category: { type: string, pattern: '^[A-Z][A-Z0-9_]*$', maxLength: 100 }
+        httpStatus: { type: integer, minimum: 100, maximum: 599 }
+        method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE], x-transport-constraint: true }
+        route: { type: string, pattern: '^/[A-Za-z0-9._~!$&()*+,;=:@%/-]*$', maxLength: 300 }
+        retryable: { type: boolean }
+        relatedRequestId: { type: string, minLength: 1, maxLength: 128 }
+        clientOccurredAt: { type: string, format: date-time }
+      description: Closed, redacted client telemetry metadata. Arbitrary text, stack traces, request bodies, URLs with query strings, and attachments are intentionally unsupported.
+    ClientErrorReportReceipt:
+      type: object
+      additionalProperties: false
+      required: [auditLogId, receivedAt]
+      properties:
+        auditLogId: { $ref: '#/components/schemas/OpaqueId' }
+        receivedAt: { type: string, format: date-time }
     AuthSession:
       type: object
       additionalProperties: false
@@ -6335,6 +6683,43 @@ components:
         currentEmailCode: { type: string, pattern: '^\d{4,10}$', writeOnly: true }
         newEmailCode: { type: string, pattern: '^\d{4,10}$', writeOnly: true }
       description: currentEmailCode is required only when changing an already verified email.
+    AccountDeletionStudentChallengeRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, locale]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/PositiveVersion' }
+        locale: { type: string, enum: [zh-CN, en], x-transport-constraint: true }
+    AccountDeletionStaffChallengeRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, password]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/PositiveVersion' }
+        password: { type: string, minLength: 1, maxLength: 256, writeOnly: true }
+    AccountDeletionChallengeRequest:
+      oneOf:
+        - { $ref: '#/components/schemas/AccountDeletionStudentChallengeRequest' }
+        - { $ref: '#/components/schemas/AccountDeletionStaffChallengeRequest' }
+      description: The authenticated role determines the accepted shape; password and OTP are never returned or logged.
+    ConfirmStudentAccountDeletionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, verificationCode]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/PositiveVersion' }
+        verificationCode: { type: string, pattern: '^\d{4,10}$', writeOnly: true }
+    ConfirmStaffAccountDeletionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/PositiveVersion' }
+    ConfirmAccountDeletionRequest:
+      oneOf:
+        - { $ref: '#/components/schemas/ConfirmStudentAccountDeletionRequest' }
+        - { $ref: '#/components/schemas/ConfirmStaffAccountDeletionRequest' }
+      description: Students prove the delivered OTP; staff already proved the current password while creating the challenge.
     UpdateStudentRequest:
       type: object
       additionalProperties: false
@@ -6557,8 +6942,35 @@ components:
       additionalProperties: false
       required: [mediaIds, expectedVersion]
       properties:
-        mediaIds: { type: array, minItems: 1, uniqueItems: true, items: { $ref: '#/components/schemas/OpaqueId' }, description: Complete set of AVAILABLE EXERCISE_RECORD media captured in-app for this session. Omitting any eligible item is rejected. }
+        mediaIds: { type: array, minItems: 1, uniqueItems: true, items: { $ref: '#/components/schemas/OpaqueId' }, description: 'Exact set of retained EXERCISE_RECORD media for the Session, where retained means boundAt is non-null. Every retained item must be AVAILABLE; PROCESSING or FAILED retained evidence blocks submission and cannot be omitted.' }
         expectedVersion: { $ref: '#/components/schemas/PositiveVersion' }
+    CreateExerciseRecordResubmissionRequest:
+      type: object
+      additionalProperties: false
+      required: [sessionId, creditType, sportType, clientRequestId, expectedVersion]
+      properties:
+        sessionId: { $ref: '#/components/schemas/OpaqueId' }
+        creditType: { $ref: '#/components/schemas/CreditType' }
+        sportType: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
+        sportName: { type: [string, 'null'], maxLength: 100 }
+        description:
+          description: Student-authored explanation. Required and nonblank for GENERAL; optional for COURSE_RELATED, where omitted, null, or blank input is normalized to null.
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 200 }
+            - { type: 'null' }
+        clientRequestId: { type: string, minLength: 1, maxLength: 64 }
+        expectedVersion:
+          $ref: '#/components/schemas/PositiveVersion'
+          description: Optimistic version of the immediately preceding INVALID ExerciseRecord attempt.
+      allOf:
+        - if:
+            properties:
+              creditType: { const: GENERAL }
+            required: [creditType]
+          then:
+            properties:
+              description: { type: string, minLength: 1, maxLength: 200, pattern: '.*\S.*' }
+            required: [description]
     InitiateMediaUploadRequest:
       type: object
       additionalProperties: false
@@ -6595,6 +7007,18 @@ components:
               durationSeconds: { type: integer, minimum: 1, maximum: 15 }
             required: [durationSeconds]
       description: EXERCISE_RECORD media is scoped to an owned ExerciseSession. EXEMPTION_APPLICATION media is scoped to an owned active Enrollment before atomic association with an application draft. No location permission or GPS data is required; uploaded JPEG/PNG/ISO/WebM media containing recognized location metadata is rejected.
+    InitiateExemptionApplicationMediaUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [mediaType, mimeType, fileSizeBytes, captureSource]
+      properties:
+        mediaType: { type: string, enum: [IMAGE], x-enum-subset-of: MediaType }
+        mimeType: { type: string, minLength: 1, maxLength: 127, enum: [image/jpeg, image/png], x-transport-constraint: true, description: Untrusted image declaration; the server verifies the actual bytes. }
+        fileSizeBytes: { type: integer, minimum: 1 }
+        captureSource: { type: string, enum: [IN_APP_CAMERA, FILE_PICKER], x-transport-constraint: true }
+        declaredContentSha256: { oneOf: [{ $ref: '#/components/schemas/Sha256' }, { type: 'null' }], description: Optional untrusted client declaration. }
+        durationSeconds: { type: [integer, 'null'], minimum: 1, description: Must be omitted or null for image material. }
+      description: The applicationId, Enrollment, student, organization, and EXEMPTION_APPLICATION purpose are derived exclusively from the authorized path resource. Only JPEG and PNG images are accepted.
     ConfirmMediaUploadRequest:
       type: object
       additionalProperties: false
@@ -6648,14 +7072,6 @@ components:
             required: [reason]
             properties:
               reason: { type: string, minLength: 1, maxLength: 500, pattern: '.*\S.*' }
-    ReopenReviewRequest:
-      type: object
-      additionalProperties: false
-      required: [reason, expectedReviewVersion, expectedVersion]
-      properties:
-        reason: { type: string, minLength: 1, maxLength: 500 }
-        expectedReviewVersion: { type: integer, minimum: 1 }
-        expectedVersion: { $ref: '#/components/schemas/PositiveVersion' }
     BatchReviewItem:
       type: object
       additionalProperties: false
@@ -6771,6 +7187,8 @@ components:
     SessionEnvelope: { $ref: '#/components/schemas/SessionResponse' }
     NullableSessionEnvelope: { $ref: '#/components/schemas/NullableSessionResponse' }
     ExerciseRecordEnvelope: { $ref: '#/components/schemas/ExerciseRecordResponse' }
+    ExerciseRecordResubmissionEnvelope: { $ref: '#/components/schemas/ExerciseRecordResubmissionResponse' }
+    ExerciseRecordAttemptContextEnvelope: { $ref: '#/components/schemas/ExerciseRecordAttemptContextResponse' }
     ExerciseRecordEvidenceContextEnvelope: { $ref: '#/components/schemas/ExerciseRecordEvidenceContextResponse' }
     ExerciseRecordListEnvelope: { $ref: '#/components/schemas/ExerciseRecordListResponse' }
     MediaUploadSessionEnvelope: { $ref: '#/components/schemas/MediaUploadSessionResponse' }
@@ -6790,6 +7208,7 @@ components:
     ExportDownloadEnvelope: { $ref: '#/components/schemas/ExportDownloadResponse' }
     AuditLogEnvelope: { $ref: '#/components/schemas/AuditLogResponse' }
     AuditLogListEnvelope: { $ref: '#/components/schemas/AuditLogListResponse' }
+    ClientErrorReportEnvelope: { $ref: '#/components/schemas/ClientErrorReportResponse' }
     AuthResponse:
       type: object
       required: [data, meta]
@@ -6886,6 +7305,14 @@ components:
       type: object
       required: [data, meta]
       properties: { data: { $ref: '#/components/schemas/ExerciseRecord' }, meta: { $ref: '#/components/schemas/SuccessMeta' } }
+    ExerciseRecordResubmissionResponse:
+      type: object
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/ExerciseRecordResubmission' }, meta: { $ref: '#/components/schemas/SuccessMeta' } }
+    ExerciseRecordAttemptContextResponse:
+      type: object
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/ExerciseRecordAttemptContext' }, meta: { $ref: '#/components/schemas/SuccessMeta' } }
     ExerciseRecordEvidenceContextResponse:
       type: object
       required: [data, meta]
@@ -6962,6 +7389,10 @@ components:
       type: object
       required: [data, meta]
       properties: { data: { type: array, items: { $ref: '#/components/schemas/AuditLog' } }, meta: { $ref: '#/components/schemas/PagedMeta' } }
+    ClientErrorReportResponse:
+      type: object
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/ClientErrorReportReceipt' }, meta: { $ref: '#/components/schemas/SuccessMeta' } }
     StudentSignInCodeRequest:
       type: object
       additionalProperties: false
@@ -7023,6 +7454,26 @@ components:
         challengeId: { $ref: '#/components/schemas/OpaqueId' }
         mode: { type: string, enum: [FIRST_BIND, REBIND], x-transport-constraint: true }
         expiresAt: { type: string, format: date-time }
+    AccountDeletionChallenge:
+      type: object
+      additionalProperties: false
+      required: [challengeId, mode, expiresAt, version]
+      properties:
+        challengeId: { $ref: '#/components/schemas/OpaqueId' }
+        mode: { type: string, enum: [STUDENT_EMAIL_OTP, STAFF_PASSWORD], x-transport-constraint: true }
+        expiresAt: { type: string, format: date-time }
+        version: { $ref: '#/components/schemas/PositiveVersion' }
+      description: Contains no email, password, verification code, provider metadata, or other personal information.
+    AccountDeletionResult:
+      type: object
+      additionalProperties: false
+      required: [status, deletedAt, allSessionsRevoked, newRegistrationRequired]
+      properties:
+        status: { type: string, const: DELETED }
+        deletedAt: { type: string, format: date-time }
+        allSessionsRevoked: { type: boolean, const: true }
+        newRegistrationRequired: { type: boolean, const: true }
+      description: Success proves the old account cannot authenticate and is never restored by a later registration.
     Notification:
       type: object
       additionalProperties: false
@@ -7149,7 +7600,7 @@ components:
         classSectionId: { $ref: '#/components/schemas/OpaqueId' }
         applicationType: { type: string, enum: [PHYSICAL_TEST, EXERCISE_CHECK_IN, SPECIAL_CIRCUMSTANCE], x-transport-constraint: true }
         applicationSubtype: { type: [string, 'null'], enum: [RUN_800M, RUN_1000M, SCHOOL_TEAM, STUDENT_CLUB, SPECIAL_CIRCUMSTANCE, null], x-transport-constraint: true, description: Null identifies a legacy application whose subtype cannot be inferred safely. }
-        organizationName: { type: [string, 'null'], minLength: 1, maxLength: 128, description: "Required for SCHOOL_TEAM and STUDENT_CLUB; null for endurance-run, special-circumstance, and legacy applications." }
+        organizationName: { type: [string, 'null'], minLength: 1, maxLength: 128, description: 'Required for SCHOOL_TEAM and STUDENT_CLUB; null for endurance-run, special-circumstance, and legacy applications.' }
         reason: { type: string, minLength: 1, maxLength: 1000 }
         mediaIds: { type: array, maxItems: 20, uniqueItems: true, items: { $ref: '#/components/schemas/OpaqueId' } }
         status: { type: string, enum: [DRAFT, SUBMITTED, SUPPLEMENT_REQUIRED, APPROVED, REJECTED], x-transport-constraint: true }
@@ -7164,8 +7615,8 @@ components:
       required: [enrollmentId, applicationType, reason, mediaIds]
       properties:
         enrollmentId: { $ref: '#/components/schemas/OpaqueId' }
-        applicationType: { type: string, enum: [PHYSICAL_TEST, EXERCISE_CHECK_IN, SPECIAL_CIRCUMSTANCE], x-transport-constraint: true }
-        applicationSubtype: { type: string, enum: [RUN_800M, RUN_1000M, SCHOOL_TEAM, STUDENT_CLUB, SPECIAL_CIRCUMSTANCE], x-transport-constraint: true, description: Updated Contract 1.5 clients send this field. RUN_800M/RUN_1000M require PHYSICAL_TEST; SCHOOL_TEAM/STUDENT_CLUB require EXERCISE_CHECK_IN; SPECIAL_CIRCUMSTANCE requires the matching applicationType. Omission is accepted only for backward-compatible legacy clients and persists null. }
+        applicationType: { type: string, enum: [PHYSICAL_TEST, EXERCISE_CHECK_IN], x-transport-constraint: true }
+        applicationSubtype: { type: string, enum: [RUN_800M, RUN_1000M, SCHOOL_TEAM, STUDENT_CLUB], x-transport-constraint: true, description: RUN_800M is accepted only for female students and RUN_1000M only for male students. SCHOOL_TEAM and STUDENT_CLUB are available to every student. Omission remains accepted only for backward-compatible legacy clients and persists null. }
         organizationName: { type: [string, 'null'], minLength: 1, maxLength: 128, description: Updated Contract 1.5 clients send a name for SCHOOL_TEAM and STUDENT_CLUB and null otherwise. Omission is accepted only with an omitted applicationSubtype for backward-compatible legacy clients. }
         reason: { type: string, minLength: 1, maxLength: 1000 }
         mediaIds: { type: array, maxItems: 20, uniqueItems: true, items: { $ref: '#/components/schemas/OpaqueId' } }
@@ -7174,7 +7625,7 @@ components:
       additionalProperties: false
       required: [expectedVersion]
       properties:
-        applicationSubtype: { type: string, enum: [RUN_800M, RUN_1000M, SCHOOL_TEAM, STUDENT_CLUB, SPECIAL_CIRCUMSTANCE], x-transport-constraint: true }
+        applicationSubtype: { type: string, enum: [RUN_800M, RUN_1000M, SCHOOL_TEAM, STUDENT_CLUB], x-transport-constraint: true }
         organizationName: { type: [string, 'null'], minLength: 1, maxLength: 128 }
         reason: { type: string, minLength: 1, maxLength: 1000 }
         mediaIds: { type: array, maxItems: 20, uniqueItems: true, items: { $ref: '#/components/schemas/OpaqueId' } }
@@ -7223,16 +7674,38 @@ components:
     ActivityConversionRule:
       type: object
       additionalProperties: false
-      required: [id, activityType, inputUnit, outputUnit, ruleVersion, status, effectiveAt]
+      required: [id, gender, gradeGroup, runType, minSeconds, maxSeconds, score, tier, ruleVersion, status, effectiveAt]
       properties:
         id: { $ref: '#/components/schemas/OpaqueId' }
-        activityType: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
-        inputUnit: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
-        outputUnit: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
+        gender: { type: string, enum: [MALE, FEMALE], x-transport-constraint: true }
+        gradeGroup: { type: string, enum: [FRESHMAN_SOPHOMORE, JUNIOR_SENIOR], x-transport-constraint: true }
+        runType: { type: string, enum: [RUN_800M, RUN_1000M], x-transport-constraint: true }
+        minSeconds: { type: integer, minimum: 0 }
+        maxSeconds: { type: integer, minimum: 0 }
+        score: { type: integer, minimum: 0, maximum: 100 }
+        tier: { type: string, enum: [EXCELLENT, GOOD, PASS, FAIL], x-transport-constraint: true }
         ruleVersion: { type: integer, minimum: 1 }
         status: { type: string, enum: [ACTIVE, SUPERSEDED], x-transport-constraint: true }
         effectiveAt: { type: string, format: date-time }
-      description: Formula terms are deliberately absent until approved; clients cannot calculate an authoritative result from this placeholder.
+      description: One persisted organization-wide endurance conversion band.
+    ActivityConversionPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [timeSeconds, gender, gradeLevel]
+      properties:
+        timeSeconds: { type: integer, minimum: 1, maximum: 5999 }
+        gender: { type: string, enum: [MALE, FEMALE], x-transport-constraint: true }
+        gradeLevel: { type: string, enum: [FRESHMAN, SOPHOMORE, JUNIOR, SENIOR], x-transport-constraint: true }
+    ActivityConversionPreview:
+      type: object
+      additionalProperties: false
+      required: [score, tier, timeSeconds, runType, ruleVersion]
+      properties:
+        score: { type: integer, minimum: 0, maximum: 100 }
+        tier: { type: string, enum: [EXCELLENT, GOOD, PASS, FAIL], x-transport-constraint: true }
+        timeSeconds: { type: integer, minimum: 1 }
+        runType: { type: string, enum: [RUN_800M, RUN_1000M], x-transport-constraint: true }
+        ruleVersion: { type: integer, minimum: 1 }
     StartLocationTrackRequest:
       type: object
       additionalProperties: false
@@ -7369,6 +7842,16 @@ components:
       additionalProperties: false
       required: [data, meta]
       properties: { data: { $ref: '#/components/schemas/EmailVerificationChallengeAccepted' }, meta: { $ref: '#/components/schemas/SuccessMeta' } }
+    AccountDeletionChallengeEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/AccountDeletionChallenge' }, meta: { $ref: '#/components/schemas/SuccessMeta' } }
+    AccountDeletionResultEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/AccountDeletionResult' }, meta: { $ref: '#/components/schemas/SuccessMeta' } }
     ExemptionApplicationEnvelope:
       type: object
       required: [data, meta]
@@ -7393,6 +7876,10 @@ components:
       type: object
       required: [data, meta]
       properties: { data: { type: array, items: { $ref: '#/components/schemas/ActivityConversionRule' } }, meta: { $ref: '#/components/schemas/SuccessMeta' } }
+    ActivityConversionPreviewEnvelope:
+      type: object
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/ActivityConversionPreview' }, meta: { $ref: '#/components/schemas/SuccessMeta' } }
     LocationTrackEnvelope:
       type: object
       required: [data, meta]

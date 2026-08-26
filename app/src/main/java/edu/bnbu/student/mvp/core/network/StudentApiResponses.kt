@@ -254,7 +254,10 @@ data class ProofFileResponse(
 
 data class SubmitRecordResponse(
     val id: String,
-    val submittedAt: String
+    val submittedAt: String,
+    val businessDate: String? = null,
+    val creditedDurationSeconds: Long = 0L,
+    val reviewStatus: String? = null
 )
 
 data class MembershipResponse(

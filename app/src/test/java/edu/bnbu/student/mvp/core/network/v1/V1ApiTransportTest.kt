@@ -110,6 +110,82 @@ class V1ApiTransportTest {
     }
 
     @Test
+    fun rejectsSuccessEnvelopeWithoutRequiredMeta() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("X-Request-ID", "req-missing-meta")
+                .setBody("""{"data":{"value":"ok"}}""")
+        )
+
+        val error = assertThrows(V1ProtocolException::class.java) {
+            transport().execute<Map<String, String>>(
+                V1ApiRequest("getHealth", V1HttpMethod.GET, "health/live"),
+                Map::class.java
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("exactly data and meta"))
+    }
+
+    @Test
+    fun rejectsUnknownErrorCodeAndInvalidErrorDetailsShape() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(500)
+                .setHeader("X-Request-ID", "req-unknown-code")
+                .setBody(
+                    """{"code":"UNKNOWN_ERROR","message":"safe","details":{},"requestId":"req-unknown-code","timestamp":"2026-08-06T12:00:00Z"}"""
+                )
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(500)
+                .setHeader("X-Request-ID", "req-invalid-details")
+                .setBody(
+                    """{"code":"SYSTEM_INTERNAL_ERROR","message":"safe","details":[],"requestId":"req-invalid-details","timestamp":"2026-08-06T12:00:00Z"}"""
+                )
+        )
+
+        val unknownCode = assertThrows(V1ProtocolException::class.java) {
+            transport().execute<Map<String, String>>(
+                V1ApiRequest("getHealth", V1HttpMethod.GET, "health/live"),
+                Map::class.java
+            )
+        }
+        val invalidDetails = assertThrows(V1ProtocolException::class.java) {
+            transport().execute<Map<String, String>>(
+                V1ApiRequest("getHealth", V1HttpMethod.GET, "health/live"),
+                Map::class.java
+            )
+        }
+
+        assertTrue(unknownCode.message.orEmpty().contains("not in the contract"))
+        assertTrue(invalidDetails.message.orEmpty().contains("details fields"))
+    }
+
+    @Test
+    fun rejectsMalformedPaginationMetadata() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("X-Request-ID", "req-pagination")
+                .setBody(
+                    """{"data":[],"meta":{"requestId":"req-pagination","pagination":{"nextCursor":"next","hasMore":"true","limit":100}}}"""
+                )
+        )
+
+        val error = assertThrows(V1ProtocolException::class.java) {
+            transport().execute<List<Map<String, String>>>(
+                V1ApiRequest("listFeedback", V1HttpMethod.GET, "feedback"),
+                List::class.java
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("hasMore must be a boolean"))
+    }
+
+    @Test
     fun mutationIsNotRetriedAfterConnectionLoss() {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
         server.enqueue(
@@ -121,7 +197,7 @@ class V1ApiTransportTest {
             httpClient = TestHttps.clientBuilder(SharedHttpClient.instance).build()
         )
 
-        assertThrows(V1NetworkException::class.java) {
+        val error = assertThrows(V1NetworkException::class.java) {
             transport.execute<Map<String, String>>(
                 V1ApiRequest(
                     operationId = "createRecord",
@@ -132,6 +208,7 @@ class V1ApiTransportTest {
                 Map::class.java
             )
         }
+        assertEquals("req-client", error.requestId)
         assertEquals(1, server.requestCount)
     }
 

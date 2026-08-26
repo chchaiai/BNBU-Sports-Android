@@ -136,7 +136,7 @@ class StudentApiClientTest {
                 .setResponseCode(500)
                 .setHeader("X-Request-ID", "req-failed")
                 .setBody(
-                    """{"code":"INTERNAL_ERROR","message":"failed","details":{},"requestId":"req-failed","timestamp":"2026-08-11T00:00:00Z"}"""
+                    """{"code":"SYSTEM_INTERNAL_ERROR","message":"failed","details":{},"requestId":"req-failed","timestamp":"2026-08-11T00:00:00Z"}"""
                 )
         )
         server.enqueue(

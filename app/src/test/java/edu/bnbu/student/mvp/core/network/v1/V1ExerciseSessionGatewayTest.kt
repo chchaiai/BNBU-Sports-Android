@@ -3,6 +3,7 @@ package edu.bnbu.student.mvp.core.network.v1
 import com.google.gson.JsonParser
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionPhase
 import edu.bnbu.student.mvp.core.exercise.ExerciseSessionRecord
+import edu.bnbu.student.mvp.core.exercise.ExerciseSessionAlreadyActiveOnAnotherDeviceException
 import edu.bnbu.student.mvp.core.exercise.ExerciseCheckInNotRequiredException
 import edu.bnbu.student.mvp.core.exercise.ExerciseVersionConflictException
 import edu.bnbu.student.mvp.core.exercise.StartExerciseCommand
@@ -111,12 +112,48 @@ class V1ExerciseSessionGatewayTest {
     }
 
     @Test
-    fun activeReadFailsClosedWhenServerSessionHasNoLocalSelectionContext() {
+    fun activeReadWithoutMatchingLocalMirrorReturnsOnlySafeReadOnlyConflictFacts() {
         server.enqueue(success(200, "req-active", sessionJson("IN_PROGRESS", 2L, 10L)))
 
-        assertThrows(ExerciseSessionClientContextMissingException::class.java) {
+        val failure = assertThrows(
+            ExerciseSessionAlreadyActiveOnAnotherDeviceException::class.java
+        ) {
             runBlocking { gateway.getActive(null) }
         }
+        assertEquals("session-1", failure.existing.sessionId)
+        assertEquals(ExerciseSessionPhase.ACTIVE, failure.existing.phase)
+        assertEquals(Instant.parse("2026-08-07T12:00:00Z").toEpochMilli(), failure.existing.startedAtEpochMillis)
+        assertEquals("req-active", failure.existing.requestId)
+    }
+
+    @Test
+    fun startConflictReadsAuthoritativeSessionWithoutCancellingOrTakingItOver() {
+        server.enqueue(error(409, "SESSION_ALREADY_ACTIVE", "req-start-conflict"))
+        server.enqueue(success(200, "req-active-read", sessionJson("PAUSED", 4L, 901L)))
+
+        val failure = assertThrows(
+            ExerciseSessionAlreadyActiveOnAnotherDeviceException::class.java
+        ) {
+            runBlocking {
+                gateway.start(
+                    StartExerciseCommand(
+                        creditType = CreditType.General,
+                        sportType = "RUNNING"
+                    )
+                )
+            }
+        }
+
+        assertEquals(ExerciseSessionPhase.PAUSED, failure.existing.phase)
+        assertEquals("req-active-read", failure.existing.requestId)
+        assertEquals("POST", server.takeRequest().method)
+        val read = server.takeRequest()
+        assertEquals("GET", read.method)
+        assertEquals(
+            "/api/v1/exercise-sessions/active?enrollmentId=enrollment-1",
+            read.path
+        )
+        assertEquals(0, server.requestCount - 2)
     }
 
     @Test
@@ -195,6 +232,52 @@ class V1ExerciseSessionGatewayTest {
 
         assertEquals(ExerciseSessionPhase.EXPIRED, result.phase)
         assertEquals("/api/v1/exercise-sessions/session-1", server.takeRequest().path)
+    }
+
+    @Test
+    fun testDurationToolUsesOnlyGuardedFixedOneHourEndpoint() = runBlocking {
+        server.enqueue(success(200, "req-test-tool", sessionJson("IN_PROGRESS", 8L, 3_600L)))
+
+        gateway.advanceDurationOneHour("session-1", expectedVersion = 7L)
+
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals(
+            "/api/v1/internal/test-tools/exercise-sessions/session-1/advance-duration",
+            request.path
+        )
+        assertEquals("exercise-intent", request.getHeader("Idempotency-Key"))
+        val body = JsonParser.parseString(request.body.readUtf8()).asJsonObject
+        assertEquals(setOf("expectedVersion"), body.keySet())
+        assertEquals(7L, body["expectedVersion"].asLong)
+    }
+
+    @Test
+    fun testToolCapabilitiesUseAuthenticatedInternalRead() = runBlocking {
+        server.enqueue(
+            success(
+                200,
+                "req-test-capabilities",
+                """{"capabilities":["TEST_DURATION_ADVANCE","UNKNOWN"]}"""
+            )
+        )
+
+        val capabilities = gateway.capabilities()
+
+        assertEquals(setOf("TEST_DURATION_ADVANCE", "UNKNOWN"), capabilities)
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals("/api/v1/internal/test-tools/capabilities", request.path)
+        assertEquals("Bearer access-token", request.getHeader("Authorization"))
+        assertEquals(null, request.getHeader("Idempotency-Key"))
+    }
+
+    @Test
+    fun testToolCapabilitiesTreatHiddenRouteAsDisabled() = runBlocking {
+        server.enqueue(error(404, "COURSE_NOT_FOUND", "req-test-capabilities-hidden"))
+
+        assertTrue(gateway.capabilities().isEmpty())
+        assertEquals("/api/v1/internal/test-tools/capabilities", server.takeRequest().path)
     }
 
     private fun localMirror(version: Long): ExerciseSessionRecord = ExerciseSessionRecord(

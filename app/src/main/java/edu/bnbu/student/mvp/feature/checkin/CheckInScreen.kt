@@ -51,11 +51,13 @@ internal const val MaxCheckInNoteLength = 200
 @Composable
 internal fun CheckInScreen(
     appState: StudentAppState,
-    exerciseSessionController: ExerciseSessionController
+    exerciseSessionController: ExerciseSessionController,
+    onReturnHome: () -> Unit = {}
 ) {
     ExerciseCheckInRoot(
         appState = appState,
-        controller = exerciseSessionController
+        controller = exerciseSessionController,
+        onReturnHome = onReturnHome
     )
 }
 

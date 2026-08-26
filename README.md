@@ -22,7 +22,7 @@ Kotlin sources with `:app:openApiGenerate`. Generated files live under
 ## Configuration
 
 - `debug` is the local environment and defaults to the Android Emulator URL
-  `http://10.0.2.2:3000/api/v1`. Override it with `BNBU_LOCAL_API_BASE_URL`
+  `http://10.0.2.2:13000/api/v1`. Override it with `BNBU_LOCAL_API_BASE_URL`
   when testing on a physical device on a controlled local network.
 - `staging` requires an explicit HTTPS `BNBU_STAGING_API_BASE_URL` ending in
   `/api/v1`; the build fails closed when it is absent or invalid.

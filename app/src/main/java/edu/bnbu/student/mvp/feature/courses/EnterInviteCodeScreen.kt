@@ -20,23 +20,26 @@ import edu.bnbu.student.mvp.core.designsystem.AppleButton as Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import edu.bnbu.student.mvp.core.designsystem.AppleTextButton as TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import edu.bnbu.student.mvp.core.designsystem.BNBUFormField
 import edu.bnbu.student.mvp.core.designsystem.interfaceText
 import edu.bnbu.student.mvp.core.local.AppLanguagePreferences
 import kotlinx.coroutines.CancellationException
@@ -57,20 +60,34 @@ fun EnterInviteCodeScreen(
     val appLanguage = AppLanguagePreferences.currentLanguage
     var code by rememberSaveable { mutableStateOf("") }
     var isResolving by rememberSaveable { mutableStateOf(false) }
+    var codeFocusedOnce by rememberSaveable { mutableStateOf(false) }
+    var codeTouched by rememberSaveable { mutableStateOf(false) }
+    var submitAttempted by rememberSaveable { mutableStateOf(false) }
     // Presentation text must not be restored from the old locale after an
     // Activity recreation; the input itself remains saveable.
     var errorMessage by rememberSaveable(appLanguage) { mutableStateOf<String?>(null) }
+    val codeFocusRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
     val normalizedCode = code.trim()
-    val hasFormatError = code.isNotBlank() && !isInviteCode(normalizedCode)
+    val codeError = when {
+        !(codeTouched || submitAttempted) -> null
+        normalizedCode.isBlank() -> interfaceText(
+            "请输入邀请码。",
+            "Enter an invitation code."
+        )
+        !isInviteCode(normalizedCode) -> interfaceText(
+            "邀请码格式不完整。",
+            "The invitation code format is incomplete."
+        )
+        else -> null
+    }
 
     fun resolveInviteCode() {
         if (isResolving) return
+        submitAttempted = true
         if (!isInviteCode(normalizedCode)) {
-            errorMessage = interfaceText(
-                "请输入教师提供的完整加入凭证。",
-                "Enter the complete join credential provided by your teacher."
-            )
+            errorMessage = null
+            codeFocusRequester.requestFocus()
             return
         }
 
@@ -132,38 +149,37 @@ fun EnterInviteCodeScreen(
                 style = MaterialTheme.typography.bodyLarge
             )
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
+            BNBUFormField(
                 value = code,
                 onValueChange = {
                     code = it
                     errorMessage = null
                 },
+                label = interfaceText("邀请码", "Invitation code"),
+                testTag = "courseJoin.enterCode.input",
                 enabled = !isResolving,
-                label = { Text(interfaceText("邀请码", "Invitation code")) },
-                placeholder = { Text(interfaceText("粘贴或扫描加入凭证", "Paste or scan the join credential")) },
-                supportingText = if (hasFormatError) {
-                    {
-                        Text(
-                            interfaceText(
-                                "请输入教师提供的完整加入凭证。",
-                                "Enter the complete join credential provided by your teacher."
-                            )
-                        )
+                loading = isResolving,
+                required = true,
+                placeholder = interfaceText("粘贴或扫描加入凭证", "Paste or scan the join credential"),
+                supportingText = interfaceText(
+                    "请输入教师当前提供的完整加入凭证。",
+                    "Enter the complete current invitation provided by your teacher."
+                ),
+                errorText = codeError,
+                inputModifier = Modifier.focusRequester(codeFocusRequester),
+                onFocusChanged = { focused ->
+                    if (focused) {
+                        codeFocusedOnce = true
+                    } else if (codeFocusedOnce) {
+                        codeTouched = true
                     }
-                } else {
-                    null
                 },
-                isError = hasFormatError,
-                singleLine = true,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.None,
                     keyboardType = KeyboardType.Ascii,
                     imeAction = ImeAction.Done
                 ),
-                keyboardActions = KeyboardActions(onDone = { resolveInviteCode() }),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("courseJoin.enterCode.input")
+                keyboardActions = KeyboardActions(onDone = { resolveInviteCode() })
             )
             errorMessage?.let {
                 Text(
@@ -175,7 +191,7 @@ fun EnterInviteCodeScreen(
             }
             Button(
                 onClick = ::resolveInviteCode,
-                enabled = !isResolving && isInviteCode(normalizedCode),
+                enabled = !isResolving,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp)
